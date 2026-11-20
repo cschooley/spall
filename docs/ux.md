@@ -75,6 +75,8 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 ## Cross-cutting patterns
 
 - **One inspector.** The right-hand detail pane behaves the same in every view.
+- **Headers are shown in wire order, repeats kept.** Never merge repeated headers or comma-join them (`Set-Cookie` cannot be comma-joined). Repeats get a group rule and an `n/N` counter. Requires taphttp to store headers as an ordered list, not a map (taphttp#5).
+- **Binary bodies get a placeholder, not garbage.** Show type, size and hash; offer hex view (8 bytes per row, paged), preview for images, and save. Never render raw binary as text.
 - **Replay lives in the inspector.** Edit the request, send, see original and replay side by side. Repeater stops being a destination.
 - **Everything links.** Finding → evidence exchanges → producing task → endpoint in Surface, and back.
 - **Command palette (`⌘K` / `Ctrl+K`)** instead of right-click menus: "replay this", "task agent on this endpoint", "flag". Keyboard first, discoverable.
