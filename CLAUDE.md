@@ -18,8 +18,14 @@ are about to write proxy, TLS, or CA code in this repo, stop: it
 belongs in taphttp.
 
 Read `docs/architecture.md` before designing anything beyond the
-current milestone. Read `docs/flux/SPEC.md` (vendored from the flux
+current milestone. Read `docs/ux.md` before building any UI: spall is
+object-centric (exchanges, endpoints, tasks, findings), not a set of
+Burp-style tool tabs. Read `docs/flux/SPEC.md` (vendored from the flux
 repo) before touching findings.
+
+UI styling comes from verdigris (`cschooley/verdigris`): use its
+`tokens.css` variables, never hard-coded colors, and treat its
+`mockups/spall-*.html` as the visual target.
 
 ## Hard rules
 

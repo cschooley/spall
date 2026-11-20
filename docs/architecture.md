@@ -89,6 +89,8 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 SPA framework choice is deferred to M1. M0 is one static HTML file on purpose.
 
+The UI's information architecture (five views, shared inspector, command palette, agent e-stop) is in [ux.md](ux.md), with a view-to-milestone mapping.
+
 ## History
 
 spall was first scoped (Aug 2026) as a CLI Cargo workspace (`spall-core`, `spall-ssrf`, a `clap` binary) starting with SSRF probing, with its own `Finding` type. That shape is superseded: finding types come from flux, and the primary interface is the web UI + MCP. SSRF probing returns later as an active-check module that produces candidates.
