@@ -6,6 +6,28 @@ An assessment workbench for web application security testing: a web UI for inter
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
+## Screenshots
+
+### Today: M0 live traffic console
+
+![spall M0: live traffic console](docs/screenshots/m0-console.png)
+
+### Where it's going (design mockups, not built yet)
+
+Visual direction from [verdigris](https://github.com/cschooley/verdigris), the suite's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
+
+**Traffic.** Attribution on every exchange (you or the agent), inspector with replay and flag actions.
+
+![Mockup: Traffic view](docs/screenshots/mockup-traffic.png)
+
+**Tasks.** The agent works from structured work orders: goal, constraints, request budget, plan and a linked request log. Out-of-scope actions wait for approval. STOP AGENT halts everything.
+
+![Mockup: Tasks view](docs/screenshots/mockup-tasks.png)
+
+**Findings.** A triage inbox. The agent proposes, a human confirms, rejects or marks duplicate, with evidence and a redacted export preview.
+
+![Mockup: Findings view](docs/screenshots/mockup-findings.png)
+
 ## Quickstart (M0)
 
 ```sh
