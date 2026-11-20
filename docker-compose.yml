@@ -1,0 +1,42 @@
+# spall M0: taphttp captures traffic, spall shows it live in a browser.
+#
+#   client --(proxy 127.0.0.1:8080)--> taphttp --> internet
+#                                         | /data/traffic.jsonl (volume "traffic")
+#                                       spall --> http://127.0.0.1:3000
+#
+# Both ports are published to 127.0.0.1 only. The console shows raw
+# traffic, including credentials, and has no auth. Do not change that.
+
+services:
+  taphttp:
+    build:
+      context: docker/taphttp
+      # args:
+      #   TAPHTTP_REF: <commit sha>   # to build a different taphttp commit
+    command: ["start", "--listen", "0.0.0.0:8080", "--log-file", "/data/traffic.jsonl"]
+    environment:
+      RUST_LOG: info
+    ports:
+      - "127.0.0.1:${TAPHTTP_PORT:-8080}:8080"
+    volumes:
+      - traffic:/data
+      - taphttp-ca:/ca
+    restart: unless-stopped
+
+  spall:
+    build: .
+    depends_on:
+      - taphttp
+    environment:
+      SPALL_LISTEN: 0.0.0.0:3000
+      SPALL_LOG_FILE: /data/traffic.jsonl
+      RUST_LOG: info
+    ports:
+      - "127.0.0.1:${SPALL_PORT:-3000}:3000"
+    volumes:
+      - traffic:/data:ro
+    restart: unless-stopped
+
+volumes:
+  traffic:
+  taphttp-ca:

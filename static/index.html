@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>spall · live traffic</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>spall</h1>
+  <span id="conn" class="conn conn-connecting" title="SSE connection to /events">connecting</span>
+  <span id="count" class="count">0 requests</span>
+  <input id="filter" type="search" placeholder="filter: host, path, method, status" autocomplete="off" spellcheck="false">
+  <label class="follow"><input id="follow" type="checkbox" checked> follow</label>
+  <button id="clear" type="button">clear</button>
+</header>
+<main id="scroller">
+  <table>
+    <thead>
+      <tr><th class="c-time">time</th><th class="c-method">method</th><th class="c-host">host</th><th class="c-path">path</th><th class="c-status">status</th><th class="c-dur">duration</th></tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p id="empty" class="empty">No traffic yet. Send something through the proxy:<br><code>curl -x http://127.0.0.1:8080 http://example.com</code></p>
+</main>
+<footer>For authorized testing only. This page shows raw traffic, including credentials.</footer>
+<script src="/app.js" defer></script>
+</body>
+</html>
