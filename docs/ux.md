@@ -118,6 +118,31 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 - **Attribution everywhere.** Every exchange and candidate shows who created it: `you`, `agent · T-3`, or `scurf`. Agent-originated items carry a distinct glyph (◆), never color alone.
 - **Agent e-stop.** Always visible in the top bar. One click (or `Shift+Esc`) halts every running task. A hardware e-stop on purpose: a confident AI testing someone else's app needs a big red button, and its constant presence builds trust.
 
+## Verbs on objects (buttons)
+
+Chat is the front door; buttons are the other doors, and none of them get around the gate. A button is a registry command that pre-fills a task (role, scope, budget, risk class) from the object it sits on. One click shows the task card to approve; a safe-class task inside the engagement may run at once.
+
+Rules:
+
+- **No button-only powers.** Every button is also a palette entry, a console command and an MCP tool, from the same registry.
+- **Name the outcome, not the effort.** "Escalate impact", not "Deepen". If you can't tell what a button will produce, you won't click it.
+- **Show the cost first.** Every button states its estimate before it runs ("~40 requests, safe methods").
+- **Hidden until built.** A button appears only when its milestone ships, like the dimmed rail views.
+
+| On | Button | Produces | Role, risk class |
+|---|---|---|---|
+| Finding / candidate | **PoC** | A standalone proof for a dev: curl script, CSRF page, minimal repro, built in the sandbox | Tester; non-destructive by rule (XSS proves with `document.domain`, never a cookie stealer; IDOR reads, never writes) |
+| | **Escalate impact** | Can the read become a write, reflected become stored, does it chain with another finding? | Tester; unsafe, always asks |
+| | **Find variants** | The same bug elsewhere, from the scurf route map and sibling parameters | Mapper, then Tester |
+| | **Retest** | The retest flow (see Tasks) for this one finding | Tester; class of the original evidence |
+| | **Explain for devs** | Developer-facing writeup drafted from evidence and the writeup library | Reporter; no traffic |
+| Endpoint (Surface) | **Test for…** | A WSTG category picker: "Test for IDOR", "Test for injection" | Tester; per category |
+| | **Map auth** | Which roles reach this endpoint, with which methods | Mapper; safe |
+| Exchange (Traffic) | **Replay**, **Diff** | As built in M2 | (gate per #22) |
+| | **Why is this interesting?** | A read-only explanation; spends no request budget | none; no traffic |
+
+Default output already includes evidence and a repro in every candidate; the buttons are for steering the agent past the default.
+
 ## The console and quad mode
 
 ### `` ` `` console
