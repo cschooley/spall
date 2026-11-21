@@ -47,7 +47,8 @@ thead th {
 }
 /* HH:MM:SS.mmm is 12 monospace chars; leave room for cell padding. */
 .c-time { width: calc(13ch + 12px); } .c-method { width: 6em; } .c-host { width: 22%; }
-.c-status { width: 4.5em; } .c-dur { width: 6em; text-align: right; }
+.c-status { width: 4.5em; } /* Up to "999999 ms" (about 16 minutes) without clipping. */
+.c-dur { width: calc(10ch + 12px); text-align: right; }
 tbody tr.row { cursor: pointer; }
 tbody tr.row:hover, tbody tr.row.open { background: var(--hover); }
 tbody td { padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

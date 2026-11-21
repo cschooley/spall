@@ -131,9 +131,12 @@ cd ui
 npm ci               # lockfile only; install scripts are disabled (.npmrc)
 npm run lint         # includes the "traffic is never HTML" bans
 npm test             # node:test, no browser
+npm run test:e2e     # Playwright: builds the UI, runs spall via cargo, headless Chromium
 npm run build        # then rebuild spall to embed ui/dist
 npm run dev          # Vite on 127.0.0.1:5173, proxying /events and /api to spall on :3000
 ```
+
+Browser tests need a Chromium: either Playwright's (`npx playwright install chromium`, about 100 MB; `ignore-scripts` stops the automatic download), or any recent one via `SPALL_E2E_CHROMIUM=/usr/bin/chromium npm run test:e2e`. Every test fails on a console error, page error, dialog or CSP violation.
 
 Adding an npm dependency: pick a version published at least two weeks ago, and resolve the whole tree as of a date at least two weeks back (`npm install --before=<date>`), so transitive dependencies follow the same rule.
 

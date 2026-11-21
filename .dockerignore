@@ -2,3 +2,6 @@ target
 .git
 ui/node_modules
 ui/dist
+ui/.e2e
+ui/test-results
+ui/playwright-report
