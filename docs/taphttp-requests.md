@@ -5,6 +5,31 @@ here.
 
 ## Open
 
+### Replay API gaps (M2)
+
+[taphttp#10](https://github.com/cschooley/taphttp/issues/10), still open
+in v0.5.0. Not blocking: spall#19 and spall#21 work around it.
+
+- Header overrides are a name->value map, so repeated headers can't be
+  edited in order.
+- The body override is a string, so binary bodies can only be replayed
+  as captured.
+- `GET /exchanges` can't filter by `replay_of`, which the Replays tab
+  (spall#21) wants.
+
+### Deployment info for the launcher tile
+
+[taphttp#18](https://github.com/cschooley/taphttp/issues/18): `GET /info`
+on the lever API. It would return:
+
+- the version
+- proxy and API listeners
+- TLS and auth mode
+- CA public details
+
+It must expose no secrets: no CA key, API token, proxy credentials or
+paths. For spall#16; not scheduled.
+
 ### Log rotation semantics
 
 spall's `--log-file` tailer handles truncation and file replacement, but
@@ -12,6 +37,28 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.5.0
+
+- **chrono unmaintained (RUSTSEC-2026-0543):**
+  [taphttp#11](https://github.com/cschooley/taphttp/issues/11).
+  `taphttp-types` 0.4.0 uses its own `Timestamp` (wrapping jiff), and
+  `ts` serializes byte for byte as before. spall needed no code change.
+
+## Resolved in v0.4.0
+
+- **Attribution and a status-class filter:**
+  [taphttp#9](https://github.com/cschooley/taphttp/issues/9).
+  - Schema v4 adds `source`: the proxy-auth username, or `null`.
+  - `/exchanges?status=` takes classes (`4xx`) and lists (`401,5xx`).
+- **Remote deployment:**
+  [taphttp#8](https://github.com/cschooley/taphttp/issues/8). A
+  non-loopback listener needs:
+  - the proxy: auth and TLS, or `--allow-open-proxy`;
+  - the API: `--api-tls`, or `--api-allow-plaintext`.
+
+  spall's compose passes both overrides, since it publishes only on
+  127.0.0.1.
 
 ## Resolved in v0.3.0
 
