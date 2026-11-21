@@ -1,18 +1,32 @@
-# spall M0: taphttp captures traffic, spall shows it live in a browser.
+# spall: taphttp captures traffic, spall shows it live in a browser.
 #
 #   client --(proxy 127.0.0.1:8080)--> taphttp --> internet
-#                                         | /data/traffic.jsonl (volume "traffic")
+#                                         | lever API :8081 (compose network only)
+#                                         | token on volume "taphttp-token"
 #                                       spall --> http://127.0.0.1:3000
 #
-# Both ports are published to 127.0.0.1 only. The console shows raw
-# traffic, including credentials, and has no auth. Do not change that.
+# Published ports are 127.0.0.1 only. The console shows raw traffic,
+# including credentials, and has no auth. Do not change that. The lever
+# API port (8081) is never published: only spall reaches it.
+#
+# Volumes:
+#   taphttp-ca     CA cert and key. taphttp only; never mount it elsewhere.
+#   traffic        taphttp's traffic.jsonl and traffic.db. taphttp only.
+#   taphttp-token  Lever API token. Read-only in spall.
 
 services:
   taphttp:
     # Published by taphttp's release workflow. Keep in step with the
     # taphttp-types tag in Cargo.toml. amd64 only for now.
     image: ghcr.io/cschooley/taphttp:0.3.0
-    command: ["start", "--listen", "0.0.0.0:8080", "--log-file", "/data/traffic.jsonl"]
+    command:
+      - start
+      - --listen
+      - 0.0.0.0:8080
+      - --log-file
+      - /data/traffic.jsonl
+      - --api-listen
+      - 0.0.0.0:8081
     environment:
       RUST_LOG: info
     ports:
@@ -20,6 +34,7 @@ services:
     volumes:
       - traffic:/data
       - taphttp-ca:/ca
+      - taphttp-token:/token
     restart: unless-stopped
 
   spall:
@@ -28,14 +43,16 @@ services:
       - taphttp
     environment:
       SPALL_LISTEN: 0.0.0.0:3000
-      SPALL_LOG_FILE: /data/traffic.jsonl
+      SPALL_TAPHTTP_API: http://taphttp:8081
+      SPALL_TAPHTTP_TOKEN_FILE: /token/api-token
       RUST_LOG: info
     ports:
       - "127.0.0.1:${SPALL_PORT:-3000}:3000"
     volumes:
-      - traffic:/data:ro
+      - taphttp-token:/token:ro
     restart: unless-stopped
 
 volumes:
   traffic:
   taphttp-ca:
+  taphttp-token:

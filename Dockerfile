@@ -13,7 +13,7 @@ RUN touch src/main.rs src/lib.rs \
 
 FROM debian:bookworm-slim
 RUN useradd --system --uid 10001 --user-group --no-create-home spall \
- && mkdir -p /data && chown spall:spall /data
+ && mkdir -p /data /token && chown spall:spall /data /token
 COPY --from=build /usr/local/bin/spall /usr/local/bin/spall
 USER spall
 # The binary defaults to 127.0.0.1:3000. docker-compose.yml sets

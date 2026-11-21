@@ -1,7 +1,10 @@
-//! spall M0: tail taphttp's traffic log and stream it to a browser console.
+//! spall: stream taphttp traffic to a browser console. Traffic comes from
+//! taphttp's lever API when configured (`--taphttp-api`), otherwise from
+//! tailing its `--log-file`.
 
 pub mod config;
 pub mod hub;
+pub mod lever;
 pub mod tailer;
 pub mod web;
 
@@ -25,26 +28,60 @@ pub enum Ingested {
     Skipped,
 }
 
+/// Parse one taphttp entry (a log line, an API item or a feed frame).
+/// Also returns the declared schema version if it is newer than spall's.
+pub fn parse_entry(text: &str) -> Result<(TrafficEntry, Option<u32>), serde_json::Error> {
+    let entry: TrafficEntry = serde_json::from_str(text)?;
+    let newer = serde_json::from_str::<SchemaProbe>(text)
+        .ok()
+        .and_then(|p| p.schema_version)
+        .filter(|v| *v > SCHEMA_VERSION);
+    Ok((entry, newer))
+}
+
+/// Publish a parsed entry. Returns false (and logs) if it cannot be
+/// serialized, which should not happen for a value that just parsed.
+pub fn publish_entry(entry: &TrafficEntry, hub: &Hub) -> bool {
+    match Published::from_entry(entry) {
+        Ok(p) => {
+            hub.publish(p);
+            true
+        }
+        Err(e) => {
+            tracing::warn!("skipping entry that failed to serialize: {e}");
+            false
+        }
+    }
+}
+
+/// Warns once per newer schema version seen.
+#[derive(Default)]
+pub struct SchemaWarner(u32);
+
+impl SchemaWarner {
+    pub fn note(&mut self, newer: Option<u32>) {
+        if let Some(v) = newer.filter(|v| *v > self.0) {
+            tracing::warn!(
+                "taphttp sends schema v{v}; this spall understands v{SCHEMA_VERSION}. \
+                 New fields are dropped until spall's taphttp-types is bumped."
+            );
+            self.0 = v;
+        }
+    }
+}
+
 /// Parse one taphttp log line and publish it. Malformed lines are logged
 /// and skipped. The line's content is never logged: it may hold credentials.
 pub fn ingest_line(line: &str, hub: &Hub) -> Ingested {
-    let entry: TrafficEntry = match serde_json::from_str(line) {
-        Ok(e) => e,
+    let (entry, newer) = match parse_entry(line) {
+        Ok(p) => p,
         Err(e) => {
             tracing::warn!("skipping malformed log line ({} bytes): {e}", line.len());
             return Ingested::Skipped;
         }
     };
-    let newer = serde_json::from_str::<SchemaProbe>(line)
-        .ok()
-        .and_then(|p| p.schema_version)
-        .filter(|v| *v > SCHEMA_VERSION);
-    match Published::from_entry(&entry) {
-        Ok(p) => hub.publish(p),
-        Err(e) => {
-            tracing::warn!("skipping entry that failed to serialize: {e}");
-            return Ingested::Skipped;
-        }
+    if !publish_entry(&entry, hub) {
+        return Ingested::Skipped;
     }
     match newer {
         Some(v) => Ingested::NewerSchema(v),
@@ -61,7 +98,7 @@ pub async fn tail_into_hub(
 ) -> anyhow::Result<()> {
     tracing::info!("tailing {}", tailer.path().display());
     let mut last_error: Option<String> = None;
-    let mut warned_schema: u32 = 0;
+    let mut schema = SchemaWarner::default();
     loop {
         let (t, result) = tokio::task::spawn_blocking(move || {
             let r = tailer.poll();
@@ -76,13 +113,7 @@ pub async fn tail_into_hub(
                 let more = !lines.is_empty();
                 for line in &lines {
                     if let Ingested::NewerSchema(v) = ingest_line(line, &hub) {
-                        if v > warned_schema {
-                            tracing::warn!(
-                                "log uses taphttp schema v{v}; this spall understands v{SCHEMA_VERSION}. \
-                                 New fields are dropped until spall's taphttp-types is bumped."
-                            );
-                            warned_schema = v;
-                        }
+                        schema.note(Some(v));
                     }
                 }
                 // Keep reading without sleeping while catching up a backlog.
@@ -103,21 +134,40 @@ pub async fn tail_into_hub(
     }
 }
 
-/// Run the tailer and web server on an already-bound listener.
+/// Run the traffic source (lever API follower or log tailer) and the web
+/// server on an already-bound listener.
 pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> {
     let hub = Arc::new(Hub::new(config.history));
+    let lever = config.taphttp_api.as_ref().map(|base| {
+        Arc::new(lever::Lever::new(
+            base.clone(),
+            config.taphttp_token_file.clone(),
+        ))
+    });
     let state = web::AppState {
         hub: hub.clone(),
         allowed_hosts: Arc::new(config.allowed_hosts.clone()),
+        lever: lever.clone(),
     };
-    let tail = tail_into_hub(
-        LineTailer::new(&config.log_file),
-        Duration::from_millis(config.poll_ms),
-        hub,
-    );
+    let source = async {
+        match lever {
+            Some(lever) => {
+                tracing::info!("traffic from taphttp lever API at {}", lever.base());
+                lever::Follower::new(lever, hub, config.history).run().await
+            }
+            None => {
+                tail_into_hub(
+                    LineTailer::new(&config.log_file),
+                    Duration::from_millis(config.poll_ms),
+                    hub,
+                )
+                .await
+            }
+        }
+    };
     tokio::select! {
         r = axum::serve(listener, web::router(state)) => r.context("web server failed"),
-        r = tail => r,
+        r = source => r,
     }
 }
 

@@ -9,7 +9,21 @@ use std::path::PathBuf;
     about = "spall: DAST assessment workbench (M0 live traffic console)"
 )]
 pub struct Config {
-    /// taphttp traffic log (JSON lines) to tail
+    /// taphttp lever API base URL, e.g. http://taphttp:8081. When set,
+    /// traffic and history come from the API and --log-file is not read.
+    /// Plain http only: the API belongs on a private network.
+    #[arg(long, env = "SPALL_TAPHTTP_API", value_parser = parse_api_base)]
+    pub taphttp_api: Option<String>,
+
+    /// File holding the lever API token (taphttp --api-token-file)
+    #[arg(
+        long,
+        env = "SPALL_TAPHTTP_TOKEN_FILE",
+        default_value = "/token/api-token"
+    )]
+    pub taphttp_token_file: PathBuf,
+
+    /// taphttp traffic log (JSON lines) to tail when --taphttp-api is not set
     #[arg(long, env = "SPALL_LOG_FILE", default_value = "/data/traffic.jsonl")]
     pub log_file: PathBuf,
 
@@ -35,6 +49,19 @@ pub struct Config {
     /// How often to check the log file for new data, in milliseconds
     #[arg(long, env = "SPALL_POLL_MS", default_value_t = 250, value_parser = clap::value_parser!(u64).range(10..))]
     pub poll_ms: u64,
+}
+
+/// Accept `http://host[:port]` with no path, query or credentials, and
+/// normalize away a trailing slash.
+fn parse_api_base(s: &str) -> Result<String, String> {
+    let rest = s.strip_prefix("http://").ok_or_else(|| {
+        "must start with http:// (the lever API is plain HTTP on a private network)".to_string()
+    })?;
+    let authority = rest.strip_suffix('/').unwrap_or(rest);
+    if authority.is_empty() || authority.contains(['/', '?', '#', '@']) {
+        return Err("must be http://host[:port] with no path, query or credentials".into());
+    }
+    Ok(format!("http://{authority}"))
 }
 
 #[cfg(test)]
@@ -72,6 +99,38 @@ mod tests {
         assert_eq!(c.allowed_hosts, vec!["spall.test", "localhost"]);
         assert_eq!(c.history, 5);
         assert_eq!(c.poll_ms, 50);
+    }
+
+    #[test]
+    fn api_mode_is_off_by_default() {
+        let c = Config::try_parse_from(["spall"]).unwrap();
+        assert_eq!(c.taphttp_api, None);
+        assert_eq!(c.taphttp_token_file, PathBuf::from("/token/api-token"));
+    }
+
+    #[test]
+    fn api_base_is_validated_and_normalized() {
+        for (input, want) in [
+            ("http://taphttp:8081", "http://taphttp:8081"),
+            ("http://taphttp:8081/", "http://taphttp:8081"),
+            ("http://127.0.0.1:8081", "http://127.0.0.1:8081"),
+        ] {
+            let c = Config::try_parse_from(["spall", "--taphttp-api", input]).unwrap();
+            assert_eq!(c.taphttp_api.as_deref(), Some(want), "{input}");
+        }
+        for bad in [
+            "https://taphttp:8081",
+            "taphttp:8081",
+            "http://",
+            "http://taphttp:8081/api",
+            "http://user:pw@taphttp:8081",
+            "http://taphttp:8081?x=1",
+        ] {
+            assert!(
+                Config::try_parse_from(["spall", "--taphttp-api", bad]).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

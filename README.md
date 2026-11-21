@@ -71,7 +71,22 @@ curl -x http://127.0.0.1:8080 -k https://example.com
 
 **`-k` is for this demo only.** It turns off certificate checking for the whole request. Never use it against anything you care about, and never put it in scripts.
 
+### Where traffic comes from
+
+In compose, spall reads traffic from taphttp's **lever API**. It backfills recent history from `GET /exchanges`, then follows the `/feed` WebSocket, resuming from the last exchange it saw after any disconnect. The API port (8081) stays on the compose network, and spall reads the API token from a read-only `taphttp-token` volume. spall never mounts taphttp's traffic or CA volumes.
+
+taphttp's API history starts when its sqlite store is turned on, so traffic captured before that (for example, by taphttp before v0.3.0) isn't in it.
+
 ### Running without Docker
+
+With the lever API (recommended):
+
+```sh
+taphttp start --api-listen 127.0.0.1:8081 --api-token-file ./api-token &
+cargo run -- --taphttp-api http://127.0.0.1:8081 --taphttp-token-file ./api-token
+```
+
+Or tail taphttp's log file (no history search):
 
 ```sh
 taphttp start --log-file ./traffic.jsonl &
@@ -80,11 +95,13 @@ cargo run -- --log-file ./traffic.jsonl
 
 | Flag | Env | Default |
 |---|---|---|
-| `--log-file` | `SPALL_LOG_FILE` | `/data/traffic.jsonl` |
+| `--taphttp-api` | `SPALL_TAPHTTP_API` | unset (tail `--log-file` instead). `http://host:port` only |
+| `--taphttp-token-file` | `SPALL_TAPHTTP_TOKEN_FILE` | `/token/api-token` |
+| `--log-file` | `SPALL_LOG_FILE` | `/data/traffic.jsonl` (used only without `--taphttp-api`) |
 | `--listen` | `SPALL_LISTEN` | `127.0.0.1:3000` |
 | `--allowed-host` | `SPALL_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` |
 | `--history` | `SPALL_HISTORY` | `1000` (entries replayed to a newly opened page) |
-| `--poll-ms` | `SPALL_POLL_MS` | `250` |
+| `--poll-ms` | `SPALL_POLL_MS` | `250` (log tailing only) |
 
 `--allowed-host` is checked against the request's `Host` header to block DNS-rebinding attacks on the local console. Requests for any other host get a 403.
 
@@ -92,7 +109,11 @@ cargo run -- --log-file ./traffic.jsonl
 
 - `GET /`: live console
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
+- `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`; other parameters are dropped. 503 without `--taphttp-api`
+- `GET /api/exchanges/{id}`: one exchange, or 404
 - `GET /healthz`: `ok`
+
+The browser never talks to taphttp or sees its token: spall adds the token server-side.
 
 ## Development
 
