@@ -32,6 +32,13 @@ updates:
     groups:
       dev-dependencies:
         dependency-type: development
+    ignore:
+      # Tracks the Node major in ui/.nvmrc and the Dockerfile; bump together.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # typescript-eslint supports TypeScript < 6.1; move when it does.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: docker
     directory: /
@@ -39,3 +46,8 @@ updates:
       interval: weekly
     cooldown:
       default-days: 14
+    ignore:
+      # Toolchains are bumped deliberately, in step with CI's RUST_TOOLCHAIN
+      # and ui/.nvmrc.
+      - dependency-name: rust
+      - dependency-name: node
