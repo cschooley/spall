@@ -67,7 +67,9 @@ test("traffic is rendered as text in every field, and nothing executes", async (
 
   // Nothing executed, nothing was injected.
   expect(await page.evaluate(() => (window as unknown as { __pwned?: string }).__pwned)).toBeUndefined();
-  expect(await page.locator("img, svg, iframe, object, embed").count()).toBe(0);
+  // spall's own icons are <svg data-icon>; any other svg/img/frame was injected.
+  expect(await page.locator("img, svg:not([data-icon]), iframe, object, embed").count()).toBe(0);
+  expect(await page.locator(".tablewrap svg, .inspector svg").count()).toBe(0);
   expect(await page.evaluate(() => document.scripts.length)).toBe(1);
   expect(
     await page.evaluate(() => [...document.querySelectorAll("b")].filter((b) => b.textContent === "bold").length),

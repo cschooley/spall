@@ -22,3 +22,27 @@ test("it defines the four themes spall's picker offers", () => {
   }
   assert.ok(text.includes(':root, [data-theme="rust"]'), "rust is the default");
 });
+
+// Icons: suite marks copied byte-for-byte from verdigris icons/ at v0.3.0;
+// rail view icons extracted verbatim from mockups/src/partials/rail.html at
+// v0.3.0 (verdigris doesn't ship them as files yet).
+const ICONS: Record<string, string> = {
+  "icons/flux.svg": "3f9d360d6874b51eb6ea261d55d1b200a672aeb4ae8f758efdb13afe32257c48",
+  "icons/kudzu.svg": "fac0653e1761b4458f36e1974d37f477f3b00ca9f2ad2debfb3da59efc32c810",
+  "icons/scurf.svg": "b72439cdc57cccdd9fe355a8e4965db7aaa0f9ef58d5b877be33b9bf8f1e0b28",
+  "icons/spall.svg": "79f8cb771b16e317c911f09222b78e2cdfaac6d7576874b29b02f13ab6b571a5",
+  "icons/taphttp.svg": "6383f54a0ac65926abce36cf8bc6fbe5a66117879ed13e1d18a0c3d68a2ceb73",
+  "icons/verdigris.svg": "45d0ea536363e3ac51f60d5275bbf6ad60fd6a8da917a6adc0c3f930fdf09428",
+  "rail/engagement.svg": "2cc17f204b27e14442a996d0d6154d490427093c6c30b50f191e019cc5ffe730",
+  "rail/findings.svg": "279eb98cc7967c7f0422e406f45bda507cf0858039c860db7b568bacafcabc5a",
+  "rail/surface.svg": "c9c5598484951f8f837c37b37182aa0c01e84caf8894caf4950ce69e2392752c",
+  "rail/tasks.svg": "ed76be438d1c12ea0f1561299dda0ba7e96a8c62426a437ad157909db0ad1df8",
+  "rail/traffic.svg": "5b92bed5b19d79bd1ce89b6e155b6e5d4a84e5d92d671970d13207d0b726642e",
+};
+
+test("vendored icons are byte-for-byte the recorded verdigris v0.3.0 sources", () => {
+  for (const [file, sha] of Object.entries(ICONS)) {
+    const bytes = readFileSync(new URL(`./${file}`, import.meta.url));
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), sha, file);
+  }
+});

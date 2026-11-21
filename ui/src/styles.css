@@ -30,7 +30,29 @@ kbd {
   padding: 0 var(--vg-space-5); min-width: 0;
   background: var(--vg-bg-surface); border-bottom: 1px solid var(--vg-border-subtle);
 }
-.brand { font: 600 var(--vg-text-lg) var(--vg-font-sans); letter-spacing: .02em; }
+.brand { display: inline-flex; align-items: center; gap: var(--vg-space-3); font: 600 var(--vg-text-lg) var(--vg-font-sans); letter-spacing: .02em; }
+.brand svg { color: var(--vg-accent-rust); --vg-icon-accent: var(--vg-accent-rust); }
+
+/* Suite launcher (9-dot menu) */
+.launch { position: relative; }
+.launch > button { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-color: transparent; color: var(--vg-text-secondary); }
+.launch > button:hover, .launch.open > button { border-color: var(--vg-border-strong); color: var(--vg-text-primary); background: none; }
+.grid9 { display: grid; grid-template-columns: repeat(3, 3px); gap: 3px; }
+.grid9 i { width: 3px; height: 3px; background: currentColor; border-radius: 1px; }
+.panel {
+  position: absolute; right: 0; top: 36px; z-index: 10; width: 264px; padding: var(--vg-space-3);
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--vg-space-2);
+  background: var(--vg-bg-raised); border: 1px solid var(--vg-border-strong); border-radius: var(--vg-radius-md);
+}
+.tile {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: var(--vg-space-2);
+  padding: var(--vg-space-4) 0 var(--vg-space-3); border-radius: var(--vg-radius-sm);
+  color: var(--vg-text-secondary); font: var(--vg-text-xs) var(--vg-font-mono); cursor: default;
+}
+.tile.here { color: var(--vg-text-primary); background: var(--vg-bg-surface); }
+.tile.todo { opacity: .45; }
+.tile .led { position: absolute; top: 6px; right: 8px; width: 5px; height: 5px; border-radius: 50%; background: var(--vg-border-strong); }
+.tile .led.up { background: var(--vg-accent-verdigris); box-shadow: 0 0 5px var(--vg-accent-verdigris-glow); }
 
 /* Connection: verdigris means live and nothing else. */
 .conn {
@@ -80,11 +102,13 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   gap: var(--vg-space-2); padding: var(--vg-space-3) 0;
   background: var(--vg-bg-surface); border-right: 1px solid var(--vg-border-subtle);
 }
-.rail a {
+.rail a, .rail span {
   width: 36px; height: 36px; display: grid; place-items: center; border-radius: var(--vg-radius-sm);
-  color: var(--vg-text-tertiary); text-decoration: none; font-size: var(--vg-text-lg);
+  color: var(--vg-text-tertiary); text-decoration: none;
 }
 .rail a:hover { color: var(--vg-text-primary); background: var(--vg-bg-raised); }
+/* Not built yet: shown so the order and keys are fixed, but inert. */
+.rail .todo { opacity: .45; cursor: default; }
 .rail a.on { color: var(--vg-text-primary); background: var(--vg-bg-raised); box-shadow: inset 2px 0 0 var(--vg-accent-rust); }
 
 /* Main: toolbar over table, inspector on the right when something is open */

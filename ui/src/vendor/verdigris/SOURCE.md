@@ -14,3 +14,14 @@ which enforces WCAG AA contrast. Change tokens in verdigris, then re-vendor.
 
 To update: copy the new `tokens/tokens.css`, update this table, and update
 the hash in `verdigris.test.ts`.
+
+## Icons (also v0.3.0)
+
+- `icons/*.svg`: copied byte-for-byte from verdigris `icons/`.
+- `rail/*.svg`: the five view icons, extracted verbatim from
+  `mockups/src/partials/rail.html` (verdigris doesn't ship them as files
+  yet; they could move to `icons/`).
+
+All are pinned by sha256 in `verdigris.test.ts`. They are rendered through
+`src/lib/svg.ts`, a strict parser (shape elements and presentation
+attributes only), never as markup strings.

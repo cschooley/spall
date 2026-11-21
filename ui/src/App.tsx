@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandPalette, type Command } from "./components/CommandPalette.tsx";
+import { Icon } from "./components/Icon.tsx";
 import { Inspector } from "./components/Inspector.tsx";
+import { Launcher } from "./components/Launcher.tsx";
+import { Rail } from "./components/Rail.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
 import { toCurl } from "./lib/curl.ts";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
@@ -210,6 +213,7 @@ export function App() {
       else if (e.key === "k") move(-1);
       else if (e.key === "Escape") setSelected(null);
       else if (e.key === "t") toggleMode();
+      // 1-5 will switch views once a second view ships (see Rail.tsx).
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -228,20 +232,20 @@ export function App() {
   return (
     <div className="app">
       <header className="bar">
-        <span className="brand">spall</span>
+        <span className="brand">
+          <Icon name="icons/spall" size={22} />
+          spall
+        </span>
         <span className={`conn conn-${connection}`} title="SSE connection to /events">
           {CONNECTION_LABEL[connection]}
         </span>
         <RateMeter live={store.items} />
         <span className="spacer" />
         <ThemePicker theme={theme} setTheme={setTheme} />
+        <Launcher taphttpConnected={status.source === "lever" ? status.connected : null} />
       </header>
 
-      <nav className="rail" aria-label="Views">
-        <a href="/" className="on" aria-current="page" title="Traffic (1)">
-          ⇄
-        </a>
-      </nav>
+      <Rail current="traffic" />
 
       <main className={selected ? "with-inspector" : undefined}>
         <div className="toolbar">
