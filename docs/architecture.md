@@ -51,6 +51,26 @@ Rejections and duplicates are kept as suppressions so the same false positive is
 
 Promotion flows toward Jira. An agent must not file tickets against dev teams unsupervised.
 
+### How an agent attaches
+
+An LLM reached through an API doesn't speak MCP; an **agent host** (the loop that calls the model and executes its tool calls) does. Two hosts, both supported:
+
+1. **External host.** Claude Code, Claude Desktop or any MCP client runs the loop and connects to spall's MCP server. spall never holds a model key.
+2. **spall as host.** The intake and Tasks view (ux.md) run the loop inside spall: an orchestrator decomposes a request into a plan of role tasks, and spall calls the model API with the tester's key (server-side only, never in the browser). Tool definitions come straight from the command registry; no MCP hop internally.
+
+Not supported: a model provider's API calling spall's MCP server remotely. That needs spall reachable from the internet, breaks localhost-by-default, and routes captured traffic through someone else's infrastructure.
+
+Rules for both:
+
+- **One registry, one gate.** Palette, console, MCP tools and built-in agent tools are generated from the same command registry, and every state-changing call goes through the action gate (#22). No side doors.
+- **Chat plans, tasks act.** The intake produces plans; only human-approved tasks send traffic. Plans start from an engagement (#30); with no authorized engagement, the only thing the orchestrator can draft is one.
+- **Roles are least privilege.** Each role (Scoper, Mapper, Tester, Reporter; ux.md) maps to gate risk classes. A role cannot be handed work its class or the RoE forbids.
+- **MCP over HTTP gets the #17 treatment.** Validate `Origin`, require a token, bind 127.0.0.1 (DNS rebinding and cross-site requests apply to it exactly as to `/api/replay`). stdio is offered too.
+- **Tool output is attacker-controlled.** Exchanges returned to a model are captured traffic and a prompt-injection channel: wrapped and labeled as untrusted data, truncated, and never able to widen scope (the gate enforces that regardless).
+- **Retests are a flow, not a feature.** "Re-scan last week's findings" resolves to the engagement, re-checks authorization and target ownership, then plans one retest task per finding (replay evidence, diff per #20). Results feed the flux retest flow; Kudzu closes on evidence.
+
+Open vs. enterprise: bring-your-own-key, both hosts, roles and the gate are open. Org-wide model policy, shared agent budgets and central audit of agent runs across testers are enterprise.
+
 ## Sensors: where the work happens
 
 spall is the controller. The work happens in **sensors**, small deployable components that run wherever the target's traffic is: on the tester's laptop, on a compose network, on a VPS, or inside a client network.
@@ -154,7 +174,7 @@ Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3
 | M3 engagement | The engagement as the root object: targets, scope (incl. explicit out-of-scope), rules of engagement as data that the gate reads; build scope from traffic; Engagement home view. | **Engagement** | #30 |
 | M4 candidates | Candidate model on flux crate types, manual "flag as candidate", triage states, suppressions. | **Findings** | #16 |
 | M5 export | Flux export with redaction and fingerprints; redaction preview. | Findings | |
-| M6 agent | MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | **Tasks** | #13, #1, #2 |
+| M6 agent ("geogaddi": long, a little scary, campfire headphase on the other side) | Intake, orchestrator and role agents (chat plans, tasks act); MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | **Tasks** | #13, #1, #2 |
 | M7 intercept | Pause/modify via taphttp `--intercept-socket`. | Traffic | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypothesis correlation; route maps ("source maps for the backend"). | **Surface** | #14 |
 | M9 academy (capstone) | A separate Kudzu tool: graduated exercises on vulnerable targets in the sandbox, graded by spall + flux; WSTG/ASVS skills shared by humans and agents; content packs loaded from repos at runtime with their licenses shown; `--profile academy` ready-to-go lab. The content-pack loader is shared with M6 agent skills. | (its own launcher tile) | #31 |

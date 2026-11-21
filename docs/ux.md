@@ -63,6 +63,39 @@ Steering chat lives *inside* a task, as a side panel. A chat window is a poor au
 
 Approval gates: actions outside a task's constraints (a new method, more budget, a new host) pause the task as **waiting on approval** until a human says yes.
 
+#### Chat is the front door, tasks are the engine
+
+The tester can still just say what they want. An **intake** panel, attached to an engagement and never free-floating, takes plain language. An orchestrator turns it into a **plan**: a tree of tasks, each with a role, scope, budget and stop conditions, which the tester edits and approves. Approved, the tree runs in the Tasks view and updates live; that live status is the bleeps and boops.
+
+The intake's vocabulary is spall's objects (engagements, endpoints, exchanges, tasks, findings) and nothing else. Off-topic questions get the console's answer to `god`: "no."
+
+Chat can never do anything a task and the action gate would not allow. It produces plans; only approved tasks act.
+
+Worked example, the one the design has to pass:
+
+> "My boss said to re-scan the findings from last week's evilcorp.com test."
+
+1. **Resolve.** "last week's evilcorp.com test" is an engagement, matched by name and date; "the findings" are its findings (Kudzu) or candidates (spall); "re-scan" is a retest. Anything ambiguous is shown as a list to pick from, not guessed.
+2. **Check before planning.**
+   - *Still authorized?* If the engagement's test window has closed, say so and draft an extension or a retest engagement for a human to approve. "My boss said" is context, not authorization.
+   - *Target unchanged?* If in-scope hosts now resolve somewhere else (new IPs, a CDN, a new owner), flag it before anything is sent.
+3. **Plan.** One retest task per finding: replay the original evidence (plus the scurf route or hypothesis if there is one) and diff against the original (#20). Shown as "14 findings, 14 retest tasks, safe methods except 2 that need unsafe replays, ~300 requests." Nothing runs until approved.
+4. **Run.** Tasks execute through the gate; unsafe steps stop at **needs your action**.
+5. **Results.** No longer reproduces: `flux/status: fixed` with the retest exchange as evidence, and Kudzu closes the ticket on that evidence. Still reproduces: stays open with a comment. The audit record carries who asked, so "my boss said" is a note on the task, not a mystery.
+
+#### Roles
+
+The orchestrator hands tasks to **roles**. A role is a bundle of skills plus a permission set (least privilege, per agent):
+
+| Role | Can do | Gate risk class |
+|---|---|---|
+| Scoper | Read traffic and scurf route maps; propose scope additions | read-only; proposals need a human |
+| Mapper | Crawl, replay safe methods, passive checks | safe |
+| Tester | Unsafe methods, payloads, OOB callbacks | unsafe; confirmation per #22 |
+| Reporter | Draft candidates and evidence | `propose_finding` only |
+
+The orchestrator can plan anything, but it cannot hand a role a task the engagement's rules of engagement don't allow. Role skills are the same WSTG/ASVS skills the academy uses (M9), loaded by the same content-pack loader.
+
 ### 5. Findings
 
 A triage inbox you can clear from the keyboard.
