@@ -1,9 +1,9 @@
 //! Fan-out of parsed traffic entries to SSE subscribers, with a bounded
 //! history so a freshly opened (or reloaded) console shows recent traffic.
 
-use crate::entry::TrafficEntry;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
+use taphttp_types::TrafficEntry;
 use tokio::sync::broadcast;
 
 /// One entry, pre-serialized for SSE.
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn unsafe_entry_ids_are_not_used_as_sse_ids() {
-        let mut e = crate::entry::parse_line(
+        let mut e = serde_json::from_str::<TrafficEntry>(
             r#"{"id":"ok-id","ts":"2026-11-20T00:00:00Z","host":"h","method":"GET","url":"/"}"#,
         )
         .unwrap();
@@ -148,12 +148,12 @@ mod tests {
 
     #[test]
     fn published_data_is_single_line_json_of_the_entry() {
-        let e = crate::entry::parse_line(
+        let e = serde_json::from_str::<TrafficEntry>(
             r#"{"id":"x","ts":"2026-11-20T00:00:00Z","host":"h","method":"GET","url":"/","res_body":"line1\nline2"}"#,
         )
         .unwrap();
         let data = Published::from_entry(&e).unwrap().data;
         assert!(!data.contains('\n'));
-        assert_eq!(crate::entry::parse_line(&data).unwrap(), e);
+        assert_eq!(serde_json::from_str::<TrafficEntry>(&data).unwrap(), e);
     }
 }

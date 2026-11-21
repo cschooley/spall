@@ -50,17 +50,79 @@ function statusClass(s) {
   return k >= 2 && k <= 5 ? `st-${k}` : "";
 }
 
-function headersPre(h) {
-  const names = Object.keys(h || {}).sort();
-  if (names.length === 0) return el("pre", "none", "(none)");
-  return el("pre", null, names.map((n) => `${n}: ${h[n]}`).join("\n"));
+// taphttp schema v3: headers are [name, value] pairs in wire order.
+// spall always re-serializes to v3, but tolerate a v2 map just in case.
+function headerPairs(h) {
+  if (Array.isArray(h)) return h.filter((p) => Array.isArray(p) && p.length === 2);
+  return Object.entries(h || {});
 }
 
-function bodyPre(body, headers) {
+function headerValue(h, name) {
+  const p = headerPairs(h).find(([k]) => String(k).toLowerCase() === name);
+  return p ? String(p[1]) : null;
+}
+
+// Wire order, repeats kept and never merged; a repeated name gets an n/N counter.
+function headersPre(h) {
+  const pairs = headerPairs(h);
+  if (pairs.length === 0) return el("pre", "none", "(none)");
+  const totals = new Map();
+  for (const [k] of pairs) {
+    const key = String(k).toLowerCase();
+    totals.set(key, (totals.get(key) || 0) + 1);
+  }
+  const seenCount = new Map();
+  const pre = el("pre");
+  pairs.forEach(([k, v], i) => {
+    if (i > 0) pre.append(document.createTextNode("\n"));
+    pre.append(document.createTextNode(`${k}: ${v}`));
+    const key = String(k).toLowerCase();
+    const total = totals.get(key);
+    if (total > 1) {
+      const n = (seenCount.get(key) || 0) + 1;
+      seenCount.set(key, n);
+      pre.append(el("span", "hdr-count", ` ${n}/${total}`));
+    }
+  });
+  return pre;
+}
+
+function base64Bytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Binary bodies are never rendered as text: type, size and sha256 only.
+function binaryPlaceholder(b64, headers) {
+  const pre = el("pre", "binary");
+  let bytes;
+  try { bytes = base64Bytes(b64); } catch (_) {
+    pre.textContent = "binary body (could not decode base64)";
+    return pre;
+  }
+  const type = headerValue(headers, "content-type") || "unknown type";
+  pre.append(el("span", null, `binary · ${type} · ${bytes.length} bytes`), document.createTextNode("\n"));
+  const hash = el("span", "none", "sha256 …");
+  pre.append(hash);
+  if (window.crypto && crypto.subtle) {
+    crypto.subtle.digest("SHA-256", bytes).then((d) => {
+      hash.className = "";
+      hash.textContent = "sha256 " + Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+    }, () => { hash.textContent = "sha256 unavailable"; });
+  } else {
+    hash.textContent = "sha256 unavailable (needs a secure context)";
+  }
+  return pre;
+}
+
+function bodyPre(body, encoding, headers) {
   if (body === null || body === undefined || body === "") return el("pre", "none", "(empty)");
+  if (encoding === "base64") return binaryPlaceholder(body, headers);
   let text = body;
-  const ct = Object.entries(headers || {}).find(([k]) => k.toLowerCase() === "content-type");
-  if ((ct && /json/i.test(ct[1])) || /^\s*[[{]/.test(text)) {
+  const ct = headerValue(headers, "content-type");
+  if ((ct && /json/i.test(ct)) || /^\s*[[{]/.test(text)) {
     try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (_) { /* show as-is */ }
   }
   if (text.length > MAX_BODY_CHARS) {
@@ -83,10 +145,10 @@ function buildDetail(entry) {
   const grid = el("div", "detail-grid");
   const req = el("section");
   req.append(el("h3", null, "request headers"), headersPre(entry.req_headers),
-             el("h3", null, "request body"), bodyPre(entry.req_body, entry.req_headers));
+             el("h3", null, "request body"), bodyPre(entry.req_body, entry.req_body_encoding, entry.req_headers));
   const res = el("section");
   res.append(el("h3", null, "response headers"), headersPre(entry.res_headers),
-             el("h3", null, "response body"), bodyPre(entry.res_body, entry.res_headers));
+             el("h3", null, "response body"), bodyPre(entry.res_body, entry.res_body_encoding, entry.res_headers));
   grid.append(req, res);
   td.append(grid);
   tr.append(td);
@@ -104,8 +166,10 @@ function addEntry(entry) {
   const path = pathOf(entry.url);
   const status = entry.status === null || entry.status === undefined ? "ERR" : entry.status;
   const row = el("tr", "row");
+  const timeTd = el("td", "time", timeOf(entry.ts));
+  timeTd.title = String(entry.ts);
   row.append(
-    el("td", "time", timeOf(entry.ts)),
+    timeTd,
     el("td", null, entry.method),
     el("td", null, entry.host),
   );

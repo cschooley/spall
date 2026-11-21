@@ -32,7 +32,7 @@ A Burp-style thick client was considered and rejected. spall is a web UI plus an
 | Quality | Noisy, unverified | Triaged |
 | Lifecycle | Triage only | Full (ticketing, SLA, retest, closure) |
 
-Candidates live in their own Findings view (a triage inbox), not in a side panel beside Traffic. Traffic links to it through a "flag as candidate" row action, and the right-hand pane in every view is the shared inspector. See [ux.md](ux.md). Only triaged candidates are exported.
+Candidates live in their own Findings view (a triage inbox), not in a side panel beside Traffic. Traffic links to it through a "Flag candidate" action in the shared inspector (the right-hand pane in every view). See [ux.md](ux.md). Only triaged candidates are exported.
 
 Triage in flux terms:
 

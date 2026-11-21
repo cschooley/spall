@@ -645,12 +645,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "chrono",
  "clap",
  "futures-util",
  "http-body-util",
- "serde",
  "serde_json",
+ "taphttp-types",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -692,6 +691,15 @@ name = "sync_wrapper"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
+
+[[package]]
+name = "taphttp-types"
+version = "0.2.0"
+source = "git+https://github.com/cschooley/taphttp?tag=v0.2.0#88ccf04e68c86d5278ab3d7cb05d3bdb63a01855"
+dependencies = [
+ "chrono",
+ "serde",
+]
 
 [[package]]
 name = "tempfile"

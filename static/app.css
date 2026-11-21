@@ -44,13 +44,14 @@ thead th {
   position: sticky; top: 0; background: var(--bg); text-align: left; font-weight: 600;
   color: var(--muted); padding: 8px 6px; border-bottom: 1px solid var(--line);
 }
-.c-time { width: 7.5em; } .c-method { width: 6em; } .c-host { width: 22%; }
+/* HH:MM:SS.mmm is 12 monospace chars; leave room for cell padding. */
+.c-time { width: calc(13ch + 12px); } .c-method { width: 6em; } .c-host { width: 22%; }
 .c-status { width: 4.5em; } .c-dur { width: 6em; text-align: right; }
 tbody tr.row { cursor: pointer; }
 tbody tr.row:hover, tbody tr.row.open { background: var(--hover); }
 tbody td { padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 td.dur { text-align: right; color: var(--muted); }
-td.time { color: var(--muted); }
+td.time { color: var(--muted); text-overflow: clip; }
 .st-2 { color: var(--s2); } .st-3 { color: var(--s3); } .st-4 { color: var(--s4); } .st-5 { color: var(--s5); } .st-err { color: var(--err); }
 .replay { color: var(--accent); margin-left: 6px; font-size: 11px; }
 tr.detail > td { white-space: normal; padding: 0 0 12px; background: var(--panel); }
@@ -64,6 +65,9 @@ pre {
   max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-all;
 }
 .none { color: var(--muted); font-style: italic; }
+.hdr-count { color: var(--muted); }
+pre.binary { color: var(--muted); }
+pre.binary span:first-child { color: var(--fg); }
 .empty { color: var(--muted); text-align: center; padding: 48px 0; }
 .empty code { color: var(--fg); }
 footer { padding: 6px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; background: var(--panel); }

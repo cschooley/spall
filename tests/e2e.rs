@@ -11,7 +11,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 const LINE_A: &str = r#"{"id":"e2e-aaaa","ts":"2026-11-20T17:00:00Z","host":"example.com","method":"GET","url":"http://example.com/","req_headers":{"host":"example.com"},"req_body":null,"status":200,"res_headers":{"content-type":"text/html"},"res_body":"<h1>hi</h1>","duration_ms":12,"replay_of":null}"#;
-const LINE_B: &str = r#"{"id":"e2e-bbbb","ts":"2026-11-20T17:00:01Z","host":"api.example.com","method":"POST","url":"https://api.example.com/login","req_headers":{},"req_body":"{\"u\":\"x\"}","status":401,"res_headers":{},"res_body":null,"duration_ms":30,"replay_of":null}"#;
+/// v3 (taphttp v0.2.0): repeated Set-Cookie, binary body as base64.
+const LINE_B: &str = r#"{"schema_version":3,"id":"e2e-bbbb","ts":"2026-11-20T17:00:01Z","host":"api.example.com","method":"POST","url":"https://api.example.com/login","req_headers":[],"req_body":"{\"u\":\"x\"}","req_body_encoding":"utf8","status":401,"res_headers":[["set-cookie","a=1"],["set-cookie","b=2"]],"res_body":"AAEC/w==","res_body_encoding":"base64","duration_ms":30,"replay_of":null}"#;
 
 fn append(path: &Path, s: &str) {
     let mut f = std::fs::OpenOptions::new()
@@ -98,6 +99,8 @@ async fn appended_log_lines_stream_to_sse_clients() {
     read_until(&mut sse, &mut seen, "e2e-bbbb").await;
     assert!(seen.contains("id: e2e-aaaa"));
     assert!(seen.contains("\"status\":401"));
+    assert!(seen.contains(r#""res_headers":[["set-cookie","a=1"],["set-cookie","b=2"]]"#));
+    assert!(seen.contains(r#""res_body":"AAEC/w==","res_body_encoding":"base64""#));
     assert!(!seen.contains("this is not json"));
 
     // A browser connecting later gets the backlog.
