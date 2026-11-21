@@ -94,6 +94,11 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
 - **#20**: compare a replay with its original; a reusable diff (M3
   evidence, M7 retests).
 - **#21**: the Replays tab and links between originals and replays.
+- **#22**: the action gate: server-side scope (URL host and effective
+  `Host` header), unsafe-method policy with a single-use confirmation
+  token (#18's second `⏎` sends it), and an audit record for every
+  attempt. #17 routes through it; M5 agents reuse it.
+- **#10**: CI and security workflows (in progress in another session).
 - taphttp side: cschooley/taphttp#10 (ordered header edits, binary
   bodies, `replay_of` filter). Not blocking; #19 and #21 work around it.
 
