@@ -34,7 +34,7 @@ Not a stats dashboard. A **"what needs me now"** page.
 
 ### 2. Traffic
 
-The M0 console, grown up: live stream plus history, filters, inspector. Actions on an exchange (copy as curl and save body in M1; replay in M2; Flag candidate in M3; task the agent in M5) live in the inspector, not on rows. Candidates go to the Findings view, never a panel beside Traffic.
+The M0 console, grown up: live stream plus history, filters, inspector. Actions on an exchange (copy as curl and save body in M1; replay in M2; Flag candidate in M4; task the agent in M6) live in the inspector, not on rows. Candidates go to the Findings view, never a panel beside Traffic.
 
 ### 3. Surface
 
@@ -119,7 +119,7 @@ A real feature with a joke name: a **time-boxed burst** for the agent.
 | Stop / halted | `control-stop` |
 | Quad active | `boost` |
 | HTTP status / method | `status-*` / `method-*` |
-| Finding severity | Text only until verdigris defines severity colors (M3) |
+| Finding severity | Text only until verdigris defines severity colors (M4) |
 
 ## Open source vs. enterprise
 
@@ -136,10 +136,10 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 |---|---|
 | Traffic (history, filters, inspector) | M1 |
 | Replay in inspector | M2 |
-| Findings (manual flagging, triage, suppressions) | M3 |
-| Flux export with redaction preview | M4 |
-| Tasks + MCP, e-stop, approval gates | M5 |
-| Surface (coverage) | M5/M6, needs task and check attribution |
-| Engagement home | After Tasks and Findings exist to summarize |
+| Findings (manual flagging, triage, suppressions) | M4 |
+| Flux export with redaction preview | M5 |
+| Tasks + MCP, e-stop, approval gates | M6 |
+| Surface (coverage) | M6–M8: needs task and check attribution (M6); seeded from route maps (M8) |
+| Engagement home, targets, scope, rules of engagement | M3 |
 | Command palette and `` ` `` console (one registry) | M1, grows with each milestone |
-| Quad mode | M5, with agent tasks |
+| Quad mode | M6, with agent tasks |

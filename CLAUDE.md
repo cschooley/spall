@@ -91,13 +91,13 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
 - **#18**: replay as captured from the inspector (`⏎`) and console;
   includes the decision on confirming unsafe methods.
 - **#19**: edit before replay (method, headers, body).
-- **#20**: compare a replay with its original; a reusable diff (M3
-  evidence, M7 retests).
+- **#20**: compare a replay with its original; a reusable diff (M4
+  evidence, M8 retests).
 - **#21**: the Replays tab and links between originals and replays.
 - **#22**: the action gate: server-side scope (URL host and effective
   `Host` header), unsafe-method policy with a single-use confirmation
   token (#18's second `⏎` sends it), and an audit record for every
-  attempt. #17 routes through it; M5 agents reuse it.
+  attempt. #17 routes through it; M6 agents reuse it.
 - **#10**: CI and security workflows (in progress in another session).
 - taphttp side: cschooley/taphttp#10 (ordered header edits, binary
   bodies, `replay_of` filter). Not blocking; #19 and #21 work around it.
@@ -123,10 +123,11 @@ Known constraints and requirements:
   are a name->value map (no repeated headers); the body override is a
   string (binary bodies can only be replayed as captured); `GET
   /exchanges` can't filter by `replay_of`, which a Replays tab wants.
-- Agent-driven replay is M5 (MCP), not M2.
+- Agent-driven replay is M6 (MCP), not M2.
 
-Explicitly not in M2: candidates, triage and flux (M3), export (M4),
-MCP server, agent tasks, e-stop, attribution (M5), intercept (M6),
+Explicitly not in M2: the engagement model and scope UI (M3; #22's
+scope comes from config until then), candidates, triage and flux (M4), export (M5),
+MCP server, agent tasks, e-stop, attribution (M6), intercept (M7),
 image preview (#15, later). Unbuilt views and tools stay dimmed, inert
 placeholders (docs/ux.md) until they ship.
 

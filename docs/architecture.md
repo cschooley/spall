@@ -142,19 +142,24 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 ## Milestones
 
-GitHub milestones are the tracker; this table is the narrative. Issue numbers are spall issues unless noted.
+GitHub milestones are the tracker; this table is the narrative. Each milestone **lights up a rail icon** (unbuilt views stay dimmed placeholders until then). Issues also carry a view label (`view:engagement`, `view:traffic`, `view:surface`, `view:tasks`, `view:findings`) or `cross-cutting` for work that belongs to no single view (the action gate, sensors, CI). Issue numbers are spall issues unless noted.
 
-| | Scope | Issues |
-|---|---|---|
-| **M0 hello** (done, `v0.1.0`) | Docker Compose: taphttp + spall; spall tails the JSONL log and streams it to a single-page live console over SSE. | |
-| **M1 traffic workbench** (done, `v0.2.0`) | Filtering, search, request/response detail view, command palette and console. History comes from taphttp's lever API (its sqlite store), not a spall copy; see below. | #3-#12 |
-| **M2 replay** (current) | Send-to-replay from the inspector via taphttp; edit, compare, Replays tab. Every action that sends traffic goes through the server-side action gate (scope, method policy, audit). CI and security gates. | #17-#22, #10, taphttp#10 |
-| M3 candidates | Candidate model on flux crate types, manual "flag as candidate", triage states, suppressions; the Findings view. | #16 |
-| M4 export | Flux export with redaction and fingerprints; redaction preview. | |
-| M5 agent | MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | #13, #1, #2 |
-| M6 intercept | Pause/modify via taphttp `--intercept-socket`. | |
-| M7 flux in | Suppressions and retests from the Kudzu platform; scurf hypothesis correlation; route maps ("source maps for the backend"). | #14 |
-| Later | Wanted, not scheduled (label `later`). | #15 |
+Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3/M4/M5/M6/M7 now means M4/M5/M6/M7/M8.
+
+| | Scope | Lights up | Issues |
+|---|---|---|---|
+| **M0 hello** (done, `v0.1.0`) | Docker Compose: taphttp + spall; spall tails the JSONL log and streams it to a single-page live console over SSE. | Traffic (first light) | |
+| **M1 traffic workbench** (done, `v0.2.0`) | Filtering, search, request/response detail view, command palette and console. History comes from taphttp's lever API (its sqlite store), not a spall copy; see below. | Traffic | #3-#12 |
+| **M2 replay** (current) | Replay from the inspector via taphttp; edit, compare, Replays tab. Every action that sends traffic goes through the server-side action gate (scope, method policy, audit). CI and security gates. | Traffic | #17-#22, #10, #29, taphttp#10 |
+| M3 engagement | The engagement as the root object: targets, scope (incl. explicit out-of-scope), rules of engagement as data that the gate reads; build scope from traffic; Engagement home view. | **Engagement** | #30 |
+| M4 candidates | Candidate model on flux crate types, manual "flag as candidate", triage states, suppressions. | **Findings** | #16 |
+| M5 export | Flux export with redaction and fingerprints; redaction preview. | Findings | |
+| M6 agent | MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | **Tasks** | #13, #1, #2 |
+| M7 intercept | Pause/modify via taphttp `--intercept-socket`. | Traffic | |
+| M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypothesis correlation; route maps ("source maps for the backend"). | **Surface** | #14 |
+| Later | Wanted, not scheduled (label `later`). | | #15 |
+
+Unscheduled cross-cutting: hardened runtime image (#28: static musl binary on distroless/scratch; today's base image carries 231 CVEs). Worth slotting soon; it's a security tool's own supply chain.
 
 Traffic history (decided Nov 2026, spall#4): spall reads history from taphttp's lever API rather than keeping its own copy of the traffic. One store, and M2 replay goes through the same API. spall has its own store only for what it owns (candidates, from M3). Built on taphttp v0.3.0 (taphttp#7: token file outside the CA volume, sqlite-backed paging and search, `/feed?since=`): spall backfills from `/exchanges`, follows `/feed`, and proxies history to the browser as `/api/exchanges`. Tailing `--log-file` remains as a fallback when no API is configured. The API port stays on the compose network and is never published to the host.
 

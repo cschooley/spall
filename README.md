@@ -178,12 +178,13 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 |---|---|---|
 | M0 hello | Docker Compose with taphttp; live traffic console over SSE | done, `v0.1.0` |
 | M1 traffic workbench | Traffic view: history and search from taphttp's API, filters, shared inspector, command palette and console, verdigris styling | done, `v0.2.0` |
-| M2 replay | Replay from the inspector and console via taphttp; results linked to the original | next |
-| M3 candidates | Flag candidates, triage, suppressions, on flux types | |
-| M4 export | flux export with redaction and fingerprints | |
-| M5 MCP | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop | |
-| M6 intercept | Pause and modify requests via taphttp | |
-| M7 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses | |
+| M2 replay | Replay from the inspector and console via taphttp; results linked to the original; server-side action gate (scope, method policy, audit) | current |
+| M3 engagement | Targets, scope and rules of engagement as data; build scope from traffic; Engagement home view | |
+| M4 candidates | Flag candidates, triage, suppressions, on flux types | |
+| M5 export | flux export with redaction and fingerprints | |
+| M6 agent | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop, quad; execution sandbox and OOB listener | |
+| M7 intercept | Pause and modify requests via taphttp | |
+| M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses; route maps (Surface) | |
 
 Details in [docs/architecture.md](docs/architecture.md) (milestones) and [docs/ux.md](docs/ux.md) (views).
 
