@@ -79,7 +79,7 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 - **One inspector.** The right-hand detail pane behaves the same in every view.
 - **Headers are shown in wire order, repeats kept.** Never merge repeated headers or comma-join them (`Set-Cookie` cannot be comma-joined). Repeats get a group rule and an `n/N` counter. Requires taphttp to store headers as an ordered list, not a map (taphttp#5).
 - **Binary bodies get a placeholder, not garbage.** Show type, size and hash; offer hex view (8 bytes per row, paged), preview for images, and save. Never render raw binary as text.
-- **Replay lives in the inspector.** Edit the request, send, see original and replay side by side. Repeater stops being a destination.
+- **Replay lives in the inspector.** Edit the request, send, see original and replay side by side. Repeater stops being a destination. A replay is a real request carrying the captured credentials, so unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`) take two presses: the first arms ("press again to send POST to <host>"), the second sends. Arming expires after a few seconds or on any other action. Safe methods send at once.
 - **Everything links.** Finding → evidence exchanges → producing task → endpoint in Surface, and back.
 - **Command palette (`⌘K` / `Ctrl+K`)** instead of right-click menus: "replay this", "task agent on this endpoint", "flag". Keyboard first, discoverable.
 - **Attribution everywhere.** Every exchange and candidate shows who created it: `you`, `agent · T-3`, or `scurf`. Agent-originated items carry a distinct glyph (◆), never color alone.
