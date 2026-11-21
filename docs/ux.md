@@ -83,6 +83,31 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 - **Attribution everywhere.** Every exchange and candidate shows who created it: `you`, `agent · T-3`, or `scurf`. Agent-originated items carry a distinct glyph (◆), never color alone.
 - **Agent e-stop.** Always visible in the top bar. One click (or `Shift+Esc`) halts every running task. A hardware e-stop on purpose: a confident AI testing someone else's app needs a big red button, and its constant presence builds trust.
 
+## The console and quad mode
+
+### `` ` `` console
+
+Quake-style drop-down console, the same in every suite app (verdigris component).
+
+- **Palette vs. console.** `⌘K` is for finding things you don't remember (fuzzy search). The console is for doing things you do remember: typed commands with arguments, history, tab completion, scrollback.
+- **One command registry.** Palette, console and MCP server expose the same commands with the same names and arguments. A command that exists in one exists in all three.
+- **System output lands here:** agent messages, late OOB callbacks, warnings.
+- **Text only.** Console output is never rendered as HTML (see the "Traffic is never HTML" rule).
+- Toggle on backtick (configurable for non-US layouts). Never opens while typing in an input.
+
+### Quad mode
+
+A real feature with a joke name: a **time-boxed burst** for the agent.
+
+- `quad [seconds]` (default 120, max 600): 4× agent workers at 4× rate, then it **wears off on its own**.
+- **Never exceeds the engagement.** 4× applies *inside* the task constraints and rules of engagement. If 4× would exceed the engagement's rate ceiling, it's capped and the console says so.
+- **Counts against request budgets** like any other agent work, and is logged in the task's request log with start, end and worker count.
+- **The e-stop ends it instantly.** Halted agents can't go quad.
+- **Visual state:** `--vg-boost` screen-edge glow, a `QUAD m:ss` countdown chip in the top bar, the request meter in boost color. Optional power-up sound, off by default (screen-shares).
+- **Scorecard when it ends:** duration, requests sent, agent tokens used, candidates found. A **shareable quad card** can be copied for bragging. It's **redacted by construction**: numbers only, no hosts, paths, payloads or client names. Nobody leaks a client's attack surface on social media for a flex.
+- **Burn is the user's own.** Quad burns their LLM tokens and their engagement's request budget. spall (and any hosted version) never charges per request or per scan. That's the pricing rule: more testing never costs more on our bill.
+- `god` answers "no."
+
 ## Color semantics (from verdigris)
 
 | Meaning | Token |
@@ -90,6 +115,7 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 | Live / active / running | `accent-verdigris` |
 | Needs your action (approval, triage) | `accent-rust` |
 | Stop / halted | `control-stop` |
+| Quad active | `boost` |
 | HTTP status / method | `status-*` / `method-*` |
 | Finding severity | Text only until verdigris defines severity colors (M3) |
 
@@ -113,4 +139,5 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 | Tasks + MCP, e-stop, approval gates | M5 |
 | Surface (coverage) | M5/M6, needs task and check attribution |
 | Engagement home | After Tasks and Findings exist to summarize |
-| Command palette | M1, grows with each milestone |
+| Command palette and `` ` `` console (one registry) | M1, grows with each milestone |
+| Quad mode | M5, with agent tasks |
