@@ -1,6 +1,11 @@
-# Security gates from cschooley/sec-actions (#10), in audit mode
-# (fail_on_findings: false) until the baseline is triaged. Results go to the
-# repo's Security tab (code scanning, one category per tool) and as artifacts.
+# Security gates from cschooley/sec-actions (#10), blocking since #29: a job
+# fails on any leaked secret, any unsuppressed OSV vulnerability, an
+# ERROR-severity semgrep finding, a denied license, or a high/critical CVE.
+# Results still go to the repo's Security tab (one category per tool).
+#
+# Suppressions live in the repo, with a reason: OSV in osv-scanner.toml (with
+# ignoreUntil), semgrep as an inline `nosemgrep: <rule-id>` comment. Dismissing
+# an alert in the Security tab does not stop the scanner failing.
 # GitHub-native CodeQL, secret scanning with push protection and Dependabot
 # alerts are enabled in the repo settings, not here.
 #
@@ -34,7 +39,7 @@ jobs:
       - uses: cschooley/sec-actions/actions/gitleaks@750b45e160b1e2350c6c7257bcdc366cf681104c # main, 2026-08-10
         with:
           version: "8.30.1"
-          fail_on_findings: "false"
+          fail_on_findings: "true"
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && hashFiles('gitleaks.sarif') != ''
         with:
@@ -57,7 +62,9 @@ jobs:
       - uses: cschooley/sec-actions/actions/semgrep@750b45e160b1e2350c6c7257bcdc366cf681104c # main, 2026-08-10
         with:
           config: auto
-          fail_on_findings: "false"
+          # Without --error semgrep exits 0 on findings, so nothing would block.
+          extra_args: "--error --severity ERROR"
+          fail_on_findings: "true"
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && hashFiles('semgrep.sarif') != ''
         with:
@@ -80,7 +87,7 @@ jobs:
           format: sarif
           output_file: osv.sarif
           config: osv-scanner.toml # dated, reasoned suppressions only
-          fail_on_findings: "false"
+          fail_on_findings: "true"
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && hashFiles('osv.sarif') != ''
         with:
@@ -102,7 +109,7 @@ jobs:
           check_licenses: "true"
           # IBM Plex fonts are OFL-1.1, which is fine; copyleft licenses are flagged.
           deny_licenses: "GPL-2.0-only,GPL-3.0-only,AGPL-3.0-only"
-          fail_on_findings: "false"
+          fail_on_findings: "true"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -128,8 +135,8 @@ jobs:
           version: "0.121.2"
           target: sbom.spdx.json
           output_file: grype-sbom.sarif
-          severity_cutoff: medium
-          fail_on_findings: "false"
+          severity_cutoff: high # reports and fails at this level
+          fail_on_findings: "true"
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && hashFiles('grype-sbom.sarif') != ''
         with:
@@ -152,8 +159,8 @@ jobs:
           version: "0.121.2"
           target: "docker:spall:scan"
           output_file: grype-image.sarif
-          severity_cutoff: medium
-          fail_on_findings: "false"
+          severity_cutoff: high # reports and fails at this level
+          fail_on_findings: "true"
       - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         if: always() && hashFiles('grype-image.sarif') != ''
         with:

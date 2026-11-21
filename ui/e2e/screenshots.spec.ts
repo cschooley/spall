@@ -38,6 +38,8 @@ function mockupTraffic() {
       req_headers: [
         ["host", host],
         ["content-type", "application/json"],
+        // Fake fixture token ("sig" is not a signature), shown in the screenshots.
+        // nosemgrep: generic.secrets.security.detected-jwt-token.detected-jwt-token
         ["authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbiJ9.sig"],
         ["cookie", "sid=8f3a91c2d4e5; csrf=11c0e7"],
         ["user-agent", "spall-agent/0.1"],

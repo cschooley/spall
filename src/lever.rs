@@ -123,6 +123,9 @@ impl Lever {
         >,
     > {
         let authority = self.base.trim_start_matches("http://");
+        // Plaintext by design: the lever API is on the compose network or
+        // loopback, and --taphttp-api accepts http:// only (see config.rs).
+        // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
         let mut url = format!("ws://{authority}/feed");
         if let Some(id) = since {
             url.push('?');

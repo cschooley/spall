@@ -166,7 +166,7 @@ Adding an npm dependency: pick a version published at least two weeks ago, and r
 ### CI and security
 
 - **CI** (`.github/workflows/ci.yml`, every push and PR): Rust fmt, clippy and tests; UI lint, unit tests and build with the CSP check; Playwright; the Docker image.
-- **Security** (`.github/workflows/security.yml`, every push and PR plus weekly): gitleaks, semgrep, OSV-Scanner on both lockfiles, a syft SBOM with a license check, and grype on the SBOM and on the built image. These come from [sec-actions](https://github.com/cschooley/sec-actions) and run in audit mode for now. Findings appear in the repo's Security tab. Suppressions need a reason and an expiry date (`osv-scanner.toml`).
+- **Security** (`.github/workflows/security.yml`, every push and PR plus weekly): gitleaks, semgrep, OSV-Scanner on both lockfiles, a syft SBOM with a license check, and grype on the SBOM and on the built image. These come from [sec-actions](https://github.com/cschooley/sec-actions) and **block**: a leaked secret, an unsuppressed vulnerable dependency, an ERROR-severity semgrep finding, a denied license or a high/critical image CVE fails the job. Findings also appear in the repo's Security tab. Suppressions live in the repo with a reason: `osv-scanner.toml` (with an expiry date) or an inline `nosemgrep: <rule-id>` comment. Dismissing an alert in the Security tab doesn't stop the scanner failing.
 - **GitHub-native:** CodeQL (default setup), secret scanning with push protection, and Dependabot alerts and security updates.
 - **Dependabot** (`.github/dependabot.yml`) keeps action pins and dependencies current, with a 14-day cooldown matching the two-week rule. `taphttp-types` and the taphttp image are bumped together by hand.
 

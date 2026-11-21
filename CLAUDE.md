@@ -148,8 +148,10 @@ TDD, same as the rest of Kudzu:
   workflow runs sec-actions scanners (audit mode, SARIF to the Security
   tab). Pin every action to a commit SHA (`@<sha> # vX.Y.Z`; the repo's
   Actions settings require it, so an unpinned `uses:` fails) and every
-  scanner version; a
-  suppression in `osv-scanner.toml` needs a reason and `ignoreUntil`.
+  scanner version. The security scanners block (#29). Suppress in the
+  repo, never only in the Security tab: OSV in `osv-scanner.toml` with a
+  reason and `ignoreUntil`; semgrep with an inline `nosemgrep: <rule-id>`
+  and a reason beside it; code-scanning dismissals get a comment.
 - New npm or Rust dependencies: versions at least two weeks old,
   transitive ones included (`npm install --before=<date>`;
   `cargo update --precise`).
