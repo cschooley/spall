@@ -185,6 +185,7 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 | M6 agent | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop, quad; execution sandbox and OOB listener | |
 | M7 intercept | Pause and modify requests via taphttp | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses; route maps (Surface) | |
+| M9 academy | Capstone: hands-on exercises on shared WSTG/ASVS skills; content packs from repos, licenses shown; ready-to-go lab | |
 
 Details in [docs/architecture.md](docs/architecture.md) (milestones) and [docs/ux.md](docs/ux.md) (views).
 
