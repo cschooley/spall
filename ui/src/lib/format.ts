@@ -136,3 +136,12 @@ export function matchesFilter(
   if (q === "") return true;
   return `${e.method} ${e.host} ${pathOf(e.url)} ${statusText(e.status)}`.toLowerCase().includes(q);
 }
+
+const KNOWN_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+
+/** CSS class for a method's color. A fixed set: the method string comes
+ * from traffic and must never become a class name. */
+export function methodClass(method: string): string {
+  const m = method.toUpperCase();
+  return KNOWN_METHODS.has(m) ? `m-${m}` : "m-OTHER";
+}

@@ -3,6 +3,7 @@ import { Detail } from "./components/Detail.tsx";
 import {
   durationText,
   matchesFilter,
+  methodClass,
   pathOf,
   statusClass,
   statusText,
@@ -10,6 +11,17 @@ import {
 } from "./lib/format.ts";
 import type { TrafficEntry } from "./types.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
+import {
+  applyTheme,
+  browserStorage,
+  loadTheme,
+  saveTheme,
+  themeName,
+  themeParts,
+  type Brand,
+  type Mode,
+  type ThemeName,
+} from "./lib/theme.ts";
 
 const CONNECTION_LABEL: Record<Connection, string> = {
   connecting: "connecting",
@@ -17,6 +29,32 @@ const CONNECTION_LABEL: Record<Connection, string> = {
   reconnecting: "reconnecting",
   down: "disconnected",
 };
+
+function ThemePicker() {
+  const [theme, setTheme] = useState<ThemeName>(() => loadTheme(browserStorage()));
+  const { brand, mode } = themeParts(theme);
+  const choose = (next: { brand: Brand; mode: Mode }) => {
+    const name = themeName(next);
+    setTheme(name);
+    applyTheme(name);
+    saveTheme(browserStorage(), name);
+  };
+  const seg = <T extends string>(label: string, value: T, options: readonly T[], pick: (v: T) => void) => (
+    <div className="seg" role="group" aria-label={label}>
+      {options.map((o) => (
+        <button key={o} type="button" aria-pressed={o === value} onClick={() => pick(o)}>
+          {o[0]!.toUpperCase() + o.slice(1)}
+        </button>
+      ))}
+    </div>
+  );
+  return (
+    <>
+      {seg("Theme", brand, ["rust", "blued"] as const, (b) => choose({ brand: b, mode }))}
+      {seg("Brightness", mode, ["dark", "light"] as const, (m) => choose({ brand, mode: m }))}
+    </>
+  );
+}
 
 export function App() {
   const { store, connection, clear } = useTraffic();
@@ -78,9 +116,21 @@ export function App() {
         <button type="button" onClick={clear}>
           clear
         </button>
+        <span className="spacer" />
+        <ThemePicker />
       </header>
       <main ref={scroller} onScroll={onScroll}>
         <table>
+          {/* Widths live on <col>: it inherits the table's mono font, so ch
+              measures data digits (the header font is smaller). */}
+          <colgroup>
+            <col className="c-time" />
+            <col className="c-method" />
+            <col className="c-host" />
+            <col className="c-path" />
+            <col className="c-status" />
+            <col className="c-dur" />
+          </colgroup>
           <thead>
             <tr>
               <th className="c-time">time</th>
@@ -98,11 +148,7 @@ export function App() {
           </tbody>
         </table>
         {count === 0 ? (
-          <p className="empty">
-            No traffic yet. Send something through the proxy:
-            <br />
-            <code>curl -x http://127.0.0.1:8080 http://example.com</code>
-          </p>
+          <p className="empty">No traffic. Point a client at 127.0.0.1:8080.</p>
         ) : null}
       </main>
       <footer>For authorized testing only. This page shows raw traffic, including credentials.</footer>
@@ -125,7 +171,7 @@ const Row = memo(function Row({
         <td className="time" title={entry.ts}>
           {timeOf(entry.ts)}
         </td>
-        <td>{entry.method}</td>
+        <td className={`m ${methodClass(entry.method)}`}>{entry.method}</td>
         <td>{entry.host}</td>
         <td title={entry.url}>
           {pathOf(entry.url)}

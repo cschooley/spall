@@ -145,3 +145,10 @@ test("matchesFilter checks method, host, path and status, case-insensitively", a
   }
   assert.ok(matchesFilter({ ...entry, status: null }, "err"), "ERR status is searchable");
 });
+
+test("methodClass maps to a fixed set; never echoes the (attacker-controlled) method", async () => {
+  const { methodClass } = await import("./format.ts");
+  for (const m of ["GET", "POST", "PUT", "PATCH", "DELETE"]) assert.equal(methodClass(m), `m-${m}`);
+  assert.equal(methodClass("get"), "m-GET");
+  for (const m of ["OPTIONS", "HEAD", "row open", "x\" onclick=\"y", ""]) assert.equal(methodClass(m), "m-OTHER");
+});
