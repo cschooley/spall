@@ -51,6 +51,40 @@ Rejections and duplicates are kept as suppressions so the same false positive is
 
 Promotion flows toward Jira. An agent must not file tickets against dev teams unsupervised.
 
+## Sensors: where the work happens
+
+spall is the controller. The work happens in **sensors**, small deployable components that run wherever the target's traffic is: on the tester's laptop, on a compose network, on a VPS, or inside a client network.
+
+```
+            ┌── taphttp   observe + replay HTTP
+spall  <────┼── listener  catch out-of-band callbacks (name TBD, #1)
+            └── sandbox   run tools for the agent (name TBD, #13)
+```
+
+**Shared deployment kit** (designed once, in taphttp #8, reused by all three):
+- Three modes per sensor: same box, compose network, remote. Unsafe combinations are refused at startup.
+- Pairing: spall and each sensor exchange keys once; nothing else can connect.
+- `--expires`: a forgotten sensor stops working.
+- Startup record of mode, bound addresses and access controls; teardown notes.
+- Remote deployment inside a client network only with explicit approval in the rules of engagement.
+
+### The sandbox: tools for the agent, without a host shell
+
+Agents need real tools (`curl`, `nmap`, `ffuf`, `nuclei`, `jq`, a Python interpreter to decode a JWT). The danger is a shell on the host guarded by a command blocklist: blocklists can always be bypassed. spall's answer is **containment, not filtering.**
+
+- **Disposable and isolated.** A fresh sandbox per task, destroyed when the task ends. Strong isolation (gVisor or a Firecracker microVM, not a plain container where avoidable). No host mounts, no credentials, no access to spall's own data. Read-only image with a curated toolset; a scratch directory that dies with the sandbox. Files leave only as explicit task artifacts.
+- **The network is the real control.**
+  - All HTTP(S) egress is forced through taphttp: captured, scoped, budgeted, attributed to the task, visible in Traffic.
+  - Non-HTTP egress (`nmap`, raw TCP) passes an egress firewall allowlisted to in-scope hosts, with packet capture so it's on the record too.
+  - Out-of-scope traffic is not filtered by pattern; it has no route.
+- **Everything is logged.** Each command, its exit code, output (truncated, with the full output as an artifact) and duration land in the task's request log alongside the HTTP requests.
+- **Approval by category, not pattern.** Running an exploitation-class tool, exceeding N hosts, or exceeding the task's time or budget pauses the task for a human.
+- **Resource limits:** CPU, memory, disk, process count, wall-clock per command.
+- **The e-stop kills the sandbox,** not just the agent loop. Quad mode raises worker count inside the same limits.
+- **Agent access is through spall's tools** (`run_in_sandbox`, `replay`, `propose_finding`, `mint_oob_payload`), never a direct socket to the sandbox.
+
+Enterprise line: a local sandbox is open. Sandbox pools/fleets and hosted sandboxes are paid. Hosted capacity is priced by plan tier with generous included capacity, never per command.
+
 ## Evidence
 
 - Every candidate cites the taphttp exchange IDs it came from (`flux/replayIds`).
