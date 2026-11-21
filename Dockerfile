@@ -8,7 +8,7 @@ COPY ui/ ./
 RUN npm run lint && npm test && npm run build
 
 # Stage 2: build spall with the UI embedded.
-FROM rust:1.90-slim-bookworm AS build
+FROM rust:1.99-slim-bookworm AS build
 WORKDIR /src
 # Build dependencies in their own layer so source edits rebuild fast.
 COPY Cargo.toml Cargo.lock ./
