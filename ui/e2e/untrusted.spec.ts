@@ -32,6 +32,7 @@ test("traffic is rendered as text in every field, and nothing executes", async (
     ],
     res_body: `<!doctype html><html><body>${P.script}${P.img}</body></html>`,
     replay_of: P.img,
+    error: `upstream ${P.svg}${P.script}`,
   });
   const jsonEntry = entry({
     host: `${t}.json`,
@@ -54,6 +55,7 @@ test("traffic is rendered as text in every field, and nothing executes", async (
   // The id is shortened on screen; the full (hostile) id is in the tooltip, as text.
   await expect(page.locator(".inspector .meta button.id")).toHaveAttribute("title", `${t}-${P.bold} (click to copy)`);
   await expect(app).toContainText(`replay of ${P.img}`);
+  await expect(page.locator(".inspector .meta .error")).toHaveText(`upstream ${P.svg}${P.script}`);
   await expect(app).toContainText(`x-${P.bold}`);
 
   // Response tab.

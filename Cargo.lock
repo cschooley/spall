@@ -1069,8 +1069,8 @@ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
 
 [[package]]
 name = "taphttp-types"
-version = "0.4.0"
-source = "git+https://github.com/cschooley/taphttp?tag=v0.5.0#319633d16c2bd68d7fdb0bb4baf64c50da6944d4"
+version = "0.5.0"
+source = "git+https://github.com/cschooley/taphttp?tag=v0.6.0#a15de628f89efed5fa3b7495b6bd92c1aa6071d5"
 dependencies = [
  "jiff",
  "serde",

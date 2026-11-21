@@ -139,7 +139,9 @@ const Row = memo(function Row({
         {pathOf(entry.url)}
         {entry.replay_of ? <span className="replay">replay</span> : null}
       </td>
-      <td className={statusClass(entry.status)}>{statusText(entry.status)}</td>
+      <td className={statusClass(entry.status)} title={entry.error ?? undefined}>
+        {statusText(entry.status)}
+      </td>
       <td className="dur">{entry.duration_ms === null ? "" : durationText(entry.duration_ms).replace(" ms", "")}</td>
     </tr>
   );

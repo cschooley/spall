@@ -5,31 +5,6 @@ here.
 
 ## Open
 
-### Replay API gaps (M2)
-
-[taphttp#10](https://github.com/cschooley/taphttp/issues/10), still open
-in v0.5.0. Not blocking: spall#19 and spall#21 work around it.
-
-- Header overrides are a name->value map, so repeated headers can't be
-  edited in order.
-- The body override is a string, so binary bodies can only be replayed
-  as captured.
-- `GET /exchanges` can't filter by `replay_of`, which the Replays tab
-  (spall#21) wants.
-
-### Deployment info for the launcher tile
-
-[taphttp#18](https://github.com/cschooley/taphttp/issues/18): `GET /info`
-on the lever API. It would return:
-
-- the version
-- proxy and API listeners
-- TLS and auth mode
-- CA public details
-
-It must expose no secrets: no CA key, API token, proxy credentials or
-paths. For spall#16; not scheduled.
-
 ### Log rotation semantics
 
 spall's `--log-file` tailer handles truncation and file replacement, but
@@ -37,6 +12,20 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.6.0
+
+- **Replay API for M2:**
+  [taphttp#10](https://github.com/cschooley/taphttp/issues/10).
+  - `POST /replay` takes an ordered `req_headers` list, `body_encoding`
+    for binary bodies, and `meta` attribution.
+  - Failed attempts are recorded with `error` (schema v5) and returned
+    as a 502.
+  - `GET /exchanges?replay_of=<id>` lists an exchange's replays.
+- **Deployment info:**
+  [taphttp#18](https://github.com/cschooley/taphttp/issues/18).
+  `GET /info` reports the version, listeners, TLS and auth mode, and CA
+  public details, with no secrets. It's for spall#16.
 
 ## Resolved in v0.5.0
 

@@ -71,6 +71,7 @@ export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: ()
             {idCopied ? "id copied" : `id ${shortId(entry.id)}`}
           </button>
           <span className={statusClass(entry.status)}>{statusLine(entry.status)}</span>
+          {entry.error ? <span className="error">{entry.error}</span> : null}
           {entry.duration_ms !== null ? <span>{durationText(entry.duration_ms)}</span> : null}
           {entry.replay_of ? <span>{`replay of ${entry.replay_of}`}</span> : null}
         </div>

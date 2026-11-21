@@ -98,13 +98,24 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
   `Host` header), unsafe-method policy with a single-use confirmation
   token (#18's second `⏎` sends it), and an audit record for every
   attempt. #17 routes through it; M6 agents reuse it.
-- taphttp side: cschooley/taphttp#10 (ordered header edits, binary
-  bodies, `replay_of` filter). Not blocking; #19 and #21 work around it.
+What exists: taphttp v0.6.0 (`taphttp-types` 0.5.0, schema v5;
+cschooley/taphttp#10 shipped). `POST /replay` takes `{id, method?,
+req_headers?, headers?, body?, body_encoding?, meta?}`:
 
-What exists: taphttp v0.5.0 (`taphttp-types` 0.4.0, schema v4) `POST /replay` takes `{id, method?,
-headers?, body?}`, records the result as a new exchange with
-`replay_of` set, and returns it (it also appears on `/feed`). The
-registry reserves `replay` (mockup: `replay <id> [--header H:V]`).
+- `req_headers` is the whole ordered `[name, value]` list (repeats kept,
+  removals possible); the `headers` map still applies after it.
+- `body_encoding` (`utf8` | `base64`) allows binary bodies.
+- `meta` is string attribution stored on the recorded replay, never sent
+  upstream (16 keys, 64-byte keys, 1024-byte values). spall tags its
+  replays (e.g. `{"actor": "human"}`); M6 agents add a task id.
+
+The result is recorded as a new exchange with `replay_of` set and
+returned (it also appears on `/feed`). A failed attempt is recorded with
+`error` set and returned as a 502 carrying that entry; a 400 means bad
+input, nothing sent or recorded. `GET /exchanges?replay_of=<id>` lists
+an exchange's replays (spall forwards it on `/api/exchanges`).
+`GET /info` reports taphttp's deployment, for #16. The registry
+reserves `replay` (mockup: `replay <id> [--header H:V]`).
 
 Known constraints and requirements:
 
@@ -118,10 +129,9 @@ Known constraints and requirements:
   a foreign origin.
 - spall proxies replay server-side (`POST /api/replay`); the token never
   reaches the browser.
-- taphttp v0.5.0 gaps (still open as taphttp#10; file on taphttp when needed): header overrides
-  are a name->value map (no repeated headers); the body override is a
-  string (binary bodies can only be replayed as captured); `GET
-  /exchanges` can't filter by `replay_of`, which a Replays tab wants.
+- The recorded `req_headers` are what went on the wire: hyper groups a
+  repeated header name at its first position, so a diff against the
+  original (#20) can show reordering that the tester didn't ask for.
 - Agent-driven replay is M6 (MCP), not M2.
 
 Explicitly not in M2: the engagement model and scope UI (M3; #22's

@@ -41,7 +41,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 docker compose up --build
 ```
 
-taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.5.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
+taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.6.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
 
 ```sh
 curl -x http://127.0.0.1:8080 http://example.com
@@ -130,7 +130,7 @@ cargo run -- --log-file ./traffic.jsonl
 
 - `GET /`: live console
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
-- `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`; other parameters are dropped. 503 without `--taphttp-api`
+- `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`, `replay_of`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
 - `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080"}` for the status bar
 - `GET /healthz`: `ok`

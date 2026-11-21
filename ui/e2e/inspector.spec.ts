@@ -90,3 +90,27 @@ test("save body downloads the exact captured bytes", async ({ page }) => {
   expect(download.suggestedFilename()).toMatch(/^spall-[A-Za-z0-9_-]+-response\.bin$/);
   expect(readFileSync((await download.path())!)).toEqual(bytes);
 });
+
+test("a failed exchange shows why it got no response", async ({ page }) => {
+  const t = token();
+  append(
+    entry({
+      schema_version: 5,
+      host: `${t}.example`,
+      url: `http://${t}.example/down`,
+      status: null,
+      duration_ms: null,
+      res_headers: [],
+      error: "connect error: Connection refused (os error 111)",
+    }),
+  );
+  await page.goto("/");
+  await filterTo(page, t);
+  const row = page.locator("tr.row").first();
+  await expect(row.locator("td.st-err")).toHaveText("ERR");
+  await expect(row.locator("td.st-err")).toHaveAttribute("title", "connect error: Connection refused (os error 111)");
+  await row.click();
+  const meta = page.locator(".inspector .meta");
+  await expect(meta).toContainText("ERR (no response)");
+  await expect(meta.locator(".error")).toHaveText("connect error: Connection refused (os error 111)");
+});

@@ -126,7 +126,15 @@ fn content_type(path: &str) -> &'static str {
 /// Query parameters forwarded to taphttp's `GET /exchanges`. Anything else
 /// (notably `token`) is dropped.
 const EXCHANGE_PARAMS: &[&str] = &[
-    "limit", "before", "host", "method", "status", "q", "since", "until",
+    "limit",
+    "before",
+    "host",
+    "method",
+    "status",
+    "q",
+    "since",
+    "until",
+    "replay_of",
 ];
 
 /// Keep only the allowlisted parameters, re-encoded. `None` if the query
@@ -397,6 +405,14 @@ mod tests {
             forwardable_query(Some("q=%26token%3Devil")).unwrap(),
             "q=%26token%3Devil",
             "values are re-encoded, so they cannot add parameters"
+        );
+    }
+
+    #[test]
+    fn replay_of_is_forwarded_for_the_replays_tab() {
+        assert_eq!(
+            forwardable_query(Some("replay_of=3f2a1b4c&token=evil")).unwrap(),
+            "replay_of=3f2a1b4c"
         );
     }
 
