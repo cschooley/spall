@@ -379,8 +379,12 @@ mod tests {
 
     #[test]
     fn newer_schema_entry_is_flagged() {
-        let v4 = ENTRY.replace("\"schema_version\":3", "\"schema_version\":4");
-        assert!(matches!(parse_frame(&v4), Ok(Frame::Entry(_, Some(4)))));
+        let next = taphttp_types::SCHEMA_VERSION + 1;
+        let newer = ENTRY.replace(
+            "\"schema_version\":3",
+            &format!("\"schema_version\":{next}"),
+        );
+        assert!(matches!(parse_frame(&newer), Ok(Frame::Entry(_, Some(v))) if v == next));
     }
 
     #[test]

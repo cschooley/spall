@@ -18,7 +18,7 @@ services:
   taphttp:
     # Published by taphttp's release workflow. Keep in step with the
     # taphttp-types tag in Cargo.toml. amd64 only for now.
-    image: ghcr.io/cschooley/taphttp:0.3.0
+    image: ghcr.io/cschooley/taphttp:0.5.0
     command:
       - start
       - --listen
@@ -27,6 +27,10 @@ services:
       - /data/traffic.jsonl
       - --api-listen
       - 0.0.0.0:8081
+      # 0.0.0.0 is needed inside the container. Both are safe only because
+      # 8080 is published on 127.0.0.1 and 8081 is never published.
+      - --allow-open-proxy
+      - --api-allow-plaintext
     environment:
       RUST_LOG: info
     ports:

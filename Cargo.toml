@@ -22,7 +22,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # Traffic log schema, owned by taphttp. Bump the tag deliberately.
-taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.3.0" }
+taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.5.0" }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }

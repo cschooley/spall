@@ -41,7 +41,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 docker compose up --build
 ```
 
-taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.3.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
+taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.5.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
 
 ```sh
 curl -x http://127.0.0.1:8080 http://example.com

@@ -209,11 +209,11 @@ mod tests {
     }
 
     #[test]
-    fn v3_line_is_published_with_repeated_headers_in_wire_order() {
+    fn v3_line_is_published_as_current_schema_with_headers_in_wire_order() {
         let hub = Hub::new(10);
         assert_eq!(ingest_line(V3_LINE, &hub), Ingested::Published);
         let out = published(&hub);
-        assert_eq!(out[0]["schema_version"], 3);
+        assert_eq!(out[0]["schema_version"], SCHEMA_VERSION);
         assert_eq!(
             out[0]["res_headers"],
             serde_json::json!([
@@ -234,11 +234,11 @@ mod tests {
     }
 
     #[test]
-    fn v2_line_is_upgraded_to_v3_on_the_way_out() {
+    fn v2_line_is_upgraded_to_current_schema_on_the_way_out() {
         let hub = Hub::new(10);
         assert_eq!(ingest_line(V2_LINE, &hub), Ingested::Published);
         let out = published(&hub);
-        assert_eq!(out[0]["schema_version"], 3);
+        assert_eq!(out[0]["schema_version"], SCHEMA_VERSION);
         assert_eq!(
             out[0]["res_headers"],
             serde_json::json!([["content-type", "text/html"]])
@@ -249,9 +249,29 @@ mod tests {
     #[test]
     fn newer_schema_is_published_but_reported() {
         let hub = Hub::new(10);
-        let v4 = V3_LINE.replace("\"schema_version\":3", "\"schema_version\":4");
-        assert_eq!(ingest_line(&v4, &hub), Ingested::NewerSchema(4));
+        let next = SCHEMA_VERSION + 1;
+        let newer = V3_LINE.replace(
+            "\"schema_version\":3",
+            &format!("\"schema_version\":{next}"),
+        );
+        assert_eq!(ingest_line(&newer, &hub), Ingested::NewerSchema(next));
         assert_eq!(published(&hub).len(), 1);
+    }
+
+    #[test]
+    fn source_passes_through_and_defaults_to_null() {
+        let hub = Hub::new(10);
+        let v4 = V3_LINE
+            .replace("\"schema_version\":3", "\"schema_version\":4")
+            .replace(
+                "\"replay_of\":null",
+                "\"replay_of\":null,\"source\":\"alice\"",
+            );
+        ingest_line(&v4, &hub);
+        ingest_line(V3_LINE, &hub);
+        let out = published(&hub);
+        assert_eq!(out[0]["source"], "alice");
+        assert_eq!(out[1]["source"], serde_json::Value::Null);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// taphttp TrafficEntry, schema v3, as spall serves it on /events and
+// taphttp TrafficEntry, schema v4, as spall serves it on /events and
 // /api/exchanges. The Rust side uses the `taphttp-types` crate; this is the
 // browser's view of the same JSON. Every string here is attacker-controlled:
 // render as text only.
@@ -22,4 +22,7 @@ export interface TrafficEntry {
   res_body_encoding: BodyEncoding;
   duration_ms: number | null;
   replay_of: string | null;
+  // v4: who sent it (the proxy-auth username), null when unauthenticated.
+  // Optional because v3 lines tailed from an old log omit it.
+  source?: string | null;
 }

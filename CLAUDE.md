@@ -98,11 +98,10 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
   `Host` header), unsafe-method policy with a single-use confirmation
   token (#18's second `⏎` sends it), and an audit record for every
   attempt. #17 routes through it; M6 agents reuse it.
-- **#10**: CI and security workflows (in progress in another session).
 - taphttp side: cschooley/taphttp#10 (ordered header edits, binary
   bodies, `replay_of` filter). Not blocking; #19 and #21 work around it.
 
-What exists: taphttp v0.3.0 `POST /replay` takes `{id, method?,
+What exists: taphttp v0.5.0 (`taphttp-types` 0.4.0, schema v4) `POST /replay` takes `{id, method?,
 headers?, body?}`, records the result as a new exchange with
 `replay_of` set, and returns it (it also appears on `/feed`). The
 registry reserves `replay` (mockup: `replay <id> [--header H:V]`).
@@ -119,7 +118,7 @@ Known constraints and requirements:
   a foreign origin.
 - spall proxies replay server-side (`POST /api/replay`); the token never
   reaches the browser.
-- taphttp v0.3.0 gaps (file on taphttp when needed): header overrides
+- taphttp v0.5.0 gaps (still open as taphttp#10; file on taphttp when needed): header overrides
   are a name->value map (no repeated headers); the body override is a
   string (binary bodies can only be replayed as captured); `GET
   /exchanges` can't filter by `replay_of`, which a Replays tab wants.
