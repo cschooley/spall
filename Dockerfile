@@ -1,5 +1,5 @@
 # Stage 1: build the UI (ui/ -> ui/dist). Node never reaches the final image.
-FROM node:22.16.0-bookworm-slim AS ui
+FROM node:26.13.0-bookworm-slim AS ui
 WORKDIR /ui
 # Lockfile only, no install scripts (ui/.npmrc), so deps are cached as a layer.
 COPY ui/package.json ui/package-lock.json ui/.npmrc ./
