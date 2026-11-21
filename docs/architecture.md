@@ -109,13 +109,15 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 | | Scope |
 |---|---|
 | **M0 hello** | Docker Compose: taphttp + spall; spall tails the JSONL log and streams it to a single-page live console over SSE. See CLAUDE.md. |
-| M1 traffic workbench | Filtering, search, request/response detail view, sqlite-backed history instead of tailing. |
+| M1 traffic workbench | Filtering, search, request/response detail view. History comes from taphttp's lever API (its sqlite store), not a spall copy; see below. |
 | M2 replay | Send-to-replay from the UI via taphttp; replay results shown linked to the original. |
 | M3 candidates | Candidate model on flux crate types, manual "flag as candidate", triage states, suppressions. |
 | M4 export | Flux export with redaction and fingerprints. |
 | M5 MCP | MCP server: read traffic, replay, `propose_finding`. No promotion. |
 | M6 intercept | Pause/modify via taphttp `--intercept-socket`. |
 | M7 flux in | Suppressions and retest from Kudzu; then scurf hypothesis correlation. |
+
+Traffic history (decided Dec 2026, spall#4): spall reads history from taphttp's lever API rather than keeping its own copy of the traffic. One store, and M2 replay goes through the same API. spall has its own store only for what it owns (candidates, from M3). This needs taphttp#7 (token file outside the CA volume, sqlite-backed paging and search, `/feed?since=`); until that ships, spall keeps tailing `--log-file`. The API port stays on the compose network and is never published to the host.
 
 SPA framework: decided, see Frontend above. M0 stayed one static HTML file on purpose.
 
