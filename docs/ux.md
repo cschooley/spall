@@ -19,7 +19,9 @@ They all link to each other, and every action (replay, flag, task the agent) is 
 
 ## Five views
 
-Left rail, one icon each, keys `1` to `5`.
+Left rail, one icon each, keys `1` to `5`, always in this order.
+
+While spall is being built, views that don't exist yet still get their icon, **dimmed and inert** (no link; the tooltip says it isn't built yet). That fixes the order and the number keys from the start, and each icon lights up when its view ships. A finished release has no dimmed icons.
 
 ### 1. Engagement (home)
 
