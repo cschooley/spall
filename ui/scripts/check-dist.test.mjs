@@ -26,3 +26,15 @@ test("each CSP-breaking construct is reported", () => {
     assert.ok(problems.some((p) => p.includes(want)), `${html} -> ${problems}`);
   }
 });
+
+test("inline scripts are caught however the end tag is written", () => {
+  for (const html of [
+    "<script>alert(1)</script >",
+    "<SCRIPT>alert(1)</SCRIPT\n>",
+    '<script>alert(1)</script foo="bar">',
+    "<script>alert(1)", // no end tag: the browser runs it to end of document
+  ]) {
+    const problems = checkHtml(ok.replace("</body>", html + "</body>"));
+    assert.ok(problems.some((p) => p.includes("inline <script>")), `${JSON.stringify(html)} -> ${problems}`);
+  }
+});

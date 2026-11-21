@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 /** Problems with a built index.html, as human-readable strings. */
 export function checkHtml(html) {
   const problems = [];
-  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+  // End tags may carry whitespace or junk before ">" (`</script >`), and an
+  // unclosed <script> runs to the end of the document, as browsers parse it.
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)(?:<\/script\b[^>]*>|$)/gi)) {
     if (!/\bsrc\s*=/.test(m[1])) problems.push("inline <script> (CSP blocks it)");
     else if (m[2].trim() !== "") problems.push("<script src> with inline content");
   }
