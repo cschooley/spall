@@ -7,6 +7,8 @@ here.
 
 ### Concurrent writes corrupt the JSONL log (found against v0.2.0)
 
+Filed as [taphttp#6](https://github.com/cschooley/taphttp/issues/6).
+
 `JsonLinesBackend::append_line` opens the file with `O_APPEND` and calls
 `writeln!(f, "{line}")`. On an unbuffered `File`, `writeln!` can issue two
 `write` calls (the line, then `\n`), and `Store::record` is called from

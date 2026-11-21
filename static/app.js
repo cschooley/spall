@@ -94,7 +94,64 @@ function base64Bytes(b64) {
   return out;
 }
 
-// Binary bodies are never rendered as text: type, size and sha256 only.
+const HEX_BYTES_PER_ROW = 8;
+const HEX_ROWS_PER_PAGE = 64;
+
+// One hex dump row per 8 bytes: offset, hex pairs, printable ASCII ('.' otherwise).
+function hexRows(bytes, startRow, rowCount) {
+  const lines = [];
+  for (let r = startRow; r < startRow + rowCount; r++) {
+    const off = r * HEX_BYTES_PER_ROW;
+    if (off >= bytes.length) break;
+    const chunk = bytes.subarray(off, off + HEX_BYTES_PER_ROW);
+    const hex = Array.from(chunk, (b) => b.toString(16).padStart(2, "0")).join(" ");
+    const ascii = Array.from(chunk, (b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".")).join("");
+    lines.push(`${off.toString(16).padStart(8, "0")}  ${hex.padEnd(HEX_BYTES_PER_ROW * 3 - 1)}  ${ascii}`);
+  }
+  return lines.join("\n");
+}
+
+// Optional, paged hex view under a binary placeholder.
+function hexViewer(bytes) {
+  const wrap = el("div", "hex");
+  const toggle = el("button", null, "hex view");
+  toggle.type = "button";
+  const out = el("pre", "hex-dump");
+  out.hidden = true;
+  const more = el("button", null, "");
+  more.type = "button";
+  more.hidden = true;
+  const totalRows = Math.ceil(bytes.length / HEX_BYTES_PER_ROW);
+  let shown = 0;
+  const showMore = () => {
+    const text = hexRows(bytes, shown, HEX_ROWS_PER_PAGE);
+    out.append(document.createTextNode((shown > 0 ? "\n" : "") + text));
+    shown = Math.min(totalRows, shown + HEX_ROWS_PER_PAGE);
+    const left = bytes.length - shown * HEX_BYTES_PER_ROW;
+    more.hidden = left <= 0;
+    more.textContent = `next ${Math.min(left, HEX_ROWS_PER_PAGE * HEX_BYTES_PER_ROW)} bytes (${left} left)`;
+  };
+  toggle.addEventListener("click", () => {
+    if (shown === 0) showMore();
+    out.hidden = !out.hidden;
+    more.hidden = out.hidden || shown >= totalRows;
+    toggle.textContent = out.hidden ? "hex view" : "hide hex";
+  });
+  more.addEventListener("click", showMore);
+  wrap.append(toggle, out, more);
+  return wrap;
+}
+
+// Binary bodies are never rendered as text: type, size and sha256, plus an
+// optional hex view.
+function binaryBody(b64, headers) {
+  const box = el("div");
+  const pre = binaryPlaceholder(b64, headers);
+  box.append(pre);
+  try { box.append(hexViewer(base64Bytes(b64))); } catch (_) { /* placeholder already says so */ }
+  return box;
+}
+
 function binaryPlaceholder(b64, headers) {
   const pre = el("pre", "binary");
   let bytes;
@@ -119,7 +176,7 @@ function binaryPlaceholder(b64, headers) {
 
 function bodyPre(body, encoding, headers) {
   if (body === null || body === undefined || body === "") return el("pre", "none", "(empty)");
-  if (encoding === "base64") return binaryPlaceholder(body, headers);
+  if (encoding === "base64") return binaryBody(body, headers);
   let text = body;
   const ct = headerValue(headers, "content-type");
   if ((ct && /json/i.test(ct)) || /^\s*[[{]/.test(text)) {

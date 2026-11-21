@@ -68,6 +68,9 @@ pre {
 .hdr-count { color: var(--muted); }
 pre.binary { color: var(--muted); }
 pre.binary span:first-child { color: var(--fg); }
+.hex { margin: -4px 0 10px; }
+.hex pre.hex-dump { margin: 6px 0; white-space: pre; word-break: normal; font-variant-numeric: tabular-nums; }
+.hex button + button { margin-left: 0; }
 .empty { color: var(--muted); text-align: center; padding: 48px 0; }
 .empty code { color: var(--fg); }
 footer { padding: 6px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; background: var(--panel); }
