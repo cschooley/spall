@@ -139,6 +139,10 @@ TDD, same as the rest of Kudzu:
   (node:test) and `npm run test:e2e` (Playwright, headless Chromium;
   `SPALL_E2E_CHROMIUM=/usr/bin/chromium` to use a system browser) all
   green. Untrusted-content rendering is always covered.
+- CI (`.github/workflows/ci.yml`) runs all of the above; the security
+  workflow runs sec-actions scanners (audit mode, SARIF to the Security
+  tab). Pin every action to a commit SHA and every scanner version; a
+  suppression in `osv-scanner.toml` needs a reason and `ignoreUntil`.
 - New npm or Rust dependencies: versions at least two weeks old,
   transitive ones included (`npm install --before=<date>`;
   `cargo update --precise`).

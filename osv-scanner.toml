@@ -1,0 +1,10 @@
+# OSV-Scanner suppressions. Each one needs a reason and an expiry date, so
+# nothing is ignored silently or forever (#10).
+
+[[IgnoredVulns]]
+id = "GHSA-g3hv-75wg-m249"
+ignoreUntil = 2026-12-07T00:00:00Z
+reason = """minimatch DoS (globparts amplification), dev-only: pulled in by \
+eslint 10.14 and typescript-eslint 8.72 in ui/, which only glob spall's own \
+lint config. Fixed in eslint 10.15 / typescript-eslint 8.73, newer than the \
+two-week dependency rule allows until 2026-11-30; bump then."""

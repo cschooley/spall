@@ -1,5 +1,8 @@
 # spall
 
+[![CI](https://github.com/cschooley/spall/actions/workflows/ci.yml/badge.svg)](https://github.com/cschooley/spall/actions/workflows/ci.yml)
+[![Security](https://github.com/cschooley/spall/actions/workflows/security.yml/badge.svg)](https://github.com/cschooley/spall/actions/workflows/security.yml)
+
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
 **Status:** pre-alpha, v0.2.0. M1 (traffic workbench) is done; M2 (replay) is next. See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
@@ -160,7 +163,14 @@ Browser tests need a Chromium: either Playwright's (`npx playwright install chro
 
 Adding an npm dependency: pick a version published at least two weeks ago, and resolve the whole tree as of a date at least two weeks back (`npm install --before=<date>`), so transitive dependencies follow the same rule.
 
-There's no CI yet; it's planned with the suite's security gates (#10). Run the checks above before pushing.
+### CI and security
+
+- **CI** (`.github/workflows/ci.yml`, every push and PR): Rust fmt, clippy and tests; UI lint, unit tests and build with the CSP check; Playwright; the Docker image.
+- **Security** (`.github/workflows/security.yml`, every push and PR plus weekly): gitleaks, semgrep, OSV-Scanner on both lockfiles, a syft SBOM with a license check, and grype on the SBOM and on the built image. These come from [sec-actions](https://github.com/cschooley/sec-actions) and run in audit mode for now. Findings appear in the repo's Security tab. Suppressions need a reason and an expiry date (`osv-scanner.toml`).
+- **GitHub-native:** CodeQL (default setup), secret scanning with push protection, and Dependabot alerts and security updates.
+- **Dependabot** (`.github/dependabot.yml`) keeps action pins and dependencies current, with a 14-day cooldown matching the two-week rule. `taphttp-types` and the taphttp image are bumped together by hand.
+
+Every action is pinned to a commit SHA, and scanner versions are pinned too.
 
 ## Roadmap
 
