@@ -104,7 +104,7 @@ A real feature with a joke name: a **time-boxed burst** for the agent.
 - **Counts against request budgets** like any other agent work, and is logged in the task's request log with start, end and worker count.
 - **The e-stop ends it instantly.** Halted agents can't go quad.
 - **Visual state:** `--vg-boost` screen-edge glow, a `QUAD m:ss` countdown chip in the top bar, the request meter in boost color. Optional power-up sound, off by default (screen-shares).
-- **Scorecard when it ends:** duration, requests sent, agent tokens used, candidates found. A **shareable quad card** can be copied for bragging. It's **redacted by construction**: numbers only, no hosts, paths, payloads or client names. Nobody leaks a client's attack surface on social media for a flex.
+- **Scorecard when it ends:** duration, requests sent, agent tokens used, candidates found. A **shareable quad card** can be copied. It's **redacted by construction**: numbers only, no hosts, paths, payloads or client names. Nobody leaks a client's attack surface on social media for a flex.
 - **Burn is the user's own.** Quad burns their LLM tokens and their engagement's request budget. spall (and any hosted version) never charges per request or per scan. That's the pricing rule: more testing never costs more on our bill.
 - `god` answers "no."
 
