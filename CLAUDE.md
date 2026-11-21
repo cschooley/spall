@@ -82,8 +82,20 @@ client --(proxy 127.0.0.1:8080)--> taphttp --> internet
 Goal (docs/architecture.md): send-to-replay from the UI via taphttp;
 replay results shown linked to the original. docs/ux.md: replay lives
 in the inspector (edit, send, see original and replay side by side);
-the mockup shows a Replay button (`⏎`) and a Replays tab. M2 issues are
-not filed yet.
+the mockup shows a Replay button (`⏎`) and a Replays tab.
+
+Issues (GitHub milestone "M2 replay"), roughly in order:
+
+- **#17**: `POST /api/replay` plus a same-origin (CSRF) guard on every
+  state-changing route. Everything else builds on it.
+- **#18**: replay as captured from the inspector (`⏎`) and console;
+  includes the decision on confirming unsafe methods.
+- **#19**: edit before replay (method, headers, body).
+- **#20**: compare a replay with its original; a reusable diff (M3
+  evidence, M7 retests).
+- **#21**: the Replays tab and links between originals and replays.
+- taphttp side: cschooley/taphttp#10 (ordered header edits, binary
+  bodies, `replay_of` filter). Not blocking; #19 and #21 work around it.
 
 What exists: taphttp v0.3.0 `POST /replay` takes `{id, method?,
 headers?, body?}`, records the result as a new exchange with
