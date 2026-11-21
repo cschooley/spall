@@ -4,19 +4,19 @@
 import { createElement } from "react";
 import { parseIcon, type Icon as IconData } from "../lib/svg.ts";
 
-const raw = import.meta.glob<string>("../vendor/verdigris/{icons,rail}/*.svg", {
+const raw = import.meta.glob<string>("../vendor/verdigris/icons/{,views/}*.svg", {
   query: "?raw",
   import: "default",
   eager: true,
 });
 
 const ICONS: Record<string, IconData> = Object.fromEntries(
-  Object.entries(raw).map(([path, svg]) => [path.replace(/^.*\/(icons|rail)\/(.+)\.svg$/, "$1/$2"), parseIcon(svg)]),
+  Object.entries(raw).map(([path, svg]) => [path.replace(/^.*\/vendor\/verdigris\/(.+)\.svg$/, "$1"), parseIcon(svg)]),
 );
 
 export type IconName =
   | "icons/spall" | "icons/kudzu" | "icons/scurf" | "icons/taphttp" | "icons/flux" | "icons/verdigris"
-  | "rail/engagement" | "rail/traffic" | "rail/surface" | "rail/tasks" | "rail/findings";
+  | "icons/views/engagement" | "icons/views/traffic" | "icons/views/surface" | "icons/views/tasks" | "icons/views/findings";
 
 export function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
   const icon = ICONS[name];

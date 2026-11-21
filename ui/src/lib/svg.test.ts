@@ -6,8 +6,8 @@ import { parseIcon } from "./svg.ts";
 const vendor = new URL("../vendor/verdigris/", import.meta.url);
 
 test("every vendored icon parses into shape elements", () => {
-  for (const dir of ["icons", "rail"]) {
-    for (const f of readdirSync(new URL(dir, vendor))) {
+  for (const dir of ["icons", "icons/views"]) {
+    for (const f of readdirSync(new URL(dir, vendor)).filter((n) => n.endsWith(".svg"))) {
       const icon = parseIcon(readFileSync(new URL(`${dir}/${f}`, vendor), "utf8"));
       assert.equal(icon.attrs.viewBox, "0 0 24 24", f);
       assert.ok(icon.children.length > 0, f);

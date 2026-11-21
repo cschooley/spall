@@ -12,11 +12,11 @@ export interface View {
 }
 
 export const VIEWS: readonly View[] = [
-  { id: "engagement", label: "Engagement", key: "1", icon: "rail/engagement", built: false },
-  { id: "traffic", label: "Traffic", key: "2", icon: "rail/traffic", built: true },
-  { id: "surface", label: "Surface", key: "3", icon: "rail/surface", built: false },
-  { id: "tasks", label: "Tasks", key: "4", icon: "rail/tasks", built: false },
-  { id: "findings", label: "Findings", key: "5", icon: "rail/findings", built: false },
+  { id: "engagement", label: "Engagement", key: "1", icon: "icons/views/engagement", built: false },
+  { id: "traffic", label: "Traffic", key: "2", icon: "icons/views/traffic", built: true },
+  { id: "surface", label: "Surface", key: "3", icon: "icons/views/surface", built: false },
+  { id: "tasks", label: "Tasks", key: "4", icon: "icons/views/tasks", built: false },
+  { id: "findings", label: "Findings", key: "5", icon: "icons/views/findings", built: false },
 ];
 
 export function Rail({ current }: { current: string }) {

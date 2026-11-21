@@ -22,6 +22,11 @@ test("the rail shows all five views in order; only Traffic is live", async ({ pa
     "tasks",
     "findings",
   ]);
+  for (const view of ["engagement", "traffic", "surface", "tasks", "findings"]) {
+    const icon = page.locator(`.rail [data-view='${view}'] svg[data-icon='icons/views/${view}']`);
+    await expect(icon, view).toBeVisible();
+    expect(await icon.locator("path, rect").count(), view).toBeGreaterThan(0);
+  }
   const traffic = page.getByRole("link", { name: "Traffic" });
   await expect(traffic).toHaveAttribute("aria-current", "page");
   await expect(traffic).toHaveAttribute("title", "Traffic (2)");
