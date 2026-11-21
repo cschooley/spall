@@ -43,6 +43,10 @@ UI styling comes from verdigris (`cschooley/verdigris`): use its
   credentials. Bind to 127.0.0.1 (and publish Docker ports to
   127.0.0.1 only) unless explicitly configured otherwise. Real auth
   comes before any non-local binding.
+- **Traffic is never HTML.** Captured traffic is attacker-controlled and
+  is rendered as text only. No `dangerouslySetInnerHTML`, `innerHTML` or
+  equivalent on traffic data. Frontend stack, CSP and dependency budget
+  are in `docs/architecture.md` (Frontend); follow them.
 - **Authorized testing only.** README states plainly that spall is
   for authorized testing and local development.
 

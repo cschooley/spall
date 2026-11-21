@@ -74,6 +74,36 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 - MCP server: same locality rule; the agent gets read access to traffic and `propose_finding`, nothing that exports.
 - No telemetry.
 
+## Frontend (decided Nov 2026, #3)
+
+**React + Vite + TypeScript, built as a static single-page app and embedded in the Rust binary.** No Next.js, no SSR, no Node at runtime. spall stays one binary and one container.
+
+### Why
+
+- **An AI writes most of it.** React has the deepest training data, so Claude Code is most reliable in it. That outweighs elegance.
+- **The ecosystem matches the hard parts:** TanStack Virtual for the dense live table, cmdk for the command palette.
+- **One frontend stack across the suite.** The THA casting app is already React; Kudzu's dashboard can reuse spall's components.
+- Considered: Svelte 5 (lighter and nicer, but Svelte 5 is new and models mix in Svelte 4 syntax), SolidJS (small ecosystem), Leptos/Dioxus (immature for virtualized tables, doubles the Rust learning curve), htmx (fights the client-side state this UI needs).
+
+### Rules that come with it
+
+**Untrusted content.** Captured traffic is attacker-controlled. If it ever renders as HTML, the target app gets XSS against the tester, in the tool holding their session tokens.
+- Traffic data is rendered as text only. `dangerouslySetInnerHTML` is banned (ESLint `react/no-danger`: error), as are `innerHTML` / `outerHTML` / `insertAdjacentHTML` (`no-restricted-properties`). Any exception needs a comment and review.
+- Previews of rendered HTML or images, if ever, only in a sandboxed iframe from a separate origin.
+
+**CSP from day one:** `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. Vite production builds need no `eval` and no inline script. No CDN: fonts and assets are bundled.
+
+**Supply chain.** A security tool's dependency tree is part of its attack surface.
+- Runtime dependency budget: `react`, `react-dom`, `@tanstack/react-virtual`, `cmdk`. Adding a runtime dependency needs a stated reason in the PR.
+- Lockfile committed, `npm ci` only, install scripts disabled (`ignore-scripts=true` in `.npmrc`).
+- OSV-Scanner on the lockfile in CI (via sec-actions).
+
+**Styling:** verdigris tokens (`--vg-*`) and plain CSS. No CSS framework on top, no CSS-in-JS runtime.
+
+**Build and embed:** source in `ui/`, `vite build` outputs `ui/dist/`, embedded with `rust-embed`. Docker becomes multi-stage (Node builds the UI, Rust builds the binary, final image has neither toolchain). Local dev: Vite dev server proxies `/events` and the API to the running spall.
+
+**Tests:** Playwright for browser tests (#7), headless Chromium, no Docker. Untrusted-content rendering is the first test.
+
 ## Milestones
 
 | | Scope |
@@ -87,7 +117,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 | M6 intercept | Pause/modify via taphttp `--intercept-socket`. |
 | M7 flux in | Suppressions and retest from Kudzu; then scurf hypothesis correlation. |
 
-SPA framework choice is deferred to M1. M0 is one static HTML file on purpose.
+SPA framework: decided, see Frontend above. M0 stayed one static HTML file on purpose.
 
 The UI's information architecture (five views, shared inspector, command palette, agent e-stop) is in [ux.md](ux.md), with a view-to-milestone mapping.
 
