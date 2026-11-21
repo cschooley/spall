@@ -116,7 +116,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 - **An AI writes most of it.** React has the deepest training data, so Claude Code is most reliable in it. That outweighs elegance.
 - **The ecosystem matches the hard parts:** TanStack Virtual for the dense live table. (cmdk was the palette pick; see the budget below for why spall has its own.)
-- **One frontend stack across the suite.** The THA casting app is already React; Kudzu's dashboard can reuse spall's components.
+- **One frontend stack across Kudzu.** The THA casting app is already React; the Kudzu platform's dashboard can reuse spall's components.
 - Considered: Svelte 5 (lighter and nicer, but Svelte 5 is new and models mix in Svelte 4 syntax), SolidJS (small ecosystem), Leptos/Dioxus (immature for virtualized tables, doubles the Rust learning curve), htmx (fights the client-side state this UI needs).
 
 ### Rules that come with it

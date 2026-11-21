@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## Project
 
-spall is the DAST tool in the cschooley security toolkit: an
+spall is the DAST tool in Kudzu: an
 assessment workbench for interactive and agentic web app testing.
 
 - **Web UI (SPA)** for a human tester: live traffic, candidate
@@ -94,7 +94,7 @@ appear as dimmed, inert placeholders (docs/ux.md) until they ship.
 
 ## Testing
 
-TDD, same as the rest of the suite:
+TDD, same as the rest of Kudzu:
 
 - Write the test first. No behavior ships without a test that would
   catch its regression.

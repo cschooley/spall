@@ -18,7 +18,7 @@ Live traffic and history from taphttp, filter syntax, the shared inspector, comm
 
 ### Where it's going (design mockups)
 
-Visual direction from [verdigris](https://github.com/cschooley/verdigris), the suite's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
+Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
 
 **Traffic.** Still to come: attribution on every exchange (you or the agent), and replay and flag actions in the inspector.
 
