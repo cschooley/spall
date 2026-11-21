@@ -1,4 +1,5 @@
-//! HTTP surface: the static console page, the SSE feed, and a health check.
+//! HTTP surface: the built SPA (ui/dist, embedded), the SSE feed, the
+//! history proxy, and a health check.
 
 use crate::hub::{Hub, Published};
 use crate::lever::Lever;
@@ -11,21 +12,46 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::stream::{self, Stream, StreamExt};
+use std::borrow::Cow;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
-const INDEX_HTML: &str = include_str!("../static/index.html");
-const APP_JS: &str = include_str!("../static/app.js");
-const APP_CSS: &str = include_str!("../static/app.css");
-
 /// The page renders attacker-controlled traffic. It never builds HTML from
-/// it, and this policy forbids inline script and any off-origin fetch as a
-/// second line of defense.
-pub const CONTENT_SECURITY_POLICY: &str = "default-src 'none'; script-src 'self'; \
-style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; \
-form-action 'none'; frame-ancestors 'none'";
+/// it, and this policy (docs/architecture.md, Frontend; plus form-action)
+/// forbids inline script and any off-origin fetch as a second line of defense.
+pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self'; \
+style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; \
+base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
+
+/// Files of the built UI, by path relative to `ui/dist`.
+pub trait UiAssets: Send + Sync {
+    fn get(&self, path: &str) -> Option<Cow<'static, [u8]>>;
+}
+
+/// `ui/dist`, embedded at compile time in release builds and read from
+/// disk in debug builds. Missing until `npm --prefix ui run build` has run;
+/// spall still builds and serves the API without it.
+#[derive(rust_embed::Embed)]
+#[folder = "ui/dist"]
+#[allow_missing = true]
+struct UiDist;
+
+pub struct EmbeddedUi;
+
+impl UiAssets for EmbeddedUi {
+    fn get(&self, path: &str) -> Option<Cow<'static, [u8]>> {
+        UiDist::get(path).map(|f| f.data)
+    }
+}
+
+const UI_NOT_BUILT: &str = "spall's UI is not built.\n\n\
+Build it, then rebuild spall:\n\n\
+    npm --prefix ui ci\n\
+    npm --prefix ui run build\n\
+    cargo build\n\n\
+The API (/events, /api/exchanges, /healthz) works without it.\n";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -33,13 +59,13 @@ pub struct AppState {
     pub allowed_hosts: Arc<Vec<String>>,
     /// taphttp lever API client; `None` when tailing a log file.
     pub lever: Option<Arc<Lever>>,
+    pub ui: Arc<dyn UiAssets>,
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
-        .route("/app.js", get(app_js))
-        .route("/app.css", get(app_css))
+        .route("/assets/{*path}", get(asset))
         .route("/events", get(events))
         .route("/healthz", get(healthz))
         .route("/api/exchanges", get(api_exchanges))
@@ -48,22 +74,50 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn index() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        INDEX_HTML,
-    )
+async fn index(State(state): State<AppState>) -> Response {
+    match state.ui.get("index.html") {
+        Some(html) => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            html.into_owned(),
+        )
+            .into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            UI_NOT_BUILT,
+        )
+            .into_response(),
+    }
 }
 
-async fn app_js() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-        APP_JS,
-    )
+/// Built files under `ui/dist/assets/`. Lookup is by exact key in the
+/// embedded set, so `..` cannot reach anything outside it.
+async fn asset(State(state): State<AppState>, Path(path): Path<String>) -> Response {
+    let key = format!("assets/{path}");
+    match state.ui.get(&key) {
+        Some(bytes) => (
+            [(header::CONTENT_TYPE, content_type(&key))],
+            bytes.into_owned(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
-async fn app_css() -> impl IntoResponse {
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS)
+fn content_type(path: &str) -> &'static str {
+    match path.rsplit_once('.').map(|(_, ext)| ext) {
+        Some("js" | "mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("json" | "map") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("txt") => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 /// Query parameters forwarded to taphttp's `GET /exchanges`. Anything else
@@ -245,12 +299,41 @@ mod tests {
             .to_vec()
     }
 
-    fn app(hub: Arc<Hub>) -> Router {
+    /// In-memory stand-in for the embedded `ui/dist`.
+    struct FakeUi(std::collections::HashMap<&'static str, &'static [u8]>);
+
+    impl UiAssets for FakeUi {
+        fn get(&self, path: &str) -> Option<std::borrow::Cow<'static, [u8]>> {
+            self.0.get(path).map(|b| std::borrow::Cow::Borrowed(*b))
+        }
+    }
+
+    const FAKE_INDEX: &str = "<!doctype html><script type=\"module\" src=\"/assets/index-abc.js\"></script><div id=\"root\"></div>";
+
+    fn fake_ui() -> Arc<dyn UiAssets> {
+        Arc::new(FakeUi(
+            [
+                ("index.html", FAKE_INDEX.as_bytes()),
+                ("assets/index-abc.js", b"console.log(1)".as_slice()),
+                ("assets/index-abc.css", b"body{}".as_slice()),
+                ("assets/font.woff2", b"wOF2".as_slice()),
+            ]
+            .into_iter()
+            .collect(),
+        ))
+    }
+
+    fn app_with(hub: Arc<Hub>, ui: Arc<dyn UiAssets>) -> Router {
         router(AppState {
             hub,
             allowed_hosts: Arc::new(defaults()),
             lever: None,
+            ui,
         })
+    }
+
+    fn app(hub: Arc<Hub>) -> Router {
+        app_with(hub, fake_ui())
     }
 
     fn get_req(path: &str, host: &str) -> Request {
@@ -352,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn index_is_html_with_strict_csp() {
+    async fn index_is_the_built_spa_with_strict_csp() {
         let res = app(Arc::new(Hub::new(1)))
             .oneshot(get_req("/", "localhost:3000"))
             .await
@@ -362,38 +445,76 @@ mod tests {
             .to_str()
             .unwrap()
             .starts_with("text/html"));
-        let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
-            .to_str()
-            .unwrap();
-        assert!(csp.contains("script-src 'self'"));
-        assert!(!csp.contains("unsafe-inline"));
-        assert_eq!(res.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
-        let html = body_string(res).await;
-        assert!(html.contains("<script src=\"/app.js\""));
-        assert!(
-            !html.contains("<script>"),
-            "no inline script allowed by CSP"
+        assert_eq!(
+            res.headers()[header::CONTENT_SECURITY_POLICY],
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; \
+             img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; \
+             form-action 'none'",
+            "the policy from docs/architecture.md (Frontend), plus form-action"
         );
+        assert_eq!(res.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(body_string(res).await, FAKE_INDEX);
     }
 
     #[tokio::test]
-    async fn static_assets_are_served_with_types() {
-        for (path, ty) in [("/app.js", "text/javascript"), ("/app.css", "text/css")] {
+    async fn built_assets_are_served_with_types() {
+        for (path, ty) in [
+            ("/assets/index-abc.js", "text/javascript"),
+            ("/assets/index-abc.css", "text/css"),
+            ("/assets/font.woff2", "font/woff2"),
+        ] {
             let res = app(Arc::new(Hub::new(1)))
                 .oneshot(get_req(path, "localhost"))
                 .await
                 .unwrap();
             assert_eq!(res.status(), StatusCode::OK, "{path}");
-            assert!(res.headers()[header::CONTENT_TYPE]
-                .to_str()
-                .unwrap()
-                .starts_with(ty));
+            assert!(
+                res.headers()[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with(ty),
+                "{path}"
+            );
         }
     }
 
     #[tokio::test]
+    async fn unknown_or_escaping_asset_paths_are_404() {
+        for path in [
+            "/assets/nope.js",
+            "/assets/..%2Findex.html",
+            "/assets/%2e%2e/index.html",
+            "/index.html",
+        ] {
+            let res = app(Arc::new(Hub::new(1)))
+                .oneshot(get_req(path, "localhost"))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn without_a_built_ui_the_root_says_how_to_build_it() {
+        let empty: Arc<dyn UiAssets> = Arc::new(FakeUi(Default::default()));
+        let res = app_with(Arc::new(Hub::new(1)), empty)
+            .oneshot(get_req("/", "localhost"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let text = body_string(res).await;
+        assert!(text.contains("npm --prefix ui ci"), "{text}");
+    }
+
+    #[tokio::test]
     async fn foreign_host_is_rejected() {
-        for path in ["/", "/events", "/healthz", "/app.js"] {
+        for path in [
+            "/",
+            "/events",
+            "/healthz",
+            "/assets/index-abc.js",
+            "/api/exchanges",
+        ] {
             let res = app(Arc::new(Hub::new(1)))
                 .oneshot(get_req(path, "attacker.example:3000"))
                 .await

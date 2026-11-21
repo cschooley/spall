@@ -116,7 +116,18 @@ async fn console_page_is_served() {
     let addr = start(&dir.path().join("missing.jsonl")).await;
     let mut s = open(addr, "/").await;
     let mut seen = String::new();
-    read_until(&mut s, &mut seen, "</html>").await;
-    assert!(seen.starts_with("HTTP/1.1 200"));
-    assert!(seen.contains("/events") || seen.contains("/app.js"));
+    // Debug builds read ui/dist from disk: the SPA if `npm run build` has
+    // run, otherwise a 503 that says how to build it. Both are correct.
+    let built = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("ui/dist/index.html")
+        .exists();
+    if built {
+        read_until(&mut s, &mut seen, "</html>").await;
+        assert!(seen.starts_with("HTTP/1.1 200"), "{seen}");
+        assert!(seen.contains(r#"<div id="root">"#), "{seen}");
+        assert!(seen.contains(r#"src="/assets/"#), "{seen}");
+    } else {
+        read_until(&mut s, &mut seen, "cargo build").await;
+        assert!(seen.starts_with("HTTP/1.1 503"), "{seen}");
+    }
 }

@@ -148,6 +148,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
         hub: hub.clone(),
         allowed_hosts: Arc::new(config.allowed_hosts.clone()),
         lever: lever.clone(),
+        ui: Arc::new(web::EmbeddedUi),
     };
     let source = async {
         match lever {

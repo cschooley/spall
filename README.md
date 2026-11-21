@@ -117,10 +117,25 @@ The browser never talks to taphttp or sees its token: spall adds the token serve
 
 ## Development
 
+The server is Rust; the UI is React + Vite + TypeScript in `ui/`, built to `ui/dist/` and embedded in the binary. `cargo build` and `cargo test` work without Node: `/` then explains how to build the UI.
+
 ```sh
 cargo test
 cargo clippy --all-targets -- -D warnings
 ```
+
+UI (Node 22.16, see `ui/.nvmrc`):
+
+```sh
+cd ui
+npm ci               # lockfile only; install scripts are disabled (.npmrc)
+npm run lint         # includes the "traffic is never HTML" bans
+npm test             # node:test, no browser
+npm run build        # then rebuild spall to embed ui/dist
+npm run dev          # Vite on 127.0.0.1:5173, proxying /events and /api to spall on :3000
+```
+
+Adding an npm dependency: pick a version published at least two weeks ago, and resolve the whole tree as of a date at least two weeks back (`npm install --before=<date>`), so transitive dependencies follow the same rule.
 
 ## Provenance
 

@@ -88,7 +88,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 ### Rules that come with it
 
 **Untrusted content.** Captured traffic is attacker-controlled. If it ever renders as HTML, the target app gets XSS against the tester, in the tool holding their session tokens.
-- Traffic data is rendered as text only. `dangerouslySetInnerHTML` is banned (ESLint `react/no-danger`: error), as are `innerHTML` / `outerHTML` / `insertAdjacentHTML` (`no-restricted-properties`). Any exception needs a comment and review.
+- Traffic data is rendered as text only. `dangerouslySetInnerHTML` is banned (the `react/no-danger` rule, enforced with ESLint's built-in `no-restricted-syntax` because `eslint-plugin-react` doesn't support ESLint 10), as are `innerHTML` / `outerHTML` / `insertAdjacentHTML` (`no-restricted-properties`). Any exception needs a comment and review.
 - Previews of rendered HTML or images, if ever, only in a sandboxed iframe from a separate origin.
 
 **CSP from day one:** `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. Vite production builds need no `eval` and no inline script. No CDN: fonts and assets are bundled.
@@ -96,13 +96,14 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 **Supply chain.** A security tool's dependency tree is part of its attack surface.
 - Runtime dependency budget: `react`, `react-dom`, `@tanstack/react-virtual`, `cmdk`. Adding a runtime dependency needs a stated reason in the PR.
 - Lockfile committed, `npm ci` only, install scripts disabled (`ignore-scripts=true` in `.npmrc`).
+- Versions at least two weeks old, transitive ones included: resolve with `npm install --before=<date>`. A test asserts the HTML bans fire, and a post-build check rejects inline script, inline style and external URLs in `dist/index.html`.
 - OSV-Scanner on the lockfile in CI (via sec-actions).
 
 **Styling:** verdigris tokens (`--vg-*`) and plain CSS. No CSS framework on top, no CSS-in-JS runtime.
 
 **Build and embed:** source in `ui/`, `vite build` outputs `ui/dist/`, embedded with `rust-embed`. Docker becomes multi-stage (Node builds the UI, Rust builds the binary, final image has neither toolchain). Local dev: Vite dev server proxies `/events` and the API to the running spall.
 
-**Tests:** Playwright for browser tests (#7), headless Chromium, no Docker. Untrusted-content rendering is the first test.
+**Tests:** Playwright for browser tests (#7), headless Chromium, no Docker. Untrusted-content rendering is the first test. Pure logic (formatting, header numbering, hex dump, the entry store) is unit-tested with Node's built-in `node:test` running TypeScript directly (`--experimental-strip-types`; `erasableSyntaxOnly` keeps the code compatible). Vitest was dropped: its optional-peer tree crashes npm 10.9's resolver, and the built-in runner needs no dependencies.
 
 ## Milestones
 
