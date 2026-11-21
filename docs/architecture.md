@@ -81,7 +81,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 ### Why
 
 - **An AI writes most of it.** React has the deepest training data, so Claude Code is most reliable in it. That outweighs elegance.
-- **The ecosystem matches the hard parts:** TanStack Virtual for the dense live table, cmdk for the command palette.
+- **The ecosystem matches the hard parts:** TanStack Virtual for the dense live table. (cmdk was the palette pick; see the budget below for why spall has its own.)
 - **One frontend stack across the suite.** The THA casting app is already React; Kudzu's dashboard can reuse spall's components.
 - Considered: Svelte 5 (lighter and nicer, but Svelte 5 is new and models mix in Svelte 4 syntax), SolidJS (small ecosystem), Leptos/Dioxus (immature for virtualized tables, doubles the Rust learning curve), htmx (fights the client-side state this UI needs).
 
@@ -89,12 +89,13 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 **Untrusted content.** Captured traffic is attacker-controlled. If it ever renders as HTML, the target app gets XSS against the tester, in the tool holding their session tokens.
 - Traffic data is rendered as text only. `dangerouslySetInnerHTML` is banned (the `react/no-danger` rule, enforced with ESLint's built-in `no-restricted-syntax` because `eslint-plugin-react` doesn't support ESLint 10), as are `innerHTML` / `outerHTML` / `insertAdjacentHTML` (`no-restricted-properties`). Any exception needs a comment and review.
-- Previews of rendered HTML or images, if ever, only in a sandboxed iframe from a separate origin.
+- Previews of rendered HTML or images, if ever, only in a sandboxed iframe from a separate origin. So M1 has no image preview (#8 had proposed an inline one behind an `img-src blob:` CSP change); binary bodies get type, size, sha256, hex and save.
 
 **CSP from day one:** `default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`. Vite production builds need no `eval` and no inline script. No CDN: fonts and assets are bundled.
 
 **Supply chain.** A security tool's dependency tree is part of its attack surface.
-- Runtime dependency budget: `react`, `react-dom`, `@tanstack/react-virtual`, `cmdk`. Adding a runtime dependency needs a stated reason in the PR.
+- Runtime dependency budget: `react`, `react-dom`, `@tanstack/react-virtual`. Adding a runtime dependency needs a stated reason in the PR. `cmdk` was dropped in #8: it pulls about 25 runtime packages (Radix dialog machinery), including `react-style-singleton`, which injects `<style>` at runtime and conflicts with `style-src 'self'`. The palette is a small in-house component instead.
+- Credential headers are highlighted using flux's redaction list (`Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`; docs/flux/SPEC.md), so the console marks what an export will scrub. One list, taken from the flux crate once it exists.
 - Lockfile committed, `npm ci` only, install scripts disabled (`ignore-scripts=true` in `.npmrc`).
 - Versions at least two weeks old, transitive ones included: resolve with `npm install --before=<date>`. A test asserts the HTML bans fire, and a post-build check rejects inline script, inline style and external URLs in `dist/index.html`.
 - OSV-Scanner on the lockfile in CI (via sec-actions).

@@ -8,7 +8,8 @@ which enforces WCAG AA contrast. Change tokens in verdigris, then re-vendor.
 |---|---|
 | Repo | https://github.com/cschooley/verdigris |
 | Commit | `7b6ee6f800d693178db0c57c9cb205b82527073c` |
-| Token version | v0.3.0 (from the file header; verdigris has no tags yet) |
+| Tag | `v0.3.0` |
+| Token version | v0.3.0 |
 | sha256 | `b073453d7fca0cef31b5e7d8b70d1298d483f23a1d3d6bfb2984a474d1d52eb2` |
 
 To update: copy the new `tokens/tokens.css`, update this table, and update

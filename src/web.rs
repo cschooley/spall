@@ -68,6 +68,7 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/{*path}", get(asset))
         .route("/events", get(events))
         .route("/healthz", get(healthz))
+        .route("/api/status", get(api_status))
         .route("/api/exchanges", get(api_exchanges))
         .route("/api/exchanges/{id}", get(api_exchange))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
@@ -177,6 +178,16 @@ async fn proxy(lever: Option<&Arc<Lever>>, path_and_query: &str) -> Response {
             json_error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
         }
     }
+}
+
+/// Where traffic comes from, for the UI's status bar. `connected` is
+/// whether spall is following taphttp's feed (null when tailing a file).
+async fn api_status(State(state): State<AppState>) -> Response {
+    let body = match &state.lever {
+        Some(lever) => serde_json::json!({ "source": "lever", "connected": lever.connected() }),
+        None => serde_json::json!({ "source": "log", "connected": null }),
+    };
+    axum::Json(body).into_response()
 }
 
 async fn api_exchanges(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {

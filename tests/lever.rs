@@ -405,6 +405,42 @@ async fn history_proxy_forwards_only_known_params_with_auth() {
 }
 
 #[tokio::test]
+async fn status_reports_lever_source_and_connection() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    let (stub, api) = start_stub().await;
+    let spall = start_spall(Some(api), &token).await;
+    let before = get_text(spall, "/api/status").await;
+    assert!(before.contains(r#""source":"lever""#), "{before}");
+    assert!(
+        before.contains(r#""connected":false"#),
+        "no token yet: {before}"
+    );
+    write_token(&token);
+    eventually("feed connect", || !stub.feed_since().is_empty()).await;
+    for _ in 0..100 {
+        if get_text(spall, "/api/status")
+            .await
+            .contains(r#""connected":true"#)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("status never reported connected");
+}
+
+#[tokio::test]
+async fn status_reports_log_source_without_api() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let spall = start_spall(None, &dir.path().join("api-token")).await;
+    let res = get_text(spall, "/api/status").await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(res.contains(r#""source":"log""#), "{res}");
+    assert!(res.contains(r#""connected":null"#), "{res}");
+}
+
+#[tokio::test]
 async fn history_proxy_is_unavailable_without_api() {
     let dir = tempfile::TempDir::new().unwrap();
     let token = dir.path().join("api-token");

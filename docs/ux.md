@@ -32,7 +32,7 @@ Not a stats dashboard. A **"what needs me now"** page.
 
 ### 2. Traffic
 
-The M0 console, grown up: live stream plus history, filters, inspector. Row actions: replay, flag as candidate, task the agent on this.
+The M0 console, grown up: live stream plus history, filters, inspector. Actions on an exchange (copy as curl and save body in M1; replay in M2; Flag candidate in M3; task the agent in M5) live in the inspector, not on rows. Candidates go to the Findings view, never a panel beside Traffic.
 
 ### 3. Surface
 

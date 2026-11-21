@@ -1,10 +1,9 @@
-// Expanded view of one exchange. Every value is attacker-controlled and is
+// Request/response body rendering. Every value is attacker-controlled and is
 // rendered as JSX text, never as HTML.
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   base64Bytes,
-  headerRows,
   headerValue,
   hexRows,
   HEX_BYTES_PER_ROW,
@@ -12,53 +11,9 @@ import {
   prettyBody,
   sha256Hex,
 } from "../lib/format.ts";
-import type { BodyEncoding, Header, TrafficEntry } from "../types.ts";
+import type { BodyEncoding, Header } from "../types.ts";
 
-export function Detail({ entry }: { entry: TrafficEntry }) {
-  return (
-    <>
-      <div className="meta">
-        <b>{entry.method} </b>
-        {entry.url}
-        <br />
-        {`id ${entry.id}`}
-        {entry.replay_of ? ` · replay of ${entry.replay_of}` : null}
-      </div>
-      <div className="detail-grid">
-        <section>
-          <h3>request headers</h3>
-          <Headers headers={entry.req_headers} />
-          <h3>request body</h3>
-          <Body body={entry.req_body} encoding={entry.req_body_encoding} headers={entry.req_headers} />
-        </section>
-        <section>
-          <h3>response headers</h3>
-          <Headers headers={entry.res_headers} />
-          <h3>response body</h3>
-          <Body body={entry.res_body} encoding={entry.res_body_encoding} headers={entry.res_headers} />
-        </section>
-      </div>
-    </>
-  );
-}
-
-function Headers({ headers }: { headers: Header[] }) {
-  const rows = headerRows(headers);
-  if (rows.length === 0) return <pre className="none">(none)</pre>;
-  return (
-    <pre>
-      {rows.map((r, i) => (
-        <Fragment key={i}>
-          {i > 0 ? "\n" : null}
-          {`${r.name}: ${r.value}`}
-          {r.count ? <span className="hdr-count">{` ${r.count}`}</span> : null}
-        </Fragment>
-      ))}
-    </pre>
-  );
-}
-
-function Body({
+export function Body({
   body,
   encoding,
   headers,

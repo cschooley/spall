@@ -24,6 +24,7 @@ use hyper_util::rt::TokioExecutor;
 use serde::Deserialize;
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -44,6 +45,8 @@ pub struct Lever {
     base: String,
     token_file: PathBuf,
     http: Client<HttpConnector, Empty<Bytes>>,
+    /// True while the follower holds an open `/feed` connection.
+    connected: AtomicBool,
 }
 
 impl Lever {
@@ -52,7 +55,13 @@ impl Lever {
             base,
             token_file,
             http: Client::builder(TokioExecutor::new()).build_http(),
+            connected: AtomicBool::new(false),
         }
+    }
+
+    /// Whether spall is currently following taphttp's feed.
+    pub fn connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
     }
 
     pub fn base(&self) -> &str {
@@ -258,6 +267,18 @@ impl Follower {
 
     async fn follow_feed(&mut self) -> anyhow::Result<FeedEnd> {
         let mut ws = self.lever.connect_feed(self.last.as_deref()).await?;
+        self.lever.connected.store(true, Ordering::Relaxed);
+        let result = self.read_feed(&mut ws).await;
+        self.lever.connected.store(false, Ordering::Relaxed);
+        result
+    }
+
+    async fn read_feed(
+        &mut self,
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> anyhow::Result<FeedEnd> {
         if self.last_error.take().is_some() {
             tracing::info!("connected to taphttp feed");
         }

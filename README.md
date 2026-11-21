@@ -111,6 +111,7 @@ cargo run -- --log-file ./traffic.jsonl
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null}` for the status bar
 - `GET /healthz`: `ok`
 
 The browser never talks to taphttp or sees its token: spall adds the token server-side.

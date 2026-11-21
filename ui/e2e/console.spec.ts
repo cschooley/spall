@@ -1,4 +1,4 @@
-// M0 console behavior: live updates, filter, clear, follow.
+// Traffic table behavior: live updates, filter syntax, clear, follow.
 import { append, entry, expect, filterTo, test, token } from "./fixtures.ts";
 
 test("new log lines appear live, with the connection shown as live", async ({ page }) => {
@@ -7,18 +7,20 @@ test("new log lines appear live, with the connection shown as live", async ({ pa
   await expect(page.locator(".conn")).toHaveText("live");
   await filterTo(page, t);
   await expect(page.locator("tr.row")).toHaveCount(0);
+  await expect(page.locator(".empty")).toHaveText("No exchanges match this filter.");
 
   append(entry({ host: `${t}.example`, method: "POST", url: `http://${t}.example/login`, status: 401 }));
   const row = page.locator("tr.row");
   await expect(row).toHaveCount(1);
   await expect(row.locator("td").nth(1)).toHaveText("POST");
+  await expect(row.locator("td").nth(1)).toHaveClass("m m-POST");
   await expect(row.locator("td").nth(3)).toHaveText("/login");
   await expect(row.locator("td").nth(4)).toHaveText("401");
   await expect(row.locator("td").nth(4)).toHaveClass("st-4");
-  await expect(row.locator("td").nth(5)).toHaveText("12 ms");
+  await expect(row.locator("td").nth(5)).toHaveText("12");
 });
 
-test("filter matches method, host, path and status", async ({ page }) => {
+test("filter syntax: host:, method:, status: (exact and class), free text", async ({ page }) => {
   const t = token();
   append(
     entry({ host: `${t}.a`, method: "GET", url: `http://${t}.a/one`, status: 200 }),
@@ -27,25 +29,30 @@ test("filter matches method, host, path and status", async ({ page }) => {
   await page.goto("/");
   for (const [q, n] of [
     [t, 2],
-    [`${t}.b`, 1],
-    [`delete ${t}`, 1],
-    [`/one`, 1],
-    [`${t}.b /two 503`, 1],
+    [`host:${t}.b`, 1],
+    [`method:delete ${t}`, 1],
+    [`${t}.a/one`, 1],
+    [`status:503 ${t}`, 1],
+    [`status:5xx ${t}`, 1],
+    [`status:2xx ${t}`, 1],
+    [`method:put ${t}`, 0],
     [`${t}-nothing`, 0],
   ] as const) {
     await filterTo(page, q);
     await expect(page.locator("tr.row"), q).toHaveCount(n);
   }
+  await filterTo(page, `by:agent ${t}`);
+  await expect(page.locator(".warn")).toHaveText("ignored: by:agent");
 });
 
 test("clear empties the table and new traffic still arrives", async ({ page }) => {
   const t = token();
   append(entry({ host: `${t}.before` }));
   await page.goto("/");
-  await expect(page.locator("tr.row").filter({ hasText: `${t}.before` })).toHaveCount(1);
-  await page.getByRole("button", { name: "clear" }).click();
+  await filterTo(page, t);
+  await expect(page.locator("tr.row")).toHaveCount(1);
+  await page.getByRole("button", { name: "clear", exact: true }).click();
   await expect(page.locator("tr.row")).toHaveCount(0);
-  await expect(page.locator(".count")).toHaveText("0 requests");
   append(entry({ host: `${t}.after` }));
   await expect(page.locator("tr.row")).toHaveCount(1);
   await expect(page.locator("tr.row")).toContainText(`${t}.after`);
@@ -56,18 +63,25 @@ test("scrolling up stops follow; scrolling to the bottom resumes it", async ({ p
   append(...Array.from({ length: 150 }, (_, i) => entry({ host: `${t}.example`, url: `http://${t}.example/${i}` })));
   await page.goto("/");
   await filterTo(page, t);
-  await expect(page.locator("tr.row")).toHaveCount(150);
   const follow = page.getByLabel("follow");
   await expect(follow).toBeChecked();
-  const main = page.locator("main");
-  await expect
-    .poll(() => main.evaluate((m) => m.scrollHeight - m.scrollTop - m.clientHeight))
-    .toBeLessThan(24);
+  const wrap = page.locator(".tablewrap");
+  await expect(page.locator("tr.row").last()).toContainText("/149");
+  await expect.poll(() => wrap.evaluate((m) => m.scrollHeight - m.scrollTop - m.clientHeight)).toBeLessThan(24);
 
-  await main.hover();
-  await page.mouse.wheel(0, -2000);
+  await wrap.hover();
+  await page.mouse.wheel(0, -1500);
   await expect(follow).not.toBeChecked();
-
-  await main.evaluate((m) => (m.scrollTop = m.scrollHeight));
+  await wrap.evaluate((m) => (m.scrollTop = m.scrollHeight));
   await expect(follow).toBeChecked();
+});
+
+test("the table is virtualized: thousands of rows, a bounded DOM", async ({ page }) => {
+  const t = token();
+  append(...Array.from({ length: 3000 }, (_, i) => entry({ host: `${t}.bulk`, url: `http://${t}.bulk/${i}` })));
+  await page.goto("/");
+  await filterTo(page, t);
+  await expect(page.locator(".statusbar")).toContainText("3000 exchanges");
+  expect(await page.locator("tr.row").count()).toBeLessThan(150);
+  await expect(page.locator("tr.row").last()).toContainText("/2999");
 });

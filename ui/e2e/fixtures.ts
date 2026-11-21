@@ -36,7 +36,9 @@ export function append(...entries: TrafficEntry[]): void {
 }
 
 export async function filterTo(page: Page, text: string): Promise<void> {
-  await page.getByPlaceholder("filter: host, path, method, status").fill(text);
+  await page.getByLabel("Filter").fill(text);
+  // The filter is debounced; wait until the table reflects it.
+  await expect(page.locator(".tablewrap")).toHaveAttribute("data-filter", text);
 }
 
 /**

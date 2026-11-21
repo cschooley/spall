@@ -152,3 +152,20 @@ test("methodClass maps to a fixed set; never echoes the (attacker-controlled) me
   assert.equal(methodClass("get"), "m-GET");
   for (const m of ["OPTIONS", "HEAD", "row open", "x\" onclick=\"y", ""]) assert.equal(methodClass(m), "m-OTHER");
 });
+
+test("statusLine adds the standard reason phrase when known", async () => {
+  const { statusLine } = await import("./format.ts");
+  assert.equal(statusLine(401), "401 Unauthorized");
+  assert.equal(statusLine(200), "200 OK");
+  assert.equal(statusLine(299), "299");
+  assert.equal(statusLine(null), "ERR (no response)");
+});
+
+test("bodyBytes returns the captured bytes for either encoding", async () => {
+  const { bodyBytes } = await import("./format.ts");
+  assert.deepEqual(Array.from(bodyBytes("hé", "utf8")!), [0x68, 0xc3, 0xa9]);
+  assert.deepEqual(Array.from(bodyBytes("AAEC/w==", "base64")!), [0, 1, 2, 255]);
+  assert.equal(bodyBytes(null, "utf8"), null);
+  assert.equal(bodyBytes("", "utf8"), null);
+  assert.equal(bodyBytes("!!", "base64"), null);
+});
