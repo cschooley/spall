@@ -695,7 +695,7 @@ checksum = "0bf256ce5efdfa370213c1dabab5935a12e49f2c58d15e9eac2870d3b4f27263"
 [[package]]
 name = "taphttp-types"
 version = "0.2.0"
-source = "git+https://github.com/cschooley/taphttp?tag=v0.2.0#88ccf04e68c86d5278ab3d7cb05d3bdb63a01855"
+source = "git+https://github.com/cschooley/taphttp?tag=v0.3.0#314788afda934c9a408d0a1d0857133e7bc22fee"
 dependencies = [
  "chrono",
  "serde",

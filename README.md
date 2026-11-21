@@ -34,7 +34,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), the s
 docker compose up --build
 ```
 
-taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.2.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. Then, in another terminal:
+taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.3.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. Then, in another terminal:
 
 ```sh
 curl -x http://127.0.0.1:8080 http://example.com

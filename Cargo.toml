@@ -17,7 +17,7 @@ clap = { version = "4", features = ["derive", "env"] }
 futures-util = { version = "0.3", default-features = false }
 serde_json = "1"
 # Traffic log schema, owned by taphttp. Bump the tag deliberately.
-taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.2.0" }
+taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.3.0" }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1"
