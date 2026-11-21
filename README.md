@@ -170,7 +170,7 @@ Adding an npm dependency: pick a version published at least two weeks ago, and r
 - **GitHub-native:** CodeQL (default setup), secret scanning with push protection, and Dependabot alerts and security updates.
 - **Dependabot** (`.github/dependabot.yml`) keeps action pins and dependencies current, with a 14-day cooldown matching the two-week rule. `taphttp-types` and the taphttp image are bumped together by hand.
 
-Every action is pinned to a commit SHA, and scanner versions are pinned too.
+Every action is pinned to a commit SHA (the repository requires it: a workflow using `@v4` or `@main` won't run), and scanner versions are pinned too. Write a new step as `uses: owner/action@<40-char SHA> # vX.Y.Z`.
 
 ## Roadmap
 

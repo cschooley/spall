@@ -146,7 +146,9 @@ TDD, same as the rest of Kudzu:
   green. Untrusted-content rendering is always covered.
 - CI (`.github/workflows/ci.yml`) runs all of the above; the security
   workflow runs sec-actions scanners (audit mode, SARIF to the Security
-  tab). Pin every action to a commit SHA and every scanner version; a
+  tab). Pin every action to a commit SHA (`@<sha> # vX.Y.Z`; the repo's
+  Actions settings require it, so an unpinned `uses:` fails) and every
+  scanner version; a
   suppression in `osv-scanner.toml` needs a reason and `ignoreUntil`.
 - New npm or Rust dependencies: versions at least two weeks old,
   transitive ones included (`npm install --before=<date>`;
