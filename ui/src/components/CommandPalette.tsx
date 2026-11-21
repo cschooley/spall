@@ -1,41 +1,44 @@
-// Ctrl+K / Cmd+K command palette (docs/ux.md). A small in-house component
-// rather than cmdk: cmdk pulls ~25 runtime packages, including runtime
-// <style> injection that spall's CSP blocks.
-
+// Ctrl+K / Cmd+K palette: find a command you don't remember. Entries come
+// from the shared registry (commands/registry.ts); ones that need arguments
+// open the console prefilled. In-house rather than cmdk: cmdk pulls ~25
+// runtime packages, including runtime <style> injection the CSP blocks.
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { PaletteItem } from "../commands/registry.ts";
 
-export interface Command {
-  id: string;
-  label: string;
-  hint?: string;
-  /** Commands that take an argument switch the palette into input mode. */
-  prompt?: string;
-  run: (arg?: string) => void;
+/** Fuzzy match: the query's characters appear in order. */
+export function fuzzy(query: string, text: string): boolean {
+  const q = query.toLowerCase();
+  let i = 0;
+  for (const ch of text.toLowerCase()) if (ch === q[i]) i++;
+  return i === q.length;
 }
 
-export function CommandPalette({ commands, onClose }: { commands: Command[]; onClose: () => void }) {
+export function CommandPalette({
+  items,
+  consoleKey,
+  onChoose,
+  onClose,
+}: {
+  items: PaletteItem[];
+  consoleKey: string;
+  onChoose: (item: PaletteItem) => void;
+  onClose: () => void;
+}) {
   const [text, setText] = useState("");
   const [active, setActive] = useState(0);
-  const [prompting, setPrompting] = useState<Command | null>(null);
   const input = useRef<HTMLInputElement>(null);
-
-  useEffect(() => input.current?.focus(), [prompting]);
+  useEffect(() => input.current?.focus(), []);
 
   const matches = useMemo(() => {
-    const q = text.trim().toLowerCase();
-    return prompting ? [] : commands.filter((c) => c.label.toLowerCase().includes(q));
-  }, [commands, text, prompting]);
+    const q = text.trim();
+    return items.filter((it) => !q || fuzzy(q, `${it.label} ${it.hint} ${it.group}`));
+  }, [items, text]);
   const current = Math.min(active, Math.max(matches.length - 1, 0));
 
-  const choose = (c: Command | undefined) => {
-    if (!c) return;
-    if (c.prompt) {
-      setPrompting(c);
-      setText("");
-      return;
-    }
+  const choose = (it: PaletteItem | undefined) => {
+    if (!it) return;
     onClose();
-    c.run();
+    onChoose(it);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -44,29 +47,24 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
       onClose();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((current + 1) % Math.max(matches.length, 1));
+      setActive(Math.min(matches.length - 1, current + 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setActive((current - 1 + matches.length) % Math.max(matches.length, 1));
+      setActive(Math.max(0, current - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (prompting) {
-        onClose();
-        prompting.run(text.trim());
-      } else {
-        choose(matches[current]);
-      }
+      choose(matches[current]);
     }
   };
 
   return (
-    <div className="palette-backdrop" onMouseDown={onClose}>
-      <div className="palette" role="dialog" aria-label="Commands" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="overlay" onMouseDown={onClose}>
+      <div className="pal" role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={(e) => e.stopPropagation()}>
         <input
           ref={input}
           value={text}
-          placeholder={prompting?.prompt ?? "Type a command"}
-          aria-label={prompting?.prompt ?? "Command"}
+          placeholder="Type a command…"
+          aria-label="Command"
           spellCheck={false}
           autoComplete="off"
           onChange={(e) => {
@@ -75,24 +73,35 @@ export function CommandPalette({ commands, onClose }: { commands: Command[]; onC
           }}
           onKeyDown={onKeyDown}
         />
-        {prompting ? null : (
-          <ul role="listbox" aria-label="Commands">
-            {matches.map((c, i) => (
-              <li
-                key={c.id}
-                role="option"
-                aria-selected={i === current}
-                className={i === current ? "on" : undefined}
-                onMouseEnter={() => setActive(i)}
-                onClick={() => choose(c)}
-              >
-                <span>{c.label}</span>
-                {c.hint ? <kbd>{c.hint}</kbd> : null}
-              </li>
-            ))}
-            {matches.length === 0 ? <li className="none">No matching command.</li> : null}
-          </ul>
-        )}
+        <ul role="listbox" aria-label="Commands">
+          {matches.map((it, i) => (
+            <li
+              key={it.command}
+              role="option"
+              aria-selected={i === current}
+              className={i === current ? "on" : undefined}
+              onMouseEnter={() => setActive(i)}
+              onClick={() => choose(it)}
+            >
+              <span className="grp">{it.group}</span>
+              <span>{it.label}</span>
+              <span className="hint">{it.hint}</span>
+            </li>
+          ))}
+          {matches.length === 0 ? <li className="none">{`No match. The console takes any command: press ${consoleKey}`}</li> : null}
+        </ul>
+        <div className="pal-foot">
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> move
+          </span>
+          <span>
+            <kbd>⏎</kbd> run
+          </span>
+          <span>
+            <kbd>Esc</kbd> close
+          </span>
+        </div>
       </div>
     </div>
   );

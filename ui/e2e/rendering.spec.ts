@@ -52,24 +52,32 @@ test("binary bodies show type, size and sha256, never text, with a paged hex vie
   );
   await openResponse(page, t);
 
-  const placeholder = page.locator("pre.binary");
-  await expect(placeholder).toContainText("binary · application/octet-stream · 600 bytes");
-  await expect(placeholder).toContainText(`sha256 ${createHash("sha256").update(bytes).digest("hex")}`);
+  const block = page.locator(".binary");
+  await expect(block.locator(".binrow")).toHaveText("BINARY application/octet-stream · 600 B · 600 bytes");
+  await expect(block.locator(".sha")).toHaveText(`sha256 ${createHash("sha256").update(bytes).digest("hex")}`);
   await expect(page.locator(".pane")).not.toContainText("<script>alert(1)</script>");
 
-  await page.getByRole("button", { name: "hex view" }).click();
+  // x toggles the hex view; it opens on the first 32 bytes.
+  await page.keyboard.press("x");
   const dump = page.locator("pre.hex-dump");
   const lines = async () => (await dump.textContent())!.split("\n");
   await expect(dump).toBeVisible();
-  expect(await lines()).toHaveLength(64);
-  expect((await lines())[0]).toBe("00000000  00 01 02 03 04 05 06 07  ........");
-  expect((await lines())[4]).toBe("00000020  20 21 22 23 24 25 26 27   !\"#$%&'");
-  const next = page.getByRole("button", { name: "next 88 bytes (88 left)" });
-  await next.click();
-  expect(await lines()).toHaveLength(75);
+  expect(await lines()).toEqual([
+    "00000000  00 01 02 03 04 05 06 07  ........",
+    "00000008  08 09 0a 0b 0c 0d 0e 0f  ........",
+    "00000010  10 11 12 13 14 15 16 17  ........",
+    "00000018  18 19 1a 1b 1c 1d 1e 1f  ........",
+  ]);
+  const more = block.locator(".more");
+  await expect(more).toHaveText("first 32 of 600 bytes · load more");
+  await block.getByRole("button", { name: "load more" }).click();
+  expect(await lines()).toHaveLength(68);
   expect((await lines())[64]).toBe("00000200  3c 73 63 72 69 70 74 3e  <script>");
-  await expect(next).toHaveCount(0);
-  await page.getByRole("button", { name: "hide hex" }).click();
+  await expect(more).toHaveText("first 544 of 600 bytes · load more");
+  await block.getByRole("button", { name: "load more" }).click();
+  expect(await lines()).toHaveLength(75);
+  await expect(more).toHaveText("first 600 of 600 bytes");
+  await block.getByRole("button", { name: /Hide hex/ }).click();
   await expect(dump).toHaveCount(0);
 });
 
@@ -84,5 +92,5 @@ test("JSON bodies are pretty-printed; bad base64 is reported, not rendered", asy
   await filterTo(page, `host:${t}.bad`);
   await page.locator("tr.row").first().click();
   await page.getByRole("tab", { name: "response" }).click();
-  await expect(page.locator("pre.binary")).toHaveText("binary body (could not decode base64)");
+  await expect(page.locator(".binary")).toHaveText("binary body (could not decode base64)");
 });

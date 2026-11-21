@@ -5,7 +5,18 @@
 
 import { Fragment, useState } from "react";
 import { Body } from "./Body.tsx";
-import { bodyBytes, durationText, headerRows, methodClass, statusClass, statusLine } from "../lib/format.ts";
+import {
+  bodyBytes,
+  displayUrl,
+  durationText,
+  headerRows,
+  headerValue,
+  humanSize,
+  methodClass,
+  shortId,
+  statusClass,
+  statusLine,
+} from "../lib/format.ts";
 import { toCurl } from "../lib/curl.ts";
 import { isSecretHeader } from "../lib/secrets.ts";
 import type { Header, TrafficEntry } from "../types.ts";
@@ -15,6 +26,7 @@ type Tab = "request" | "response";
 export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("request");
   const [copied, setCopied] = useState<"idle" | "ok" | "failed">("idle");
+  const [idCopied, setIdCopied] = useState(false);
 
   const copyCurl = async () => {
     try {
@@ -31,15 +43,33 @@ export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: ()
   const encoding = isReq ? entry.req_body_encoding : entry.res_body_encoding;
   const headers = isReq ? entry.req_headers : entry.res_headers;
   const bytes = bodyBytes(body, encoding);
+  const save = () => bytes && saveBytes(bytes, `spall-${safeName(entry.id)}-${tab}.bin`);
+  const type = headerValue(headers, "content-type");
 
   return (
     <aside className="inspector" aria-label="Exchange inspector">
       <header>
-        <h2>
-          <span className={methodClass(entry.method)}>{entry.method}</span> {entry.url}
+        <h2 title={entry.url}>
+          <span className={methodClass(entry.method)}>{entry.method}</span> {displayUrl(entry.url)}
         </h2>
         <div className="meta">
-          <span>{`id ${entry.id}`}</span>
+          <button
+            type="button"
+            className="link id"
+            title={`${entry.id} (click to copy)`}
+            aria-label={`Copy exchange id ${entry.id}`}
+            onClick={() =>
+              navigator.clipboard.writeText(entry.id).then(
+                () => {
+                  setIdCopied(true);
+                  setTimeout(() => setIdCopied(false), 1500);
+                },
+                () => undefined,
+              )
+            }
+          >
+            {idCopied ? "id copied" : `id ${shortId(entry.id)}`}
+          </button>
           <span className={statusClass(entry.status)}>{statusLine(entry.status)}</span>
           {entry.duration_ms !== null ? <span>{durationText(entry.duration_ms)}</span> : null}
           {entry.replay_of ? <span>{`replay of ${entry.replay_of}`}</span> : null}
@@ -55,7 +85,7 @@ export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: ()
         <button
           type="button"
           disabled={!bytes}
-          onClick={() => bytes && saveBytes(bytes, `spall-${safeName(entry.id)}-${tab}.bin`)}
+          onClick={save}
         >
           {`Save ${tab} body`}
         </button>
@@ -68,10 +98,15 @@ export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: ()
         ))}
       </div>
       <section className="pane" role="tabpanel" aria-label={tab}>
-        <h3>headers</h3>
+        <h3>
+          Headers <span className="note">· wire order, repeats kept</span>
+        </h3>
         <Headers headers={headers} />
-        <h3>body</h3>
-        <Body body={body} encoding={encoding} headers={headers} />
+        <h3>
+          Body
+          {bytes ? <span className="note">{` · ${type ?? "no content-type"} · ${humanSize(bytes.length)}`}</span> : null}
+        </h3>
+        <Body body={body} encoding={encoding} headers={headers} onSave={save} />
       </section>
     </aside>
   );

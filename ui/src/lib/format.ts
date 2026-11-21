@@ -170,3 +170,24 @@ export function bodyBytes(body: string | null, encoding: "utf8" | "base64"): Uin
     return null;
   }
 }
+
+/** Long ids shortened for display (full id stays in a tooltip and copy). */
+export function shortId(id: string): string {
+  return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-3)}` : id;
+}
+
+/** The URL for display, without the scheme's default port (taphttp records
+ * `https://host:443/…`). The raw URL stays in tooltips and copy as curl. */
+export function displayUrl(url: string): string {
+  const m = /^(https?):\/\/([^/?#]+):(\d+)(.*)$/i.exec(url);
+  if (!m) return url;
+  const [, scheme, host, port, rest] = m as unknown as [string, string, string, string, string];
+  const isDefault = (scheme.toLowerCase() === "https" && port === "443") || (scheme.toLowerCase() === "http" && port === "80");
+  return isDefault ? `${scheme}://${host}${rest}` : url;
+}
+
+export function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

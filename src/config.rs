@@ -15,6 +15,11 @@ pub struct Config {
     #[arg(long, env = "SPALL_TAPHTTP_API", value_parser = parse_api_base)]
     pub taphttp_api: Option<String>,
 
+    /// Where clients reach taphttp's proxy, shown in the UI's status bar.
+    /// Display only: spall never connects to it.
+    #[arg(long, env = "SPALL_PROXY_ADDRESS", default_value = "127.0.0.1:8080")]
+    pub proxy_address: String,
+
     /// File holding the lever API token (taphttp --api-token-file)
     #[arg(
         long,
@@ -99,6 +104,14 @@ mod tests {
         assert_eq!(c.allowed_hosts, vec!["spall.test", "localhost"]);
         assert_eq!(c.history, 5);
         assert_eq!(c.poll_ms, 50);
+    }
+
+    #[test]
+    fn proxy_address_is_display_only_and_defaults_to_local() {
+        let c = Config::try_parse_from(["spall"]).unwrap();
+        assert_eq!(c.proxy_address, "127.0.0.1:8080");
+        let c = Config::try_parse_from(["spall", "--proxy-address", "127.0.0.1:18080"]).unwrap();
+        assert_eq!(c.proxy_address, "127.0.0.1:18080");
     }
 
     #[test]

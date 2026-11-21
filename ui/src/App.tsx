@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CommandPalette, type Command } from "./components/CommandPalette.tsx";
+import { execute, paletteItems, type Ctx, type OutKind, type PaletteItem } from "./commands/registry.ts";
+import { CommandPalette } from "./components/CommandPalette.tsx";
+import { Console } from "./components/Console.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { Inspector } from "./components/Inspector.tsx";
 import { Launcher } from "./components/Launcher.tsx";
 import { Rail } from "./components/Rail.tsx";
+import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
+import { addLine, clearLog, emptyLog, markRead } from "./lib/consoleLog.ts";
 import { toCurl } from "./lib/curl.ts";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
 import { isEmptyQuery, matchesQuery, parseFilter } from "./lib/query.ts";
@@ -33,6 +37,8 @@ const CONNECTION_LABEL: Record<Connection, string> = {
 };
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const CONSOLE_KEY = "spall.consoleKey";
+const PALETTE = paletteItems();
 
 function useTheme() {
   const [theme, setThemeState] = useState<ThemeName>(() => loadTheme(browserStorage()));
@@ -44,21 +50,39 @@ function useTheme() {
   return [theme, setTheme] as const;
 }
 
+function loadConsoleKey(): string {
+  try {
+    const k = browserStorage()?.getItem(CONSOLE_KEY);
+    return k && [...k].length === 1 ? k : "`";
+  } catch {
+    return "`";
+  }
+}
+
 function ThemePicker({ theme, setTheme }: { theme: ThemeName; setTheme: (t: ThemeName) => void }) {
   const { brand, mode } = themeParts(theme);
-  const seg = <T extends string>(label: string, value: T, options: readonly T[], pick: (v: T) => void) => (
-    <div className="seg" role="group" aria-label={label}>
-      {options.map((o) => (
-        <button key={o} type="button" aria-pressed={o === value} onClick={() => pick(o)}>
-          {o[0]!.toUpperCase() + o.slice(1)}
-        </button>
-      ))}
-    </div>
-  );
+  const name = (s: string) => s[0]!.toUpperCase() + s.slice(1);
   return (
     <>
-      {seg("Theme", brand, ["rust", "blued"] as const, (b: Brand) => setTheme(themeName({ brand: b, mode })))}
-      {seg("Brightness", mode, ["dark", "light"] as const, (m: Mode) => setTheme(themeName({ brand, mode: m })))}
+      <div className="seg" role="group" aria-label="Metal">
+        {(["rust", "blued"] as const).map((b: Brand) => (
+          <button key={b} type="button" aria-pressed={b === brand} onClick={() => setTheme(themeName({ brand: b, mode }))}>
+            {/* data-theme scopes that theme's tokens to the swatch: no color literals. */}
+            <i className="sw" data-theme={b} aria-hidden />
+            {name(b)}
+          </button>
+        ))}
+      </div>
+      <div className="seg" role="group" aria-label="Brightness" title="t toggles">
+        {(["dark", "light"] as const).map((m: Mode) => (
+          <button key={m} type="button" aria-pressed={m === mode} onClick={() => setTheme(themeName({ brand, mode: m }))}>
+            <span className="glyph" aria-hidden>
+              {m === "dark" ? "◐" : "○"}
+            </span>
+            {name(m)}
+          </button>
+        ))}
+      </div>
     </>
   );
 }
@@ -100,8 +124,18 @@ export function App() {
   const [follow, setFollow] = useState(true);
   const [selected, setSelected] = useState<TrafficEntry | null>(null);
   const [palette, setPalette] = useState(false);
+  const [sheet, setSheet] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consolePrefill, setConsolePrefill] = useState("");
+  const [consoleKey, setConsoleKeyState] = useState(loadConsoleKey);
+  const [log, setLog] = useState(() => addLine(emptyLog(), "spall console · type help", "sys", true));
   const [clearedAt, setClearedAt] = useState<string | null>(null);
   const filterInput = useRef<HTMLInputElement>(null);
+
+  const out = useCallback(
+    (text: string, kind: OutKind = "out") => setLog((l) => addLine(l, text, kind, consoleOpen)),
+    [consoleOpen],
+  );
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(filterText), 250);
@@ -112,6 +146,31 @@ export function App() {
     query,
     status.source === "log" ? "off" : status.source === "pending" ? "wait" : "fetch",
   );
+
+  // System messages: note changes during render (React's pattern for state
+  // derived from changing values), so they land in the console log once.
+  const [seen, setSeen] = useState({ connection, feed: status.connected, historyError: history.error, ignored: "" });
+  const ignored = query.ignored.join(" ");
+  if (
+    seen.connection !== connection ||
+    seen.feed !== status.connected ||
+    seen.historyError !== history.error ||
+    seen.ignored !== ignored
+  ) {
+    const add = (text: string, kind: OutKind) => setLog((l) => addLine(l, text, kind, consoleOpen));
+    if (seen.connection !== connection) {
+      if (connection === "reconnecting") add("live stream lost; reconnecting", "warn");
+      else if (connection === "down") add("live stream disconnected", "stop");
+      else if (connection === "live" && seen.connection !== "connecting") add("live stream reconnected", "sys");
+    }
+    if (status.source === "lever" && seen.feed !== status.connected && status.connected !== null) {
+      if (status.connected) add("taphttp feed connected", "sys");
+      else add("taphttp feed disconnected", "warn");
+    }
+    if (seen.historyError !== history.error && history.error) add(history.error, "warn");
+    if (seen.ignored !== ignored && ignored) add(`filter: ignored ${ignored} (attribution arrives with agents, M5)`, "warn");
+    setSeen({ connection, feed: status.connected, historyError: history.error, ignored });
+  }
 
   const rows = useMemo(() => {
     const merged = mergeExchanges(history.items, store.items, (e) => matchesQuery(e, query));
@@ -138,64 +197,86 @@ export function App() {
   );
 
   const openById = useCallback(
-    async (id: string) => {
-      if (!ID_PATTERN.test(id)) return;
+    async (id: string): Promise<boolean> => {
+      if (!ID_PATTERN.test(id)) return false;
       const loaded = rows.find((r) => r.id === id) ?? store.items.find((r) => r.id === id);
       if (loaded) {
         setSelected(loaded);
-        return;
+        return true;
       }
-      if (status.source === "log") return; // no history API to ask
+      if (status.source === "log") return false; // no history API to ask
       try {
         const res = await fetch(`/api/exchanges/${encodeURIComponent(id)}`);
-        if (res.ok) setSelected((await res.json()) as TrafficEntry);
+        if (!res.ok) return false;
+        setSelected((await res.json()) as TrafficEntry);
+        return true;
       } catch {
-        // not found or no history API: nothing to open
+        return false;
       }
     },
     [rows, store.items, status.source],
   );
 
   const focusFilter = useCallback(() => filterInput.current?.focus(), []);
-
   const toggleMode = useCallback(() => {
     const p = themeParts(theme);
     setTheme(themeName({ brand: p.brand, mode: p.mode === "dark" ? "light" : "dark" }));
   }, [theme, setTheme]);
 
-  const commands: Command[] = useMemo(
-    () => [
-      { id: "filter", label: "Filter traffic", hint: "/", run: focusFilter },
-      { id: "clear-filter", label: "Clear filter", run: () => setFilterText("") },
-      { id: "open", label: "Open exchange by id…", prompt: "Exchange id", run: (id) => void openById(id ?? "") },
-      ...(selected
-        ? [
-            {
-              id: "curl",
-              label: "Copy as curl",
-              run: () => void navigator.clipboard.writeText(toCurl(selected)).catch(() => undefined),
-            },
-          ]
-        : []),
-      { id: "newest", label: "Jump to newest", run: () => setFollow(true) },
-      { id: "clear", label: "Clear table", run: clearAll },
-      { id: "mode", label: "Toggle light / dark", hint: "t", run: toggleMode },
-      {
-        id: "brand",
-        label: "Switch theme Rust / Blued",
-        run: () => {
-          const p = themeParts(theme);
-          setTheme(themeName({ brand: p.brand === "rust" ? "blued" : "rust", mode: p.mode }));
-        },
+  const openConsole = useCallback((prefill = "") => {
+    setConsolePrefill(prefill);
+    setConsoleOpen(true);
+    setLog(markRead);
+  }, []);
+  const closeConsole = useCallback(() => setConsoleOpen(false), []);
+
+  const ctx: Ctx = useMemo(
+    () => ({
+      out,
+      setFilter: (q) => setFilterText(q),
+      focusFilter,
+      openById,
+      selected: () => selected,
+      curlText: () => (selected ? toCurl(selected) : null),
+      copyCurl: async () => {
+        if (!selected) return false;
+        try {
+          await navigator.clipboard.writeText(toCurl(selected));
+          return true;
+        } catch {
+          return false;
+        }
       },
-    ],
-    [selected, openById, clearAll, toggleMode, theme, setTheme, focusFilter],
+      jumpToNewest: () => setFollow(true),
+      clearTable: clearAll,
+      setTheme,
+      clearConsole: () => setLog(clearLog),
+      openKeys: () => setSheet(true),
+      setConsoleKey: (k) => {
+        if ([...k].length !== 1) return false;
+        setConsoleKeyState(k);
+        try {
+          browserStorage()?.setItem(CONSOLE_KEY, k);
+        } catch {
+          // storage blocked: the key lasts for this page only
+        }
+        return true;
+      },
+    }),
+    [out, focusFilter, openById, selected, clearAll, setTheme],
   );
 
-  // Global keys, ignored while typing in a field (except Ctrl/Cmd+K).
+  const run = useCallback((line: string) => void execute(line, ctx), [ctx]);
+  const choose = useCallback(
+    (item: PaletteItem) => (item.prefill ? openConsole(item.prefill) : run(item.command)),
+    [openConsole, run],
+  );
+
+  // Global keys. Ctrl/Cmd+K works everywhere; the rest are ignored while
+  // typing in a field (the console handles its own toggle key).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
         return;
@@ -206,18 +287,30 @@ export function App() {
         return;
       }
       if (palette || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (e.key === "/") {
+      if (e.key === consoleKey) {
+        e.preventDefault();
+        if (consoleOpen) closeConsole();
+        else openConsole();
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setSheet((s) => !s);
+      } else if (e.key === "Escape") {
+        if (sheet) setSheet(false);
+        else setSelected(null);
+      } else if (sheet) {
+        return;
+      } else if (e.key === "/") {
         e.preventDefault();
         focusFilter();
       } else if (e.key === "j") move(1);
       else if (e.key === "k") move(-1);
-      else if (e.key === "Escape") setSelected(null);
       else if (e.key === "t") toggleMode();
+      else if (e.key === "x") document.querySelector<HTMLButtonElement>(".inspector [data-action='hex']")?.click();
       // 1-5 will switch views once a second view ships (see Rail.tsx).
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [palette, move, toggleMode, focusFilter]);
+  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter]);
 
   const historyNote = history.unavailable
     ? "live only (log-file mode: no history API)"
@@ -274,7 +367,7 @@ export function App() {
           <span className="note">{historyNote}</span>
           <span className="spacer" />
           <button type="button" className="hint" onClick={() => setPalette(true)}>
-            <kbd>Ctrl K</kbd> commands
+            <kbd>{`${modKey()} K`}</kbd> commands
           </button>
         </div>
         <TrafficTable
@@ -302,17 +395,38 @@ export function App() {
           ) : (
             <span className="bad">● unknown</span>
           )}
+          {status.proxy ? <span className="addr">{` ${status.proxy}`}</span> : null}
         </span>
         <span>{`${rows.length} exchange${rows.length === 1 ? "" : "s"}`}</span>
+        {log.unread > 0 && !consoleOpen ? (
+          <button type="button" className="con-unread" title={`New console messages (press ${consoleKey})`} onClick={() => openConsole()}>
+            {`${consoleKey} ${log.unread}`}
+          </button>
+        ) : null}
         <span className="spacer" />
         <span className="keys">
-          <kbd>/</kbd> filter <kbd>j</kbd>
-          <kbd>k</kbd> move <kbd>Esc</kbd> close <kbd>t</kbd> light/dark
+          <kbd>?</kbd> keys <kbd>{consoleKey}</kbd> console <kbd>t</kbd> light/dark <kbd>1</kbd>–<kbd>5</kbd> views <kbd>/</kbd> filter{" "}
+          <kbd>j</kbd>
+          <kbd>k</kbd> move
         </span>
         <span className="legal">authorized testing only</span>
       </footer>
 
-      {palette ? <CommandPalette commands={commands} onClose={() => setPalette(false)} /> : null}
+      {consoleOpen ? (
+        <Console
+          key={consolePrefill}
+          log={log}
+          toggleKey={consoleKey}
+          prefill={consolePrefill}
+          onRun={run}
+          onClose={closeConsole}
+          onHint={(t) => out(t, "sys")}
+        />
+      ) : null}
+      {palette ? (
+        <CommandPalette items={PALETTE} consoleKey={consoleKey} onChoose={choose} onClose={() => setPalette(false)} />
+      ) : null}
+      {sheet ? <ShortcutSheet consoleKey={consoleKey} onClose={() => setSheet(false)} /> : null}
     </div>
   );
 }

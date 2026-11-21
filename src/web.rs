@@ -60,6 +60,8 @@ pub struct AppState {
     /// taphttp lever API client; `None` when tailing a log file.
     pub lever: Option<Arc<Lever>>,
     pub ui: Arc<dyn UiAssets>,
+    /// Where clients reach taphttp's proxy (display only).
+    pub proxy_address: Arc<str>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -184,8 +186,12 @@ async fn proxy(lever: Option<&Arc<Lever>>, path_and_query: &str) -> Response {
 /// whether spall is following taphttp's feed (null when tailing a file).
 async fn api_status(State(state): State<AppState>) -> Response {
     let body = match &state.lever {
-        Some(lever) => serde_json::json!({ "source": "lever", "connected": lever.connected() }),
-        None => serde_json::json!({ "source": "log", "connected": null }),
+        Some(lever) => {
+            serde_json::json!({ "source": "lever", "connected": lever.connected(), "proxy": &*state.proxy_address })
+        }
+        None => {
+            serde_json::json!({ "source": "log", "connected": null, "proxy": &*state.proxy_address })
+        }
     };
     axum::Json(body).into_response()
 }
@@ -340,6 +346,7 @@ mod tests {
             allowed_hosts: Arc::new(defaults()),
             lever: None,
             ui,
+            proxy_address: Arc::from("127.0.0.1:8080"),
         })
     }
 

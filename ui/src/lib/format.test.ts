@@ -169,3 +169,27 @@ test("bodyBytes returns the captured bytes for either encoding", async () => {
   assert.equal(bodyBytes("", "utf8"), null);
   assert.equal(bodyBytes("!!", "base64"), null);
 });
+
+test("shortId keeps the start and end of long ids", async () => {
+  const { shortId } = await import("./format.ts");
+  assert.equal(shortId("0b6c3e0e-5f53-4c39-9b7a-3f0f5c1a2d4e"), "0b6c3e0e…d4e");
+  assert.equal(shortId("short-id"), "short-id");
+});
+
+test("displayUrl drops only the scheme's default port", async () => {
+  const { displayUrl } = await import("./format.ts");
+  assert.equal(displayUrl("https://httpbin.org:443/post?x=1"), "https://httpbin.org/post?x=1");
+  assert.equal(displayUrl("http://example.com:80/"), "http://example.com/");
+  assert.equal(displayUrl("https://example.com:8443/a"), "https://example.com:8443/a");
+  assert.equal(displayUrl("http://example.com:443/"), "http://example.com:443/");
+  assert.equal(displayUrl("/relative"), "/relative");
+  assert.equal(displayUrl("not a url"), "not a url");
+});
+
+test("humanSize uses B, KB, MB with one decimal", async () => {
+  const { humanSize } = await import("./format.ts");
+  assert.equal(humanSize(64), "64 B");
+  assert.equal(humanSize(1023), "1023 B");
+  assert.equal(humanSize(49412), "48.3 KB");
+  assert.equal(humanSize(5 * 1024 * 1024), "5.0 MB");
+});

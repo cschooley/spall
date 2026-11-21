@@ -44,10 +44,12 @@ test("Ctrl+K palette: filter commands, run with Enter, Esc closes", async ({ pag
   await page.locator("tr.row").first().click();
 
   await page.keyboard.press("Control+k");
-  const palette = page.getByRole("dialog", { name: "Commands" });
+  const palette = page.getByRole("dialog", { name: "Command palette" });
   await expect(palette).toBeVisible();
-  await page.keyboard.type("curl");
-  await expect(palette.getByRole("option")).toHaveText(["Copy as curl"]);
+  await expect(palette.locator(".pal-foot")).toContainText("move");
+  await page.keyboard.type("copy as");
+  await expect(palette.getByRole("option")).toHaveCount(1);
+  await expect(palette.getByRole("option")).toContainText("Copy as curl");
   await page.keyboard.press("Enter");
   await expect(palette).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(`curl 'https://${t}.example/p' -H 'host: example.test'`);
@@ -55,12 +57,12 @@ test("Ctrl+K palette: filter commands, run with Enter, Esc closes", async ({ pag
   await page.keyboard.press("Control+k");
   await page.keyboard.type("zzz");
   await expect(palette.getByRole("option")).toHaveCount(0);
-  await expect(palette.getByRole("listbox")).toHaveText("No matching command.");
+  await expect(palette.getByRole("listbox")).toHaveText("No match. The console takes any command: press `");
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);
 });
 
-test("palette: open exchange by id (fetched from history when not loaded)", async ({ page }) => {
+test("palette: commands that need arguments open the console prefilled (open by id from history)", async ({ page }) => {
   const t = token();
   const remote = entry({ id: `${t}-remote`, host: `${t}.remote`, url: `http://${t}.remote/old` });
   await page.route("**/api/status", (r) => r.fulfill({ json: { source: "lever", connected: true } }));
@@ -70,8 +72,11 @@ test("palette: open exchange by id (fetched from history when not loaded)", asyn
   await page.keyboard.press("Control+k");
   await page.keyboard.type("open exchange");
   await page.keyboard.press("Enter");
-  await expect(page.getByLabel("Exchange id")).toBeFocused();
+  const input = page.getByLabel("Console command");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("open ");
   await page.keyboard.type(`${t}-remote`);
   await page.keyboard.press("Enter");
   await expect(page.locator(".inspector h2")).toHaveText(`GET http://${t}.remote/old`);
+  await expect(page.locator(".con-log")).toContainText(`open ${t}-remote`);
 });

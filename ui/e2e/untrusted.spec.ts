@@ -51,7 +51,8 @@ test("traffic is rendered as text in every field, and nothing executes", async (
   await rows.filter({ hasText: `${t}.example` }).click();
   await expect(page.locator(".inspector")).toBeVisible();
   for (const p of [P.script, P.img, P.svg, P.iframe]) await expect(app).toContainText(p);
-  await expect(app).toContainText(`id ${t}-${P.bold}`);
+  // The id is shortened on screen; the full (hostile) id is in the tooltip, as text.
+  await expect(page.locator(".inspector .meta button.id")).toHaveAttribute("title", `${t}-${P.bold} (click to copy)`);
   await expect(app).toContainText(`replay of ${P.img}`);
   await expect(app).toContainText(`x-${P.bold}`);
 
@@ -65,11 +66,22 @@ test("traffic is rendered as text in every field, and nothing executes", async (
   await page.getByRole("tab", { name: "response" }).click();
   await expect(page.locator(".pane")).toContainText(`"html": ${JSON.stringify(P.svg)}`);
 
+  // The console echoes and reports hostile input as text too.
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  await page.getByLabel("Console command").fill(`${P.svg} ${P.script}`);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText("unknown command: <svg. try help");
+  await expect(page.locator(".con-log .l-cmd").first()).toHaveText(`${P.svg} ${P.script}`);
+  await page.getByLabel("Console command").fill(`open ${P.img}`);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText(`open: not an exchange id: <img`);
+
   // Nothing executed, nothing was injected.
   expect(await page.evaluate(() => (window as unknown as { __pwned?: string }).__pwned)).toBeUndefined();
   // spall's own icons are <svg data-icon>; any other svg/img/frame was injected.
   expect(await page.locator("img, svg:not([data-icon]), iframe, object, embed").count()).toBe(0);
-  expect(await page.locator(".tablewrap svg, .inspector svg").count()).toBe(0);
+  expect(await page.locator(".tablewrap svg, .inspector svg, .console svg").count()).toBe(0);
   expect(await page.evaluate(() => document.scripts.length)).toBe(1);
   expect(
     await page.evaluate(() => [...document.querySelectorAll("b")].filter((b) => b.textContent === "bold").length),

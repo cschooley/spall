@@ -5,24 +5,27 @@ export interface SourceStatus {
   source: "pending" | "lever" | "log" | "unknown";
   /** Following taphttp's feed (lever); null when tailing a log file. */
   connected: boolean | null;
+  /** Where clients reach taphttp's proxy (display only). */
+  proxy: string | null;
 }
 
 /** Poll spall's /api/status for the status bar. */
 export function useSourceStatus(intervalMs = 5000): SourceStatus {
-  const [status, setStatus] = useState<SourceStatus>({ source: "pending", connected: null });
+  const [status, setStatus] = useState<SourceStatus>({ source: "pending", connected: null, proxy: null });
   useEffect(() => {
     let live = true;
     const poll = async () => {
       try {
         const res = await fetch("/api/status");
-        const body = (await res.json()) as { source?: string; connected?: boolean | null };
+        const body = (await res.json()) as { source?: string; connected?: boolean | null; proxy?: string };
         if (!live) return;
         setStatus({
           source: body.source === "lever" || body.source === "log" ? body.source : "unknown",
           connected: typeof body.connected === "boolean" ? body.connected : null,
+          proxy: typeof body.proxy === "string" ? body.proxy : null,
         });
       } catch {
-        if (live) setStatus({ source: "unknown", connected: null });
+        if (live) setStatus({ source: "unknown", connected: null, proxy: null });
       }
     };
     void poll();

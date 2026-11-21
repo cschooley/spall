@@ -82,11 +82,10 @@ Playwright browser tests (#7), the Traffic view (#8: rail, shared
 inspector, history search, command palette), scaffolding (#9), plus
 mockup chrome (brand mark, five-view rail, suite launcher).
 
-Remaining:
-
-- **#11**: backtick console and one command registry (palette,
-  console, later the MCP server).
-- **#12**: the rest of the mockup-parity review.
+Also done: the `` ` `` console and one command registry shared with
+the palette (#11), and the mockup-parity review (#12). No M1 issues
+remain open; closing the milestone and tagging `v0.2.0` is pending.
+Next is M2 (replay).
 
 Explicitly not in M1: replay (M2), candidates, triage and flux (M3),
 export (M4), MCP server, agent tasks, e-stop, attribution (M5),

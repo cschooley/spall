@@ -8,15 +8,19 @@ An assessment workbench for web application security testing: a web UI for inter
 
 ## Screenshots
 
-### Today: M0 live traffic console
+### Today: the Traffic view (M1)
 
-![spall M0: live traffic console](docs/screenshots/m0-console.png)
+Live traffic and history from taphttp, filter syntax, the shared inspector, command palette and the `` ` `` console. Screenshots use fixture traffic; regenerate them with `npm --prefix ui run screenshots`.
 
-### Where it's going (design mockups, not built yet)
+![spall Traffic view](docs/screenshots/traffic.png)
+
+![spall console](docs/screenshots/traffic-console.png)
+
+### Where it's going (design mockups)
 
 Visual direction from [verdigris](https://github.com/cschooley/verdigris), the suite's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
 
-**Traffic.** Attribution on every exchange (you or the agent), inspector with replay and flag actions.
+**Traffic.** Still to come: attribution on every exchange (you or the agent), and replay and flag actions in the inspector.
 
 ![Mockup: Traffic view](docs/screenshots/mockup-traffic.png)
 
@@ -28,7 +32,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), the s
 
 ![Mockup: Findings view](docs/screenshots/mockup-findings.png)
 
-## Quickstart (M0)
+## Quickstart
 
 ```sh
 docker compose up --build
@@ -99,6 +103,7 @@ cargo run -- --log-file ./traffic.jsonl
 | `--taphttp-token-file` | `SPALL_TAPHTTP_TOKEN_FILE` | `/token/api-token` |
 | `--log-file` | `SPALL_LOG_FILE` | `/data/traffic.jsonl` (used only without `--taphttp-api`) |
 | `--listen` | `SPALL_LISTEN` | `127.0.0.1:3000` |
+| `--proxy-address` | `SPALL_PROXY_ADDRESS` | `127.0.0.1:8080` (shown in the status bar; display only) |
 | `--allowed-host` | `SPALL_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` |
 | `--history` | `SPALL_HISTORY` | `1000` (entries replayed to a newly opened page) |
 | `--poll-ms` | `SPALL_POLL_MS` | `250` (log tailing only) |
@@ -133,6 +138,7 @@ npm ci               # lockfile only; install scripts are disabled (.npmrc)
 npm run lint         # includes the "traffic is never HTML" bans
 npm test             # node:test, no browser
 npm run test:e2e     # Playwright: builds the UI, runs spall via cargo, headless Chromium
+npm run screenshots  # regenerate docs/screenshots/traffic*.png (1440x820, fixture traffic)
 npm run build        # then rebuild spall to embed ui/dist
 npm run dev          # Vite on 127.0.0.1:5173, proxying /events and /api to spall on :3000
 ```

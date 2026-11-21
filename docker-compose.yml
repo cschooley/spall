@@ -45,6 +45,8 @@ services:
       SPALL_LISTEN: 0.0.0.0:3000
       SPALL_TAPHTTP_API: http://taphttp:8081
       SPALL_TAPHTTP_TOKEN_FILE: /token/api-token
+      # Shown in the status bar; keep in step with taphttp's published port.
+      SPALL_PROXY_ADDRESS: 127.0.0.1:${TAPHTTP_PORT:-8080}
       RUST_LOG: info
     ports:
       - "127.0.0.1:${SPALL_PORT:-3000}:3000"

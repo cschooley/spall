@@ -8,22 +8,29 @@ import {
   hexRows,
   HEX_BYTES_PER_ROW,
   HEX_ROWS_PER_PAGE,
+  humanSize,
   prettyBody,
   sha256Hex,
 } from "../lib/format.ts";
 import type { BodyEncoding, Header } from "../types.ts";
 
+/** The hex view opens on the first 32 bytes, as in the verdigris mockup. */
+export const HEX_FIRST_ROWS = 4;
+
 export function Body({
   body,
   encoding,
   headers,
+  onSave,
 }: {
   body: string | null;
   encoding: BodyEncoding;
   headers: Header[];
+  onSave?: () => void;
 }) {
   if (body === null || body === "") return <pre className="none">(empty)</pre>;
-  if (encoding === "base64") return <BinaryBody b64={body} contentType={headerValue(headers, "content-type")} />;
+  if (encoding === "base64")
+    return <BinaryBody b64={body} contentType={headerValue(headers, "content-type")} onSave={onSave} />;
   const { text, truncated } = prettyBody(body, headerValue(headers, "content-type"));
   return (
     <pre>
@@ -34,7 +41,7 @@ export function Body({
 }
 
 /** Binary bodies are never rendered as text: type, size, sha256, optional hex. */
-function BinaryBody({ b64, contentType }: { b64: string; contentType: string | null }) {
+function BinaryBody({ b64, contentType, onSave }: { b64: string; contentType: string | null; onSave?: () => void }) {
   const bytes = useMemo(() => {
     try {
       return base64Bytes(b64);
@@ -43,6 +50,7 @@ function BinaryBody({ b64, contentType }: { b64: string; contentType: string | n
     }
   }, [b64]);
   const [hash, setHash] = useState<string | null>(null);
+  const [rows, setRows] = useState(0);
   // WebCrypto exists only in secure contexts (localhost counts).
   const canHash = Boolean(globalThis.crypto?.subtle);
 
@@ -58,41 +66,45 @@ function BinaryBody({ b64, contentType }: { b64: string; contentType: string | n
     };
   }, [bytes, canHash]);
 
-  if (!bytes) return <pre className="binary">binary body (could not decode base64)</pre>;
+  if (!bytes) return <div className="binary">binary body (could not decode base64)</div>;
+  const shownBytes = Math.min(bytes.length, rows * HEX_BYTES_PER_ROW);
   return (
-    <div>
-      <pre className="binary">
-        <span>{`binary · ${contentType ?? "unknown type"} · ${bytes.length} bytes`}</span>
-        {"\n"}
-        {canHash ? (
-          <span className={hash ? undefined : "none"}>{hash ?? "sha256 …"}</span>
-        ) : (
-          <span className="none">sha256 unavailable (needs a secure context)</span>
-        )}
-      </pre>
-      <HexView bytes={bytes} />
-    </div>
-  );
-}
-
-function HexView({ bytes }: { bytes: Uint8Array }) {
-  const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState(HEX_ROWS_PER_PAGE);
-  const totalRows = Math.ceil(bytes.length / HEX_BYTES_PER_ROW);
-  const left = bytes.length - Math.min(rows, totalRows) * HEX_BYTES_PER_ROW;
-  return (
-    <div className="hex">
-      <button type="button" onClick={() => setOpen((o) => !o)}>
-        {open ? "hide hex" : "hex view"}
-      </button>
-      {open ? (
+    <div className="binary">
+      <div className="binrow">
+        <span className="tag">BINARY</span>{" "}
+        <span>
+          {`${contentType ?? "unknown type"} · `}
+          <b>{humanSize(bytes.length)}</b>
+          {` · ${bytes.length.toLocaleString("en-US")} bytes`}
+        </span>
+      </div>
+      <div className={hash ? "sha" : "sha none"}>
+        {canHash ? (hash ?? "sha256 …") : "sha256 unavailable (needs a secure context)"}
+      </div>
+      <div className="actions">
+        <button type="button" data-action="hex" onClick={() => setRows((r) => (r ? 0 : HEX_FIRST_ROWS))}>
+          {rows ? "Hide hex" : "Show hex"} <kbd>x</kbd>
+        </button>
+        {onSave ? (
+          <button type="button" onClick={onSave}>
+            Save…
+          </button>
+        ) : null}
+      </div>
+      {rows ? (
         <>
           <pre className="hex-dump">{hexRows(bytes, 0, rows)}</pre>
-          {left > 0 ? (
-            <button type="button" onClick={() => setRows((r) => r + HEX_ROWS_PER_PAGE)}>
-              {`next ${Math.min(left, HEX_ROWS_PER_PAGE * HEX_BYTES_PER_ROW)} bytes (${left} left)`}
-            </button>
-          ) : null}
+          <p className="more">
+            {`first ${shownBytes.toLocaleString("en-US")} of ${bytes.length.toLocaleString("en-US")} bytes`}
+            {shownBytes < bytes.length ? (
+              <>
+                {" · "}
+                <button type="button" className="link" onClick={() => setRows((r) => r + HEX_ROWS_PER_PAGE)}>
+                  load more
+                </button>
+              </>
+            ) : null}
+          </p>
         </>
       ) : null}
     </div>

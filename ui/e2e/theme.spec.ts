@@ -20,7 +20,7 @@ test("dark rust is the default, with no data-theme attribute", async ({ page }) 
   await page.goto("/");
   expect(await page.evaluate(() => document.documentElement.getAttribute("data-theme"))).toBeNull();
   expect(await bodyBg(page)).toBe(bgBase("rust"));
-  await expect(page.getByRole("group", { name: "Theme" }).getByRole("button", { name: "Rust" })).toHaveAttribute(
+  await expect(page.getByRole("group", { name: "Metal" }).getByRole("button", { name: "Rust" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -28,7 +28,7 @@ test("dark rust is the default, with no data-theme attribute", async ({ page }) 
 
 test("the picker reaches all four themes, each with its own tokens, and is remembered", async ({ page }) => {
   await page.goto("/");
-  const brand = page.getByRole("group", { name: "Theme" });
+  const brand = page.getByRole("group", { name: "Metal" });
   const mode = page.getByRole("group", { name: "Brightness" });
   for (const [b, m, theme] of [
     ["Blued", "Dark", "blued"],

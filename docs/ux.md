@@ -92,7 +92,7 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 Quake-style drop-down console, the same in every suite app (verdigris component).
 
 - **Palette vs. console.** `⌘K` is for finding things you don't remember (fuzzy search). The console is for doing things you do remember: typed commands with arguments, history, tab completion, scrollback.
-- **One command registry.** Palette, console and MCP server expose the same commands with the same names and arguments. A command that exists in one exists in all three.
+- **One command registry.** Palette, console and MCP server expose the same commands with the same names and arguments. A command that exists in one exists in all three. It lives in `ui/src/commands/registry.ts`; each command declares whether it may be offered to the agent (`mcp`), and export or promotion never may.
 - **System output lands here:** agent messages, late OOB callbacks, warnings.
 - **Text only.** Console output is never rendered as HTML (see the "Traffic is never HTML" rule).
 - Toggle on backtick (configurable for non-US layouts). Never opens while typing in an input.

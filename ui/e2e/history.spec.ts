@@ -71,8 +71,13 @@ test("without a history API (log-file mode) the view says live only", async ({ p
   await expect(page.locator(".statusbar")).toContainText("taphttp ● log file");
 });
 
-test("status bar shows taphttp's connection in lever mode", async ({ page }) => {
+test("status bar shows taphttp's connection and proxy address in lever mode", async ({ page }) => {
   await fakeHistory(page, []);
+  await page.unroute("**/api/status");
+  await page.route("**/api/status", (r) =>
+    r.fulfill({ json: { source: "lever", connected: true, proxy: "127.0.0.1:18080" } }),
+  );
   await page.goto("/");
   await expect(page.locator(".statusbar .ok")).toHaveText("● connected");
+  await expect(page.locator(".statusbar .addr")).toHaveText(" 127.0.0.1:18080");
 });

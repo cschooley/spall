@@ -12,7 +12,8 @@
     "typecheck": "tsc -b",
     "lint": "eslint --max-warnings 0 .",
     "test": "node --test --experimental-strip-types --no-warnings=ExperimentalWarning \"src/**/*.test.ts\" \"scripts/**/*.test.mjs\"",
-    "test:e2e": "npm run build && playwright test"
+    "test:e2e": "npm run build && playwright test",
+    "screenshots": "npm run build && SPALL_SCREENSHOTS=1 playwright test e2e/screenshots.spec.ts"
   },
   "dependencies": {
     "@tanstack/react-virtual": "3.14.26",

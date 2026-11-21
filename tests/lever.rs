@@ -438,6 +438,10 @@ async fn status_reports_log_source_without_api() {
     assert!(res.starts_with("HTTP/1.1 200"), "{res}");
     assert!(res.contains(r#""source":"log""#), "{res}");
     assert!(res.contains(r#""connected":null"#), "{res}");
+    assert!(
+        res.contains(r#""proxy":"127.0.0.1:8080""#),
+        "default proxy address: {res}"
+    );
 }
 
 #[tokio::test]
