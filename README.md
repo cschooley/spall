@@ -2,7 +2,7 @@
 
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
-**Status:** pre-alpha. Milestone M0 ("hello": live traffic console). See [docs/architecture.md](docs/architecture.md).
+**Status:** pre-alpha, v0.2.0. M1 (traffic workbench) is done; M2 (replay) is next. See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
@@ -44,14 +44,14 @@ taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.3.0`, amd64
 curl -x http://127.0.0.1:8080 http://example.com
 ```
 
-Open <http://127.0.0.1:3000> and the request appears in the console. Click a row to see headers and bodies.
+Open <http://127.0.0.1:3000> and the request appears in the Traffic view. Click a row (or press `j`) to open it in the inspector.
 
 Ports:
 
 | Port | Service | Bound to |
 |---|---|---|
 | 8080 | taphttp HTTP proxy | 127.0.0.1 |
-| 3000 | spall web console | 127.0.0.1 |
+| 3000 | spall web UI | 127.0.0.1 |
 
 If either port is already in use, override the host side: `TAPHTTP_PORT=18080 SPALL_PORT=13000 docker compose up`. They stay bound to 127.0.0.1.
 
@@ -74,6 +74,19 @@ curl -x http://127.0.0.1:8080 -k https://example.com
 ```
 
 **`-k` is for this demo only.** It turns off certificate checking for the whole request. Never use it against anything you care about, and never put it in scripts.
+
+## Using it
+
+- **Filter** (`/`): `host:example.com`, `method:POST`, `status:404` or `status:4xx`, plus free text matched against URL and host. Filters search taphttp's full history, not just what's on screen; scroll to the top for older pages.
+- **Inspector**: request and response tabs, headers in wire order (repeats numbered `n/N`), bodies (JSON pretty-printed; binary as type, size, sha256 and a hex view). Credential headers are highlighted and shortened until you click "show". Copy as curl, save a body to a file.
+- **Keys**: `?` lists them all. `j` / `k` move, `Esc` closes the inspector, `t` toggles light/dark, `x` shows hex.
+- **Command palette** (`Ctrl K`, `⌘K` on macOS): find a command you don't remember.
+- **Console** (`` ` ``): type commands you do remember (`help` lists them: `filter`, `open <id>`, `curl`, `theme`, …), with history and tab completion. System messages (reconnects, taphttp going away) land here too. The palette and console run the same commands, and so will the MCP server.
+- **Suite launcher** (top right): Kudzu's other tools. Ones not built yet are shown with their light off.
+
+Everything shown comes from captured traffic, so it's treated as hostile: rendered as text only, never as HTML, under a strict Content-Security-Policy.
+
+## Configuration
 
 ### Where traffic comes from
 
@@ -116,7 +129,7 @@ cargo run -- --log-file ./traffic.jsonl
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
-- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null}` for the status bar
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080"}` for the status bar
 - `GET /healthz`: `ok`
 
 The browser never talks to taphttp or sees its token: spall adds the token server-side.
@@ -140,12 +153,29 @@ npm test             # node:test, no browser
 npm run test:e2e     # Playwright: builds the UI, runs spall via cargo, headless Chromium
 npm run screenshots  # regenerate docs/screenshots/traffic*.png (1440x820, fixture traffic)
 npm run build        # then rebuild spall to embed ui/dist
-npm run dev          # Vite on 127.0.0.1:5173, proxying /events and /api to spall on :3000
+npm run dev          # Vite on 127.0.0.1:5173, proxying /events, /api and /healthz to spall on :3000
 ```
 
 Browser tests need a Chromium: either Playwright's (`npx playwright install chromium`, about 100 MB; `ignore-scripts` stops the automatic download), or any recent one via `SPALL_E2E_CHROMIUM=/usr/bin/chromium npm run test:e2e`. Every test fails on a console error, page error, dialog or CSP violation.
 
 Adding an npm dependency: pick a version published at least two weeks ago, and resolve the whole tree as of a date at least two weeks back (`npm install --before=<date>`), so transitive dependencies follow the same rule.
+
+There's no CI yet; it's planned with the suite's security gates (#10). Run the checks above before pushing.
+
+## Roadmap
+
+| Milestone | Scope | Status |
+|---|---|---|
+| M0 hello | Docker Compose with taphttp; live traffic console over SSE | done, `v0.1.0` |
+| M1 traffic workbench | Traffic view: history and search from taphttp's API, filters, shared inspector, command palette and console, verdigris styling | done, `v0.2.0` |
+| M2 replay | Replay from the inspector and console via taphttp; results linked to the original | next |
+| M3 candidates | Flag candidates, triage, suppressions, on flux types | |
+| M4 export | flux export with redaction and fingerprints | |
+| M5 MCP | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop | |
+| M6 intercept | Pause and modify requests via taphttp | |
+| M7 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses | |
+
+Details in [docs/architecture.md](docs/architecture.md) (milestones) and [docs/ux.md](docs/ux.md) (views).
 
 ## Provenance
 

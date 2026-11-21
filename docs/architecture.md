@@ -144,9 +144,9 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 | | Scope |
 |---|---|
-| **M0 hello** | Docker Compose: taphttp + spall; spall tails the JSONL log and streams it to a single-page live console over SSE. See CLAUDE.md. |
-| M1 traffic workbench | Filtering, search, request/response detail view. History comes from taphttp's lever API (its sqlite store), not a spall copy; see below. |
-| M2 replay | Send-to-replay from the UI via taphttp; replay results shown linked to the original. |
+| **M0 hello** (done, `v0.1.0`) | Docker Compose: taphttp + spall; spall tails the JSONL log and streams it to a single-page live console over SSE. |
+| **M1 traffic workbench** (done, `v0.2.0`) | Filtering, search, request/response detail view. History comes from taphttp's lever API (its sqlite store), not a spall copy; see below. |
+| **M2 replay** (current) | Send-to-replay from the UI via taphttp; replay results shown linked to the original. |
 | M3 candidates | Candidate model on flux crate types, manual "flag as candidate", triage states, suppressions. |
 | M4 export | Flux export with redaction and fingerprints. |
 | M5 MCP | MCP server: read traffic, replay, `propose_finding`. No promotion. |

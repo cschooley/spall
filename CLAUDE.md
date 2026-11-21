@@ -61,36 +61,57 @@ client at the proxy, watch traffic in a browser console: compose with
 taphttp + spall, the log tailer, SSE, a static console page, README
 quickstart, tests. Superseded since by M1's stack.
 
-## Current milestone: M1 "traffic workbench"
-
-GitHub milestone "M1 traffic workbench". Goal (docs/architecture.md):
-filtering, search, request/response detail view, history from
-taphttp's lever API.
+**M1 "traffic workbench": done** (tag `v0.2.0`, GitHub milestone
+closed, #3-#12). The Traffic view: history and search from taphttp's
+lever API, filter syntax, virtualized table, shared inspector, command
+palette and `` ` `` console on one command registry
+(`ui/src/commands/registry.ts`), verdigris styling and chrome, and
+Playwright browser tests.
 
 ```
 client --(proxy 127.0.0.1:8080)--> taphttp --> internet
                                       | lever API :8081 (compose network only)
-                                      |   GET /exchanges, /feed?since=, token on its own volume
+                                      |   GET /exchanges, /feed?since=, POST /replay; token on its own volume
                                     spall (Rust, axum) --> browser http://127.0.0.1:3000
                                       | /events (SSE), /api/exchanges, /api/status
                                       | serves ui/ (React + Vite + TS, embedded with rust-embed)
 ```
 
-Built (#3-#9): the frontend stack and its rules (#3), history from the
-lever API (#4), inspector rendering rules (#5), verdigris styling (#6),
-Playwright browser tests (#7), the Traffic view (#8: rail, shared
-inspector, history search, command palette), scaffolding (#9), plus
-mockup chrome (brand mark, five-view rail, suite launcher).
+## Current milestone: M2 "replay"
 
-Also done: the `` ` `` console and one command registry shared with
-the palette (#11), and the mockup-parity review (#12). No M1 issues
-remain open; closing the milestone and tagging `v0.2.0` is pending.
-Next is M2 (replay).
+Goal (docs/architecture.md): send-to-replay from the UI via taphttp;
+replay results shown linked to the original. docs/ux.md: replay lives
+in the inspector (edit, send, see original and replay side by side);
+the mockup shows a Replay button (`⏎`) and a Replays tab. M2 issues are
+not filed yet.
 
-Explicitly not in M1: replay (M2), candidates, triage and flux (M3),
-export (M4), MCP server, agent tasks, e-stop, attribution (M5),
-intercept (M6), image preview (#15, later). Unbuilt views and tools
-appear as dimmed, inert placeholders (docs/ux.md) until they ship.
+What exists: taphttp v0.3.0 `POST /replay` takes `{id, method?,
+headers?, body?}`, records the result as a new exchange with
+`replay_of` set, and returns it (it also appears on `/feed`). The
+registry reserves `replay` (mockup: `replay <id> [--header H:V]`).
+
+Known constraints and requirements:
+
+- **CSRF.** Replay is spall's first state-changing endpoint, on an
+  unauthenticated localhost app. The Host allowlist doesn't stop it: a
+  cross-site POST from any web page carries `Host: 127.0.0.1:3000`. A
+  forged replay would resend the tester's captured requests, with their
+  credentials, to targets the attacker picks. Require same-origin
+  (check `Origin` / `Sec-Fetch-Site`), accept only `application/json`
+  (forces a CORS preflight that spall never approves), and test it from
+  a foreign origin.
+- spall proxies replay server-side (`POST /api/replay`); the token never
+  reaches the browser.
+- taphttp v0.3.0 gaps (file on taphttp when needed): header overrides
+  are a name->value map (no repeated headers); the body override is a
+  string (binary bodies can only be replayed as captured); `GET
+  /exchanges` can't filter by `replay_of`, which a Replays tab wants.
+- Agent-driven replay is M5 (MCP), not M2.
+
+Explicitly not in M2: candidates, triage and flux (M3), export (M4),
+MCP server, agent tasks, e-stop, attribution (M5), intercept (M6),
+image preview (#15, later). Unbuilt views and tools stay dimmed, inert
+placeholders (docs/ux.md) until they ship.
 
 ## Testing
 
