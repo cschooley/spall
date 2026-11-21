@@ -13,9 +13,11 @@ assessment workbench for interactive and agentic web app testing.
 - **Findings** are flux (a SARIF 2.1.0 profile), via the `flux` crate.
 
 spall does **not** proxy traffic itself. taphttp does that. spall
-consumes taphttp's traffic log, replay, and intercept hook. If you
-are about to write proxy, TLS, or CA code in this repo, stop: it
-belongs in taphttp.
+consumes taphttp's lever API (history, live feed, replay), its traffic
+log as a fallback, and later its intercept hook. If you are about to
+write proxy, TLS, or CA code in this repo, stop: it belongs in taphttp.
+When taphttp needs a change, file it there (and note it in
+`docs/taphttp-requests.md`) instead of working around it here.
 
 Read `docs/architecture.md` before designing anything beyond the
 current milestone. Read `docs/ux.md` before building any UI: spall is
@@ -25,7 +27,9 @@ repo) before touching findings.
 
 UI styling comes from verdigris (`cschooley/verdigris`): use its
 `tokens.css` variables, never hard-coded colors, and treat its
-`mockups/spall-*.html` as the visual target.
+`mockups/spall-*.html` as the visual target. Tokens and icons are
+vendored (copied, pinned to a verdigris tag, never edited here) in
+`ui/src/vendor/verdigris/`; see its `SOURCE.md` to re-vendor.
 
 ## Hard rules
 
@@ -50,66 +54,44 @@ UI styling comes from verdigris (`cschooley/verdigris`): use its
 - **Authorized testing only.** README states plainly that spall is
   for authorized testing and local development.
 
-## Current milestone: M0 "hello"
+## Milestones
 
-Goal: `docker compose up`, point a client at the proxy, watch traffic
-scroll by in a browser console. Nothing else.
+**M0 "hello": done** (tag `v0.1.0`). `docker compose up`, point a
+client at the proxy, watch traffic in a browser console: compose with
+taphttp + spall, the log tailer, SSE, a static console page, README
+quickstart, tests. Superseded since by M1's stack.
+
+## Current milestone: M1 "traffic workbench"
+
+GitHub milestone "M1 traffic workbench". Goal (docs/architecture.md):
+filtering, search, request/response detail view, history from
+taphttp's lever API.
 
 ```
-client --(HTTP proxy :8080)--> taphttp --> internet
-                                  |
-                       /data/traffic.jsonl (shared volume)
-                                  |
-                               spall (tails file)
-                                  |  SSE
-                                  v
-                       browser: http://127.0.0.1:3000
+client --(proxy 127.0.0.1:8080)--> taphttp --> internet
+                                      | lever API :8081 (compose network only)
+                                      |   GET /exchanges, /feed?since=, token on its own volume
+                                    spall (Rust, axum) --> browser http://127.0.0.1:3000
+                                      | /events (SSE), /api/exchanges, /api/status
+                                      | serves ui/ (React + Vite + TS, embedded with rust-embed)
 ```
 
-### Deliverables
+Built (#3-#9): the frontend stack and its rules (#3), history from the
+lever API (#4), inspector rendering rules (#5), verdigris styling (#6),
+Playwright browser tests (#7), the Traffic view (#8: rail, shared
+inspector, history search, command palette), scaffolding (#9), plus
+mockup chrome (brand mark, five-view rail, suite launcher).
 
-1. **`docker-compose.yml`** with two services sharing a volume:
-   - `taphttp`: built from `https://github.com/cschooley/taphttp.git`
-     (compose `build.context` with a git URL, or a Dockerfile under
-     `docker/taphttp/` that clones and builds; pick one and say why).
-     Runs `taphttp start --listen 0.0.0.0:8080 --log-file /data/traffic.jsonl`
-     with its data dir (CA) on a named volume so the CA survives
-     restarts. Port published as `127.0.0.1:8080:8080`.
-   - `spall`: this repo. Port `127.0.0.1:3000:3000`. Mounts the same
-     volume read-only.
-2. **spall binary** (Rust, tokio + axum):
-   - Tails `/data/traffic.jsonl` (handles file not existing yet,
-     truncation, and partial lines).
-   - Parses each line as a taphttp `TrafficEntry`. Malformed lines
-     are logged and skipped, never crash the tailer.
-   - `GET /events`: Server-Sent Events, one event per entry.
-   - `GET /`: a single static HTML page (no framework, no build step
-     for M0) showing a live, scrolling table: time, method, host,
-     path, status, duration. Click a row to expand headers and bodies.
-   - `GET /healthz`.
-   - Config via env/flags: log path, listen address.
-3. **README quickstart**: `docker compose up`, then
-   `curl -x http://127.0.0.1:8080 http://example.com`, then open
-   `http://127.0.0.1:3000`. For HTTPS, show how to get the taphttp CA
-   out of the volume (`taphttp ca info`) or use `curl --proxy-insecure -k`
-   for the demo, and say clearly that `-k` is demo-only.
-4. **Tests** (TDD, see below): tailer behavior (append, partial
-   line, truncation, missing file), entry parsing, SSE endpoint emits
-   an event for an appended line. One end-to-end test that runs
-   against a temp file, no Docker required.
+Remaining:
 
-### Explicitly not in M0
+- **#11**: backtick console and one command registry (palette,
+  console, later the MCP server).
+- **#12**: the rest of the mockup-parity review.
 
-- Findings, triage, flux export
-- MCP server
-- Intercept (pause/modify) via taphttp's `--intercept-socket`
-- Replay
-- An SPA framework or JS build pipeline
-- Auth (M0 is localhost-only; see hard rules)
-
-If you notice taphttp needs a change to make M0 work (e.g. it has no
-Dockerfile, or the log format lacks something), note it in
-`docs/taphttp-requests.md` instead of working around it here.
+Explicitly not in M1: replay (M2), candidates, triage and flux (M3),
+export (M4), MCP server, agent tasks, e-stop, attribution (M5),
+intercept (M6), image preview (#15, later). Unbuilt views and tools
+appear as dimmed, inert placeholders (docs/ux.md) until they ship.
 
 ## Testing
 
@@ -119,8 +101,15 @@ TDD, same as the rest of the suite:
   catch its regression.
 - Unit-test non-trivial logic in its module (`#[cfg(test)] mod tests`).
 - Integration-test user-visible workflows.
-- `cargo test` green and `cargo clippy -- -D warnings` clean before
-  committing.
+- `cargo test` green and `cargo clippy --all-targets -- -D warnings`
+  clean before committing.
+- UI (`ui/`, Node from `ui/.nvmrc`): `npm run lint`, `npm test`
+  (node:test) and `npm run test:e2e` (Playwright, headless Chromium;
+  `SPALL_E2E_CHROMIUM=/usr/bin/chromium` to use a system browser) all
+  green. Untrusted-content rendering is always covered.
+- New npm or Rust dependencies: versions at least two weeks old,
+  transitive ones included (`npm install --before=<date>`;
+  `cargo update --precise`).
 - No `.unwrap()` / `.expect()` in non-test code.
 
 ## Provenance
