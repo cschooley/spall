@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./roe.ts";
 test("engagements from the API are shape-checked; junk is dropped, not trusted", () => {
   assert.deepEqual(
     asEngagement({ id: "a-1", name: "A", client: 7, starts: "2026-11-23", ends: "", scope: ["a.test", 3, "!b.test"], extra: "<b>" }),
-    { id: "a-1", name: "A", client: "", starts: "2026-11-23", ends: null, expires: null, scope: ["a.test", "!b.test"], notes: "", rules: DEFAULT_RULES, testingNow: null },
+    { id: "a-1", name: "A", client: "", starts: "2026-11-23", ends: null, expires: null, scope: ["a.test", "!b.test"], notes: "", targetNotes: {}, rules: DEFAULT_RULES, testingNow: null },
   );
   for (const bad of [null, "x", [], { id: 1, name: "x" }, { id: "x" }]) assert.equal(asEngagement(bad), null, JSON.stringify(bad));
   assert.deepEqual(asSummaries([{ id: "a", name: "A", active: true }, { nope: 1 }, { id: "b", name: "B", client: "C" }]), [
@@ -19,8 +19,29 @@ test("engagements from the API are shape-checked; junk is dropped, not trusted",
 test("testing-now and rules from the API", () => {
   assert.deepEqual(testingOf({ allowed: false, reason: "in a no-test window" }), { allowed: false, reason: "in a no-test window" });
   assert.equal(testingOf({ allowed: "yes" }), null);
+  assert.deepEqual(asEngagement({ id: "a", name: "A", target_notes: { "a.test": "staging", bad: 3 } })?.targetNotes, { "a.test": "staging" });
   const e = asEngagement({ id: "a", name: "A", rules: { rate_limit: null, windows: [{ days: ["mon", "funday"], start: "09:00", end: "17:00" }, { nope: 1 }] } });
   assert.equal(e?.rules.rate_limit, null);
   assert.deepEqual(e?.rules.windows, [{ days: ["mon"], start: "09:00", end: "17:00" }]);
   assert.deepEqual(e?.rules.safe_methods, DEFAULT_RULES.safe_methods, "missing fields take the defaults");
+});
+
+test("the authorization countdown", async () => {
+  const { expiryText, todayIn, viewFromHash } = await import("./engagement.ts");
+  assert.deepEqual(expiryText("2026-11-30", "2026-11-22"), { text: "authorization expires in 8 days", tone: "ok" });
+  assert.deepEqual(expiryText("2026-11-24", "2026-11-22"), { text: "authorization expires in 2 days", tone: "soon" });
+  assert.deepEqual(expiryText("2026-11-23", "2026-11-22"), { text: "authorization expires in 1 day", tone: "soon" });
+  assert.equal(expiryText("2026-11-22", "2026-11-22")?.tone, "soon");
+  assert.deepEqual(expiryText("2026-11-20", "2026-11-22"), { text: "authorization expired 2 days ago", tone: "past" });
+  assert.deepEqual(expiryText("2027-03-01", "2026-02-28"), { text: "authorization expires in 366 days", tone: "ok" }, "across a leap day");
+  assert.equal(expiryText(null, "2026-11-22"), null);
+  assert.equal(expiryText("soon", "2026-11-22"), null);
+  // 2026-11-22T12:00Z is already the 23rd in Auckland.
+  const now = new Date("2026-11-22T12:00:00Z");
+  assert.equal(todayIn("Pacific/Auckland", now), "2026-11-23");
+  assert.equal(todayIn("America/Chicago", now), "2026-11-22");
+  assert.equal(todayIn("Mars/Olympus", now), "2026-11-22", "unknown zones fall back to UTC");
+  assert.equal(viewFromHash("#engagement"), "engagement");
+  assert.equal(viewFromHash(""), "traffic");
+  assert.equal(viewFromHash("#surface"), "traffic", "unbuilt views fall back");
 });

@@ -62,6 +62,8 @@ export interface EngagementInfo {
   expires: string | null;
   scope: readonly string[];
   notes: string;
+  /** A note per scope entry (`!entry` for an exclusion). */
+  targetNotes: Record<string, string>;
   rules: Rules;
   /** Whether the rules allow testing right now, and why not. */
   testingNow: { allowed: boolean; reason: string | null } | null;

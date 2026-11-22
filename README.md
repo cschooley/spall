@@ -104,6 +104,9 @@ curl -x http://127.0.0.1:8080 -k https://example.com
 
 ## Using it
 
+Two views are built so far: **Engagement** (`1`) and **Traffic** (`2`), on the left rail. spall opens on Traffic.
+
+- **Engagement view** (`1`): the active engagement. You can edit its details (dates, authorization expiry with a countdown, notes) and its scope: add, exclude, remove, a note per target, and a check box for any URL or host. Its rules of engagement are there too: methods, confirmation, rate, time zone, testing and no-test windows, agents. A chip says whether testing is allowed right now, and why not. You can also switch engagements or start a new one. Every change goes through the same audited API as the console. Panels for later milestones (candidates, tasks, coverage, browser setup) are shown dimmed.
 - **Filter** (`/`): `host:example.com`, `method:POST`, `status:404` or `status:4xx`, `replay:yes` / `replay:no`, plus free text matched against URL and host. Filters search taphttp's full history, not just what's on screen; scroll to the top for older pages.
 - **Inspector**: request and response tabs, headers in wire order (repeats numbered `n/N`), bodies (JSON pretty-printed; binary as type, size, sha256 and a hex view). Credential headers are highlighted and shortened until you click "show". Copy as curl, save a body to a file.
 - **Replay** (`⏎`, or the inspector's Replay button): resends the open exchange as captured, through taphttp, and opens the result; "replay of …" links back to the original. `POST`, `PUT`, `PATCH`, `DELETE` and other unsafe methods take two presses: the first arms the button ("press again to send DELETE to …"), the second sends. Arming lapses after 5 seconds or on any other key or click. Out-of-scope replays are refused with the reason (see [Replay and scope](#replay-and-scope)). Needs the lever API.

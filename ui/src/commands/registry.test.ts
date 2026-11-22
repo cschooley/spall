@@ -12,6 +12,7 @@ const ENG = {
   expires: null,
   scope: ["*.acme.test", "acme.test", "!pay.acme.test"],
   notes: "",
+  targetNotes: {},
   rules: DEFAULT_RULES,
   testingNow: { allowed: true, reason: null },
 };

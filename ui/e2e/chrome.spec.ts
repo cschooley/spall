@@ -11,7 +11,7 @@ test("the brand shows the spall mark from verdigris", async ({ page }) => {
   await expect(page.locator(".brand")).toHaveText("spall");
 });
 
-test("the rail shows all five views in order; only Traffic is live", async ({ page }) => {
+test("the rail shows all five views in order; Engagement and Traffic are live", async ({ page }) => {
   await page.goto("/");
   const items = page.locator(".rail > *");
   await expect(items).toHaveCount(5);
@@ -30,7 +30,8 @@ test("the rail shows all five views in order; only Traffic is live", async ({ pa
   const traffic = page.getByRole("link", { name: "Traffic" });
   await expect(traffic).toHaveAttribute("aria-current", "page");
   await expect(traffic).toHaveAttribute("title", "Traffic (2)");
-  for (const [view, key] of [["engagement", "1"], ["surface", "3"], ["tasks", "4"], ["findings", "5"]] as const) {
+  await expect(page.getByRole("link", { name: "Engagement" })).toHaveAttribute("title", "Engagement (1)");
+  for (const [view, key] of [["surface", "3"], ["tasks", "4"], ["findings", "5"]] as const) {
     const el = page.locator(`.rail [data-view='${view}']`);
     await expect(el).toHaveAttribute("aria-disabled", "true");
     await expect(el).toHaveClass(/todo/);

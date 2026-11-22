@@ -56,7 +56,11 @@ export const test = base.extend<{ guard: void }>({
         const gateAnswer =
           /^Failed to load resource: the server responded with a status of (403|409|428|429|502)\b/.test(m.text()) &&
           m.location().url.endsWith("/api/replay");
-        if (gateAnswer) return;
+        // A refused engagement change (bad input) is a 400 on purpose too.
+        const refusedChange =
+          /^Failed to load resource: the server responded with a status of 400\b/.test(m.text()) &&
+          m.location().url.endsWith("/api/engagement");
+        if (gateAnswer || refusedChange) return;
         if (m.type() === "error" || m.type() === "warning") problems.push(`console ${m.type()}: ${m.text()}`);
       });
       page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));

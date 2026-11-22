@@ -148,3 +148,44 @@ export function asRules(v: unknown): Rules {
     destructive_allowed: o.destructive_allowed === true,
   };
 }
+
+/** The rules' simple fields as form text. */
+export interface RulesForm {
+  methods: string;
+  safe: string;
+  rate: string;
+  tz: string;
+  agents: boolean;
+  destructive: boolean;
+}
+
+export function rulesFormOf(r: Rules): RulesForm {
+  return {
+    methods: r.methods.length ? r.methods.join(", ") : "any",
+    safe: r.safe_methods.join(", "),
+    rate: r.rate_limit === null ? "off" : String(r.rate_limit),
+    tz: r.time_zone,
+    agents: r.agents_allowed,
+    destructive: r.destructive_allowed,
+  };
+}
+
+/** The changes a form makes to the rules (only what changed), or a message. */
+export function rulesPatchOf(f: RulesForm, r: Rules): Partial<Rules> | string {
+  const patch: Partial<Rules> = {};
+  const methods = parseMethods(f.methods);
+  if (methods === null) return "methods: comma-separated names like GET, POST (or any)";
+  const safe = f.safe.trim() === "" ? [] : parseMethods(f.safe);
+  if (safe === null || (f.safe.trim().toLowerCase() === "any")) return "methods sent without confirmation: names like GET, HEAD (empty: confirm every method)";
+  const same = (a: string[], b: string[]) => a.join(",") === b.join(",");
+  if (!same(methods, r.methods)) patch.methods = methods;
+  if (!same(safe, r.safe_methods)) patch.safe_methods = safe;
+  const rateText = f.rate.trim().toLowerCase();
+  const rate = rateText === "off" || rateText === "" || rateText === "0" ? null : Number(rateText);
+  if (rate !== null && !(Number.isFinite(rate) && rate > 0)) return "rate: sends per second, like 5 or 0.5 (or off)";
+  if (rate !== r.rate_limit) patch.rate_limit = rate ?? 0;
+  if (f.tz.trim() !== r.time_zone) patch.time_zone = f.tz.trim();
+  if (f.agents !== r.agents_allowed) patch.agents_allowed = f.agents;
+  if (f.destructive !== r.destructive_allowed) patch.destructive_allowed = f.destructive;
+  return patch;
+}

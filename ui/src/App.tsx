@@ -5,13 +5,14 @@ import { Console } from "./components/Console.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { Inspector, type Tab as InspectorTab } from "./components/Inspector.tsx";
 import { Launcher } from "./components/Launcher.tsx";
-import { Rail } from "./components/Rail.tsx";
+import { Rail, VIEWS } from "./components/Rail.tsx";
 import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
 import { addLine, clearLog, emptyLog, markRead } from "./lib/consoleLog.ts";
 import { toCurl } from "./lib/curl.ts";
 import { durationText, shortId, statusLine } from "./lib/format.ts";
-import { apiJson, asEngagement, asSummaries } from "./lib/engagement.ts";
+import { apiJson, asEngagement, asSummaries, viewFromHash, type ViewId } from "./lib/engagement.ts";
+import { EngagementView } from "./components/EngagementView.tsx";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
 import { applyHeaderEdits, draftOf, replayBodyFor, type Draft } from "./lib/edit.ts";
 import { ARM_MS, armedFor, armLabel, postReplay, type Armed, type ReplayBody } from "./lib/replay.ts";
@@ -131,6 +132,14 @@ function hostOf(e: TrafficEntry): string {
 }
 
 export function App() {
+  // Views (docs/ux.md): the location hash names one; keys 1-5 switch to
+  // the built ones (Rail.tsx).
+  const [view, setView] = useState<ViewId>(() => viewFromHash(window.location.hash));
+  useEffect(() => {
+    const onHash = () => setView(viewFromHash(window.location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const { store, connection, clear } = useTraffic();
   const [statusNonce, setStatusNonce] = useState(0);
   const status = useSourceStatus(5000, statusNonce);
@@ -490,6 +499,12 @@ export function App() {
         return;
       }
       if (palette || e.ctrlKey || e.metaKey || e.altKey) return;
+      const goto = VIEWS.find((v) => v.built && v.key === e.key && !sheet);
+      if (goto) {
+        e.preventDefault();
+        window.location.hash = goto.id;
+        return;
+      }
       if (e.key !== "Enter" && !["Shift", "Control", "Alt", "Meta"].includes(e.key)) setArmed(null);
       if (e.key === "Enter") {
         // A focused button or tab takes Enter itself (the Replay button's
@@ -513,19 +528,21 @@ export function App() {
         else setSelected(null);
       } else if (sheet) {
         return;
+      } else if (e.key === "t") toggleMode();
+      else if (view !== "traffic") {
+        // The rest are Traffic's keys.
+        return;
       } else if (e.key === "/") {
         e.preventDefault();
         focusFilter();
       } else if (e.key === "j") move(1);
       else if (e.key === "k") move(-1);
-      else if (e.key === "t") toggleMode();
       else if (e.key === "x") document.querySelector<HTMLButtonElement>(".inspector [data-action='hex']")?.click();
       else if (e.key === "e") document.querySelector<HTMLButtonElement>(".inspector [data-action='edit']")?.click();
-      // 1-5 will switch views once a second view ships (see Rail.tsx).
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter, selected, replay]);
+  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter, selected, replay, view]);
 
   // Any click outside the Replay button disarms it.
   useEffect(() => {
@@ -563,73 +580,79 @@ export function App() {
         <Launcher taphttpConnected={status.source === "lever" ? status.connected : null} />
       </header>
 
-      <Rail current="traffic" />
+      <Rail current={view} />
 
-      <main className={selected ? "with-inspector" : undefined}>
-        <div className="toolbar">
-          <input
-            ref={filterInput}
-            type="search"
-            className="filter"
-            aria-label="Filter"
-            placeholder="filter   host:example.com  method:POST  status:4xx  text"
-            autoComplete="off"
-            spellCheck={false}
-            value={filterText}
-            onChange={(e) => setFilterText(e.target.value)}
+      {view === "engagement" ? (
+        <main className="eng-main">
+          <EngagementView available={status.replay} onChanged={() => setStatusNonce((n) => n + 1)} />
+        </main>
+      ) : (
+        <main className={selected ? "with-inspector" : undefined}>
+          <div className="toolbar">
+            <input
+              ref={filterInput}
+              type="search"
+              className="filter"
+              aria-label="Filter"
+              placeholder="filter   host:example.com  method:POST  status:4xx  text"
+              autoComplete="off"
+              spellCheck={false}
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+            />
+            {query.ignored.length ? (
+              <span className="warn" title="by: arrives with agent attribution (M5)">
+                {`ignored: ${query.ignored.join(" ")}`}
+              </span>
+            ) : null}
+            <label className="follow">
+              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow
+            </label>
+            <button type="button" onClick={clearAll}>
+              clear
+            </button>
+            <span className="note">{historyNote}</span>
+            <span className="spacer" />
+            <button type="button" className="hint" onClick={() => setPalette(true)}>
+              <kbd>{`${modKey()} K`}</kbd> commands
+            </button>
+          </div>
+          <TrafficTable
+            rows={rows}
+            selectedId={selected?.id ?? null}
+            onSelect={select}
+            follow={follow}
+            setFollow={setFollow}
+            onNearTop={history.loadOlder}
+            appliedFilter={debounced}
+            empty={isEmptyQuery(query) ? "No traffic. Point a client at 127.0.0.1:8080." : "No exchanges match this filter."}
           />
-          {query.ignored.length ? (
-            <span className="warn" title="by: arrives with agent attribution (M5)">
-              {`ignored: ${query.ignored.join(" ")}`}
-            </span>
+          {selected ? (
+            <Inspector
+              key={selected.id}
+              entry={selected}
+              onClose={() => setSelected(null)}
+              onOpen={(id, tab) => {
+                setOpenTab(tab ? { id, tab } : null);
+                void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
+              }}
+              original={original}
+              initialTab={openTab?.id === selected.id ? openTab.tab : "request"}
+              replays={replayList}
+              chain={chain}
+              replay={{
+                available: status.replay,
+                busy: replayBusy === selected.id,
+                // The expiry timer clears `armed`, so no clock read here.
+                armedLabel: armed?.id === selected.id ? armed.label : null,
+                message: replayMsg?.id === selected.id ? replayMsg.text : null,
+                onReplay: (draft) => void replay(selected.id, draft ? { yes: false, draft } : { yes: false }),
+                onDraftChange: () => setArmed(null),
+              }}
+            />
           ) : null}
-          <label className="follow">
-            <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow
-          </label>
-          <button type="button" onClick={clearAll}>
-            clear
-          </button>
-          <span className="note">{historyNote}</span>
-          <span className="spacer" />
-          <button type="button" className="hint" onClick={() => setPalette(true)}>
-            <kbd>{`${modKey()} K`}</kbd> commands
-          </button>
-        </div>
-        <TrafficTable
-          rows={rows}
-          selectedId={selected?.id ?? null}
-          onSelect={select}
-          follow={follow}
-          setFollow={setFollow}
-          onNearTop={history.loadOlder}
-          appliedFilter={debounced}
-          empty={isEmptyQuery(query) ? "No traffic. Point a client at 127.0.0.1:8080." : "No exchanges match this filter."}
-        />
-        {selected ? (
-          <Inspector
-            key={selected.id}
-            entry={selected}
-            onClose={() => setSelected(null)}
-            onOpen={(id, tab) => {
-              setOpenTab(tab ? { id, tab } : null);
-              void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
-            }}
-            original={original}
-            initialTab={openTab?.id === selected.id ? openTab.tab : "request"}
-            replays={replayList}
-            chain={chain}
-            replay={{
-              available: status.replay,
-              busy: replayBusy === selected.id,
-              // The expiry timer clears `armed`, so no clock read here.
-              armedLabel: armed?.id === selected.id ? armed.label : null,
-              message: replayMsg?.id === selected.id ? replayMsg.text : null,
-              onReplay: (draft) => void replay(selected.id, draft ? { yes: false, draft } : { yes: false }),
-              onDraftChange: () => setArmed(null),
-            }}
-          />
-        ) : null}
-      </main>
+        </main>
+      )}
 
       <footer className="statusbar">
         <span>

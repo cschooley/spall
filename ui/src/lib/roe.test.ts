@@ -47,3 +47,21 @@ test("rules read as a few lines", () => {
     "agents: allowed · destructive actions: not allowed",
   ]);
 });
+
+test("the rules form sends only what changed", async () => {
+  const { rulesFormOf, rulesPatchOf } = await import("./roe.ts");
+  const f = rulesFormOf(DEFAULT_RULES);
+  assert.deepEqual(f, { methods: "any", safe: "GET, HEAD, OPTIONS", rate: "10", tz: "UTC", agents: false, destructive: false });
+  assert.deepEqual(rulesPatchOf(f, DEFAULT_RULES), {});
+  assert.deepEqual(rulesPatchOf({ ...f, methods: "get,post", rate: "off", tz: " Europe/Berlin ", agents: true }, DEFAULT_RULES), {
+    methods: ["GET", "POST"],
+    rate_limit: 0,
+    time_zone: "Europe/Berlin",
+    agents_allowed: true,
+  });
+  assert.deepEqual(rulesPatchOf({ ...f, safe: "" }, DEFAULT_RULES), { safe_methods: [] });
+  assert.deepEqual(rulesPatchOf({ ...f, rate: "2.5" }, DEFAULT_RULES), { rate_limit: 2.5 });
+  for (const bad of [{ ...f, rate: "fast" }, { ...f, rate: "-1" }, { ...f, methods: "G@T" }, { ...f, safe: "any" }]) {
+    assert.equal(typeof rulesPatchOf(bad, DEFAULT_RULES), "string", JSON.stringify(bad));
+  }
+});

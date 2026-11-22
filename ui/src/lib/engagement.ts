@@ -9,6 +9,11 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
 const optStr = (v: unknown) => (typeof v === "string" && v !== "" ? v : null);
 const strings = (v: unknown) => (Array.isArray(v) ? v.filter((s): s is string => typeof s === "string") : []);
 
+const notesOf = (v: unknown): Record<string, string> =>
+  v && typeof v === "object" && !Array.isArray(v)
+    ? Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((kv): kv is [string, string] => typeof kv[1] === "string"))
+    : {};
+
 /** An engagement from the API, or null if it isn't one. */
 export function asEngagement(v: unknown): EngagementInfo | null {
   if (!v || typeof v !== "object") return null;
@@ -23,6 +28,7 @@ export function asEngagement(v: unknown): EngagementInfo | null {
     expires: optStr(o.expires),
     scope: strings(o.scope),
     notes: str(o.notes),
+    targetNotes: notesOf(o.target_notes),
     rules: asRules(o.rules),
     testingNow: testingOf(o.testing_now),
   };
@@ -59,4 +65,38 @@ export async function apiJson(path: string, init?: { method: string; body: unkno
   } catch {
     return "spall unreachable";
   }
+}
+
+/** Today's date (`YYYY-MM-DD`) in a time zone; UTC if the zone is unknown. */
+export function todayIn(timeZone: string, now: Date): string {
+  const fmt = (tz: string) => new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  try {
+    return fmt(timeZone);
+  } catch {
+    return fmt("UTC");
+  }
+}
+
+const dayNumber = (d: string) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  return m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86_400_000 : null;
+};
+
+/** The authorization countdown: "expires in 3 days", "expired 2 days ago". */
+export function expiryText(expires: string | null, today: string): { text: string; tone: "ok" | "soon" | "past" } | null {
+  const e = expires ? dayNumber(expires) : null;
+  const t = dayNumber(today);
+  if (e === null || t === null) return null;
+  const n = e - t;
+  const days = (k: number) => `${k} day${k === 1 ? "" : "s"}`;
+  if (n < 0) return { text: `authorization expired ${days(-n)} ago`, tone: "past" };
+  if (n === 0) return { text: "authorization expires today (through end of day)", tone: "soon" };
+  return { text: `authorization expires in ${days(n)}`, tone: n <= 3 ? "soon" : "ok" };
+}
+
+export type ViewId = "engagement" | "traffic";
+
+/** The view a location hash names; Traffic by default. */
+export function viewFromHash(hash: string): ViewId {
+  return hash.replace(/^#/, "") === "engagement" ? "engagement" : "traffic";
 }
