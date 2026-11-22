@@ -161,13 +161,17 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 tracing::warn!(
                     "no engagement scope (--scope / SPALL_SCOPE): every replay will be denied"
                 );
+            } else if config.scope.allows_all() {
+                tracing::warn!(
+                    "scope is * (SPALL_SCOPE): replays may go to every host, third parties included"
+                );
             } else {
                 tracing::info!("replay scope: {}", config.scope.entries().join(", "));
             }
             tracing::info!("audit log: {}", config.audit_log.display());
             Some(Arc::new(replay::Replayer {
                 lever: lever.clone(),
-                scope: config.scope.clone(),
+                scope: std::sync::RwLock::new(config.scope.clone()),
                 policy: config.safe_methods.clone(),
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,

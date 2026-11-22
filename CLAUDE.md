@@ -105,7 +105,9 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
   `src/gate.rs` (pure check), `src/confirm.rs` (tokens), `src/audit.rs`
   (JSONL), `src/replay.rs` (the chain); `--scope`, `--safe-methods`,
   `--audit-log`; `GET /api/audit`; console `audit` / `scope`; every
-  registry command has a `risk` class.
+  registry command has a `risk` class. Scope changes at runtime
+  (`scope add|remove`, `scope all on|off`, `SPALL_SCOPE=*`; `POST
+  /api/scope`) are in memory, audited, and `policy` risk: never MCP.
 
 What exists: taphttp v0.6.0 (`taphttp-types` 0.5.0, schema v5;
 cschooley/taphttp#10 shipped). `POST /replay` takes `{id, method?,

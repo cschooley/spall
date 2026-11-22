@@ -14,7 +14,7 @@ use crate::lever::Lever;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use taphttp_types::TrafficEntry;
 
@@ -137,10 +137,20 @@ pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
     }
 }
 
+/// A runtime scope change (#21 follow-up): in memory until restart.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "op", rename_all = "lowercase")]
+pub enum ScopeChange {
+    Add { entry: String },
+    Remove { entry: String },
+    All { on: bool },
+}
+
 /// Everything the handler needs.
 pub struct Replayer {
     pub lever: Arc<Lever>,
-    pub scope: Scope,
+    /// Starts as --scope / SPALL_SCOPE; changed at runtime by the tester only.
+    pub scope: RwLock<Scope>,
     pub policy: MethodPolicy,
     pub confirmations: Confirmations,
     pub audit: AuditLog,
@@ -162,6 +172,42 @@ fn upstream_json(body: &[u8]) -> serde_json::Value {
 }
 
 impl Replayer {
+    /// The scope as it is now (each replay decides on one snapshot).
+    pub fn scope_now(&self) -> Scope {
+        self.scope.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// Apply a change and audit it. Returns the new scope and whether
+    /// anything changed; `Err` is a message safe to show.
+    pub fn change_scope(&self, change: &ScopeChange) -> Result<(Scope, bool), String> {
+        let mut scope = self.scope.write().unwrap_or_else(|p| p.into_inner());
+        let (changed, what) = match change {
+            ScopeChange::Add { entry } => (scope.add(entry)?, format!("add {}", entry.trim())),
+            ScopeChange::Remove { entry } => {
+                (scope.remove(entry), format!("remove {}", entry.trim()))
+            }
+            ScopeChange::All { on } => {
+                let changed = scope.allows_all() != *on;
+                *scope = scope.with_all(*on);
+                (
+                    changed,
+                    format!("all hosts {}", if *on { "on" } else { "off" }),
+                )
+            }
+        };
+        let now = scope.clone();
+        drop(scope);
+        let mut rec = Record::new("scope", "", Outcome::ScopeChanged);
+        rec.reason = Some(what);
+        rec.scope_all = now.allows_all();
+        rec.error = (!changed).then(|| "no change".to_string());
+        self.audit(&rec);
+        if changed && now.allows_all() {
+            tracing::warn!("scope: every host is in scope until restart or `scope all off`");
+        }
+        Ok((now, changed))
+    }
+
     fn audit(&self, rec: &Record) {
         if let Err(e) = self.audit.record(rec) {
             tracing::error!(
@@ -232,8 +278,10 @@ impl Replayer {
         rec.method = Some(eff.method.clone());
         rec.target = Some(eff.url.clone());
         rec.host_header = eff.host_header.clone();
+        let scope = self.scope_now();
+        rec.scope_all = scope.allows_all();
         let decision = gate::check(
-            &self.scope,
+            &scope,
             &self.policy,
             &Action {
                 method: &eff.method,

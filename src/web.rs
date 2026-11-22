@@ -76,6 +76,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/exchanges", get(api_exchanges))
         .route("/api/exchanges/{id}", get(api_exchange))
         .route("/api/audit", get(api_audit))
+        .route("/api/scope", post(api_scope))
         .route(
             "/api/replay",
             post(api_replay).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
@@ -202,11 +203,9 @@ async fn proxy(lever: Option<&Arc<Lever>>, path_and_query: &str) -> Response {
 /// `replay` is whether replay is available (lever API mode), and `scope`
 /// the engagement scope it's held to.
 async fn api_status(State(state): State<AppState>) -> Response {
-    let scope = state
-        .replayer
-        .as_ref()
-        .map(|r| r.scope.entries())
-        .unwrap_or_default();
+    let now = state.replayer.as_ref().map(|r| r.scope_now());
+    let scope = now.as_ref().map(|s| s.entries()).unwrap_or_default();
+    let scope_all = now.as_ref().is_some_and(|s| s.allows_all());
     let mut body = match &state.lever {
         Some(lever) => {
             serde_json::json!({ "source": "lever", "connected": lever.connected(), "proxy": &*state.proxy_address })
@@ -217,6 +216,7 @@ async fn api_status(State(state): State<AppState>) -> Response {
     };
     body["replay"] = state.replayer.is_some().into();
     body["scope"] = scope.into();
+    body["scope_all"] = scope_all.into();
     axum::Json(body).into_response()
 }
 
@@ -247,6 +247,33 @@ async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Re
                 "could not read the audit log",
             )
         }
+    }
+}
+
+/// Change the engagement scope for this run (`scope add|remove|all` in
+/// the console). Same-origin only, like every POST; audited. Not offered
+/// to agents.
+async fn api_scope(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(replayer) = &state.replayer else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "scope needs taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    let Ok(change) = serde_json::from_slice::<crate::replay::ScopeChange>(&body) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            r#"want {"op":"add"|"remove","entry":"..."} or {"op":"all","on":bool}"#,
+        );
+    };
+    match replayer.change_scope(&change) {
+        Ok((scope, changed)) => axum::Json(serde_json::json!({
+            "scope": scope.entries(),
+            "all": scope.allows_all(),
+            "changed": changed,
+        }))
+        .into_response(),
+        Err(msg) => json_error(StatusCode::BAD_REQUEST, &msg),
     }
 }
 

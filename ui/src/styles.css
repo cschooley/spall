@@ -371,3 +371,6 @@ button.link:hover { color: var(--vg-text-primary); background: none; }
 .replays .what { flex: 1; color: var(--vg-text-secondary); }
 .replays .who { color: var(--vg-accent-verdigris); }
 .replays .error { color: var(--vg-text-tertiary); font-size: var(--vg-text-xs); word-break: break-all; }
+
+/* scope all on: every host is in scope, so say so where it's always seen. */
+.statusbar .scope-all { color: var(--vg-accent-rust); font-weight: 600; }

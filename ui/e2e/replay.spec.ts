@@ -227,3 +227,45 @@ test("Enter on the focused Replay button is one press, not two", async ({ page }
   await expect(page.locator(".inspector .meta")).toContainText(`replay of ${orig.id}`);
   expect(bodies).toEqual([{ id: orig.id }, { id: orig.id, confirm: "tok-f" }]);
 });
+
+test("scope add and scope all on|off from the console; the status bar warns while all hosts are in", async ({ page }) => {
+  const state = { scope: ["example.test"], all: false };
+  await page.route("**/api/status", (r) =>
+    r.fulfill({
+      json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: [...state.scope, ...(state.all ? ["*"] : [])], scope_all: state.all },
+    }),
+  );
+  const changes: unknown[] = [];
+  await page.route("**/api/scope", async (r) => {
+    const c = r.request().postDataJSON() as { op: string; entry?: string; on?: boolean };
+    expect(r.request().headers()["content-type"]).toBe("application/json");
+    changes.push(c);
+    if (c.op === "add") state.scope.push(c.entry!);
+    if (c.op === "all") state.all = c.on!;
+    await r.fulfill({ json: { scope: [...state.scope, ...(state.all ? ["*"] : [])], all: state.all, changed: true } });
+  });
+  await page.goto("/");
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  const input = page.getByLabel("Console command");
+  const log = page.locator(".con-log");
+
+  await input.fill("scope add *.whatever.com");
+  await page.keyboard.press("Enter");
+  await expect(log).toContainText("scope: example.test, *.whatever.com");
+  await expect(page.locator(".statusbar .scope-all")).toHaveCount(0);
+
+  await input.fill("scope all on");
+  await page.keyboard.press("Enter");
+  await expect(log).toContainText("every host, third parties included");
+  await expect(page.locator(".statusbar .scope-all")).toHaveText("● scope: all hosts");
+
+  await input.fill("scope all off");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".statusbar .scope-all")).toHaveCount(0);
+  expect(changes).toEqual([
+    { op: "add", entry: "*.whatever.com" },
+    { op: "all", on: true },
+    { op: "all", on: false },
+  ]);
+});

@@ -28,6 +28,8 @@ pub enum Outcome {
     ConfirmationRefused,
     /// Bad input, or taphttp unreachable or refusing; nothing was sent.
     Error,
+    /// The scope was changed at runtime (`scope add|remove|all`).
+    ScopeChanged,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -43,6 +45,8 @@ pub struct Record {
     pub decision: Option<&'static str>,
     pub reason: Option<String>,
     pub confirmed: bool,
+    /// The scope allowed every host when this was decided.
+    pub scope_all: bool,
     pub outcome: Outcome,
     /// taphttp's HTTP status for the forwarded call, if it was made.
     pub upstream_status: Option<u16>,
@@ -66,6 +70,7 @@ impl Record {
             decision: None,
             reason: None,
             confirmed: false,
+            scope_all: false,
             outcome,
             upstream_status: None,
             result_id: None,

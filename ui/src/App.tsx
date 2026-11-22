@@ -131,7 +131,8 @@ function hostOf(e: TrafficEntry): string {
 
 export function App() {
   const { store, connection, clear } = useTraffic();
-  const status = useSourceStatus();
+  const [statusNonce, setStatusNonce] = useState(0);
+  const status = useSourceStatus(5000, statusNonce);
   const [theme, setTheme] = useTheme();
   const [filterText, setFilterText] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -378,7 +379,26 @@ export function App() {
         return true;
       },
       replay,
-      scope: () => (status.replay ? status.scope : null),
+      scope: () => (status.replay ? { entries: status.scope, all: status.scopeAll } : null),
+      changeScope: async (change) => {
+        try {
+          const res = await fetch("/api/scope", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(change),
+          });
+          const body = (await res.json()) as { scope?: unknown; all?: unknown; changed?: unknown; error?: unknown };
+          if (!res.ok) return typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+          setStatusNonce((n) => n + 1);
+          return {
+            scope: Array.isArray(body.scope) ? body.scope.filter((s): s is string => typeof s === "string") : [],
+            all: body.all === true,
+            changed: body.changed === true,
+          };
+        } catch {
+          return "spall unreachable";
+        }
+      },
       audit: async (last) => {
         try {
           const res = await fetch(`/api/audit?last=${last}`);
@@ -393,7 +413,7 @@ export function App() {
         }
       },
     }),
-    [out, focusFilter, openById, selected, clearAll, setTheme, replay, status.replay, status.scope],
+    [out, focusFilter, openById, selected, clearAll, setTheme, replay, status.replay, status.scope, status.scopeAll],
   );
 
   const run = useCallback((line: string) => void execute(line, ctx), [ctx]);
@@ -567,6 +587,11 @@ export function App() {
           )}
           {status.proxy ? <span className="addr">{` ${status.proxy}`}</span> : null}
         </span>
+        {status.scopeAll ? (
+          <span className="scope-all" title="Replays may go to any host you captured, third parties included. scope all off in the console.">
+            ● scope: all hosts
+          </span>
+        ) : null}
         <span>{`${rows.length} exchange${rows.length === 1 ? "" : "s"}`}</span>
         {log.unread > 0 && !consoleOpen ? (
           <button type="button" className="con-unread" title={`New console messages (press ${consoleKey})`} onClick={() => openConsole()}>

@@ -11,12 +11,14 @@ export interface SourceStatus {
   replay: boolean;
   /** Hosts replay may send to; empty means none. */
   scope: string[];
+  /** Every host is in scope (SPALL_SCOPE=* or `scope all on`). */
+  scopeAll: boolean;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [] };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false };
 
-/** Poll spall's /api/status for the status bar. */
-export function useSourceStatus(intervalMs = 5000): SourceStatus {
+/** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
+export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
   const [status, setStatus] = useState<SourceStatus>({ source: "pending", ...UNKNOWN });
   useEffect(() => {
     let live = true;
@@ -29,6 +31,7 @@ export function useSourceStatus(intervalMs = 5000): SourceStatus {
           proxy?: string;
           replay?: boolean;
           scope?: unknown;
+          scope_all?: boolean;
         };
         if (!live) return;
         setStatus({
@@ -37,6 +40,7 @@ export function useSourceStatus(intervalMs = 5000): SourceStatus {
           proxy: typeof body.proxy === "string" ? body.proxy : null,
           replay: body.replay === true,
           scope: Array.isArray(body.scope) ? body.scope.filter((s): s is string => typeof s === "string") : [],
+          scopeAll: body.scope_all === true,
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });
@@ -48,6 +52,6 @@ export function useSourceStatus(intervalMs = 5000): SourceStatus {
       live = false;
       clearInterval(id);
     };
-  }, [intervalMs]);
+  }, [intervalMs, nonce]);
   return status;
 }

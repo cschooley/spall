@@ -32,10 +32,14 @@ export interface Ctx {
    */
   replay(id: string, opts: { yes: boolean; edit?: ReplayEdit }): Promise<void>;
   /** The engagement scope; null when replay isn't available. */
-  scope(): readonly string[] | null;
+  scope(): { entries: readonly string[]; all: boolean } | null;
+  /** Change the scope for this run (in memory until restart; audited). */
+  changeScope(change: ScopeChange): Promise<{ scope: readonly string[]; all: boolean; changed: boolean } | string>;
   /** The newest replay attempts from the audit log, or an error message. */
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
 }
+
+export type ScopeChange = { op: "add" | "remove"; entry: string } | { op: "all"; on: boolean };
 
 /** Console edits for `replay` (#19), applied to the captured request. */
 export interface ReplayEdit {
@@ -97,9 +101,10 @@ function parseReplayArgs(args: string[]): { id?: string; yes: boolean; edit?: Re
 /**
  * What running a command can do (#22), for MCP grants and approvals (M6):
  * read (the UI or spall's state), sends-traffic (to a target, through the
- * gate), unsafe-method (could change state there), destructive.
+ * gate), unsafe-method (could change state there), destructive, policy
+ * (changes the rules of engagement: never offered to an agent).
  */
-export type Risk = "read" | "sends-traffic" | "unsafe-method" | "destructive";
+export type Risk = "read" | "sends-traffic" | "unsafe-method" | "destructive" | "policy";
 
 export interface Command {
   /** Stable identifier, shared with MCP (M5). Never a UI label. */
@@ -194,17 +199,35 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "scope",
-    usage: "scope",
-    desc: "hosts replay may send to",
+    usage: "scope [add|remove <entry> | all on|off]",
+    desc: "hosts replay may send to; changes last until restart",
     group: "traffic",
-    mcp: true,
-    risk: "read",
+    // Changing the scope changes the rules of engagement: humans only.
+    mcp: false,
+    risk: "policy",
     palette: { label: "Show scope", hint: "scope" },
-    run: (_a, ctx) => {
-      const scope = ctx.scope();
-      if (scope === null) return ctx.out("scope: replay needs taphttp's lever API", "warn");
-      if (scope.length === 0) return ctx.out("scope: no scope set, so every replay is denied (set SPALL_SCOPE)", "warn");
-      for (const s of scope) ctx.out(`  ${s}`);
+    complete: (args) => (args.length <= 1 ? ["add", "remove", "all"] : args[0] === "all" ? ["on", "off"] : []),
+    run: async (args, ctx) => {
+      const show = (entries: readonly string[], all: boolean) => {
+        if (all) ctx.out("scope: every host, third parties included (scope all off to go back)", "warn");
+        else if (entries.length === 0) ctx.out("scope: no scope set, so every replay is denied (scope add <host>, or SPALL_SCOPE)", "warn");
+        const listed = entries.filter((e) => e !== "*");
+        if (listed.length) ctx.out(`scope: ${listed.join(", ")}`);
+      };
+      if (args.length === 0) {
+        const scope = ctx.scope();
+        if (scope === null) return ctx.out("scope: replay needs taphttp's lever API", "warn");
+        return show(scope.entries, scope.all);
+      }
+      const [sub, arg, ...extra] = args;
+      let change: ScopeChange;
+      if ((sub === "add" || sub === "remove") && arg && extra.length === 0) change = { op: sub, entry: arg };
+      else if (sub === "all" && (arg === "on" || arg === "off") && extra.length === 0) change = { op: "all", on: arg === "on" };
+      else return ctx.out("usage: scope [add|remove <entry> | all on|off]", "warn");
+      const res = await ctx.changeScope(change);
+      if (typeof res === "string") return ctx.out(`scope: ${res}`, "warn");
+      if (!res.changed) ctx.out("scope: no change", "sys");
+      show(res.scope, res.all);
     },
   },
   {

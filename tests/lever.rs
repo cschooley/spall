@@ -801,3 +801,134 @@ async fn audit_endpoint_returns_the_newest_attempts() {
     let res = get_text(log_mode, "/api/audit").await;
     assert!(res.starts_with("HTTP/1.1 503"), "{res}");
 }
+
+#[tokio::test]
+async fn scope_changes_at_runtime_are_gated_audited_and_take_effect() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1"); // http://example.com/e1
+    let spall = start_spall_with(Some(api), &token, &["--scope", "other.test"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let replay = |body: &'static str| post_text(spall, "/api/replay", body, None);
+
+    let denied = replay(r#"{"id":"e1"}"#).await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+    let reason = body_json(&denied)["error"].as_str().unwrap().to_string();
+    assert!(
+        reason.contains("scope: other.test") && reason.contains("scope all on"),
+        "{reason}"
+    );
+
+    // A cross-site page can't change the scope.
+    let forged = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"all","on":true}"#,
+        Some("Content-Type: text/plain\r\nOrigin: http://evil.example\r\n"),
+    )
+    .await;
+    assert!(forged.starts_with("HTTP/1.1 403"), "{forged}");
+
+    let added = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"add","entry":"*.example.com"}"#,
+        None,
+    )
+    .await;
+    assert!(added.starts_with("HTTP/1.1 200"), "{added}");
+    assert_eq!(
+        body_json(&added)["scope"],
+        serde_json::json!(["other.test", "*.example.com"])
+    );
+    assert!(
+        replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 403"),
+        "*. is subdomains only"
+    );
+    post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"add","entry":"example.com"}"#,
+        None,
+    )
+    .await;
+    assert!(replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 200"));
+
+    let removed = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"remove","entry":"example.com"}"#,
+        None,
+    )
+    .await;
+    assert_eq!(body_json(&removed)["changed"], true);
+    assert!(replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 403"));
+
+    let on = post_text(spall, "/api/scope", r#"{"op":"all","on":true}"#, None).await;
+    assert_eq!(body_json(&on)["all"], true);
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["scope_all"], true);
+    assert!(replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 200"));
+    let unsafe_ = replay(r#"{"id":"e1","method":"DELETE"}"#).await;
+    assert!(
+        unsafe_.starts_with("HTTP/1.1 428"),
+        "all hosts doesn't lift confirmation: {unsafe_}"
+    );
+    post_text(spall, "/api/scope", r#"{"op":"all","on":false}"#, None).await;
+    assert!(replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 403"));
+
+    for bad in [
+        r#"{"op":"add","entry":"http://x/"}"#,
+        r#"{"op":"add","entry":"*"}"#,
+        r#"{"op":"nope"}"#,
+        r#"{"op":"all"}"#,
+        "junk",
+    ] {
+        let res = post_text(spall, "/api/scope", bad, None).await;
+        assert!(res.starts_with("HTTP/1.1 400"), "{bad}: {res}");
+    }
+
+    let audit = audit_records(&token);
+    let scope_changes: Vec<_> = audit
+        .iter()
+        .filter(|r| r["action"] == "scope")
+        .map(|r| r["reason"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        scope_changes,
+        [
+            "add *.example.com",
+            "add example.com",
+            "remove example.com",
+            "all hosts on",
+            "all hosts off"
+        ]
+    );
+    let under_all: Vec<_> = audit
+        .iter()
+        .filter(|r| r["action"] == "replay" && r["scope_all"] == true)
+        .map(|r| r["outcome"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        under_all,
+        ["sent", "needs_confirmation"],
+        "replays under all-hosts are marked"
+    );
+}
+
+#[tokio::test]
+async fn star_in_spall_scope_allows_every_host_from_the_start() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    let spall = start_spall_with(Some(api), &token, &["--scope", "*"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["scope_all"], true);
+    let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+}

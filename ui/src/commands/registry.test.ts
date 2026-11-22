@@ -21,7 +21,8 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     setConsoleKey: (k) => (calls.push(`key:${k}`), k.length === 1),
     replay: async (id, opts) =>
       void calls.push(`replay:${id}${opts.yes ? ":yes" : ""}${opts.edit ? `:${JSON.stringify(opts.edit)}` : ""}`),
-    scope: () => ["app.example.test", "*.api.example.test"],
+    scope: () => ({ entries: ["app.example.test", "*.api.example.test"], all: false }),
+    changeScope: async (c) => (calls.push(`scope:${JSON.stringify(c)}`), { scope: ["x.test"], all: c.op === "all" && c.on, changed: true }),
     audit: async (last) => (calls.push(`audit:${last}`), []),
     ...over,
   };
@@ -155,14 +156,11 @@ test("replay takes an id or the selected exchange, and --yes", async () => {
 test("scope lists the engagement scope, or says replay is unavailable", async () => {
   const { ctx, lines } = fakeCtx();
   await execute("scope", ctx);
-  assert.deepEqual(lines.slice(1), [
-    ["  app.example.test", "out"],
-    ["  *.api.example.test", "out"],
-  ]);
-  const empty = fakeCtx({ scope: () => [] });
+  assert.deepEqual(lines.slice(1), [["scope: app.example.test, *.api.example.test", "out"]]);
+  const empty = fakeCtx({ scope: () => ({ entries: [], all: false }) });
   await execute("scope", empty.ctx);
   assert.equal(empty.lines.at(-1)![1], "warn");
-  assert.match(empty.lines.at(-1)![0], /no scope.*SPALL_SCOPE/);
+  assert.match(empty.lines.at(-1)![0], /no scope.*scope add.*SPALL_SCOPE/);
   const off = fakeCtx({ scope: () => null });
   await execute("scope", off.ctx);
   assert.match(off.lines.at(-1)![0], /lever API/);
@@ -195,13 +193,17 @@ test("audit prints the newest attempts, one line each", async () => {
   assert.deepEqual(err.lines.at(-1), ["audit: the audit log needs taphttp's lever API", "warn"]);
 });
 
-test("every command has a risk class; replay is the one that sends traffic", () => {
-  const RISKS = ["read", "sends-traffic", "unsafe-method", "destructive"];
+test("every command has a risk class; replay sends traffic and scope changes policy", () => {
+  const RISKS = ["read", "sends-traffic", "unsafe-method", "destructive", "policy"];
   for (const c of COMMANDS) assert.ok(RISKS.includes(c.risk), c.name);
   assert.deepEqual(
-    COMMANDS.filter((c) => c.risk !== "read").map((c) => c.name),
-    ["replay"],
+    COMMANDS.filter((c) => c.risk !== "read").map((c) => [c.name, c.risk]),
+    [
+      ["replay", "sends-traffic"],
+      ["scope", "policy"],
+    ],
   );
+  assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");
   const item = paletteItems().find((i) => i.command === "replay")!;
   assert.equal(item.label, "Replay exchange…");
   assert.equal(item.prefill, "replay ");
@@ -234,4 +236,33 @@ test("replay edits from the console: --method, --header, --drop-header, --body",
     assert.equal(t.calls.length, 0, bad);
     assert.equal(t.lines.at(-1)![1], "warn", bad);
   }
+});
+
+test("scope add, remove and all on|off change the scope; bad forms warn", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("scope add *.whatever.com", ctx);
+  await execute("scope remove app.example.test", ctx);
+  await execute("scope all on", ctx);
+  await execute("scope all off", ctx);
+  assert.deepEqual(calls, [
+    'scope:{"op":"add","entry":"*.whatever.com"}',
+    'scope:{"op":"remove","entry":"app.example.test"}',
+    'scope:{"op":"all","on":true}',
+    'scope:{"op":"all","on":false}',
+  ]);
+  assert.ok(lines.some(([t, k]) => /every host/.test(t) && k === "warn"), "all on warns about what it means");
+  assert.ok(lines.some(([t]) => /scope: x\.test/.test(t)), "prints the scope after a change");
+
+  for (const bad of ["scope add", "scope all", "scope all maybe", "scope frob x", "scope add a b"]) {
+    const t = fakeCtx();
+    await execute(bad, t.ctx);
+    assert.equal(t.calls.length, 0, bad);
+    assert.equal(t.lines.at(-1)![1], "warn", bad);
+  }
+  const refused = fakeCtx({ changeScope: async () => 'scope entry "http://x": not a hostname' });
+  await execute("scope add http://x", refused.ctx);
+  assert.deepEqual(refused.lines.at(-1), ['scope: scope entry "http://x": not a hostname', "warn"]);
+  const all = fakeCtx({ scope: () => ({ entries: ["a.test", "*"], all: true }) });
+  await execute("scope", all.ctx);
+  assert.ok(all.lines.some(([t, k]) => /every host/.test(t) && k === "warn"));
 });

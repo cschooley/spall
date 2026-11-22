@@ -7,10 +7,13 @@
 
 use std::net::IpAddr;
 
-/// Hosts the engagement allows traffic to. Empty means nothing is in scope.
+/// Hosts the engagement allows traffic to. Empty means nothing is in
+/// scope; `*` means every host (opt-in: `SPALL_SCOPE=*`, or `scope all on`
+/// in the console for the running process).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scope {
     rules: Vec<Rule>,
+    all: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,18 +32,60 @@ impl Scope {
     /// entries are ignored.
     pub fn parse(spec: &str) -> Result<Scope, String> {
         let mut rules = Vec::new();
+        let mut all = false;
         for raw in spec.split(',') {
             let entry = raw.trim();
             if entry.is_empty() {
                 continue;
             }
+            if entry == "*" {
+                all = true;
+                continue;
+            }
             rules.push(parse_rule(entry).map_err(|e| format!("scope entry {entry:?}: {e}"))?);
         }
-        Ok(Scope { rules })
+        Ok(Scope { rules, all })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.rules.is_empty()
+        self.rules.is_empty() && !self.all
+    }
+
+    /// Every host is in scope.
+    pub fn allows_all(&self) -> bool {
+        self.all
+    }
+
+    /// Add one entry (same syntax as `--scope`). `Ok(false)` if already there.
+    pub fn add(&mut self, entry: &str) -> Result<bool, String> {
+        let entry = entry.trim();
+        if entry == "*" {
+            return Err("use `scope all on` to allow every host".into());
+        }
+        let rule = parse_rule(entry).map_err(|e| format!("scope entry {entry:?}: {e}"))?;
+        if self.rules.contains(&rule) {
+            return Ok(false);
+        }
+        self.rules.push(rule);
+        Ok(true)
+    }
+
+    /// Remove one entry; false if it wasn't there (or isn't an entry).
+    pub fn remove(&mut self, entry: &str) -> bool {
+        let Ok(rule) = parse_rule(entry.trim()) else {
+            return false;
+        };
+        let before = self.rules.len();
+        self.rules.retain(|r| *r != rule);
+        self.rules.len() != before
+    }
+
+    /// The same rules with every host allowed, or not.
+    pub fn with_all(&self, all: bool) -> Scope {
+        Scope {
+            rules: self.rules.clone(),
+            all,
+        }
     }
 
     /// Whether a host (from a URL or a Host header, port allowed) is in scope.
@@ -48,6 +93,9 @@ impl Scope {
         let Some(host) = normalize_host(host) else {
             return false;
         };
+        if self.all {
+            return true;
+        }
         let ip: Option<IpAddr> = host.parse().ok();
         self.rules.iter().any(|rule| match (rule, ip) {
             (Rule::Net(net, bits), Some(ip)) => in_network(ip, *net, *bits),
@@ -61,7 +109,8 @@ impl Scope {
 
     /// The entries, for display (`scope` in the console, audit records).
     pub fn entries(&self) -> Vec<String> {
-        self.rules
+        let mut out: Vec<String> = self
+            .rules
             .iter()
             .map(|r| match r {
                 Rule::Host(h) => h.clone(),
@@ -69,7 +118,11 @@ impl Scope {
                 Rule::Net(ip, bits) if *bits == max_bits(*ip) => ip.to_string(),
                 Rule::Net(ip, bits) => format!("{ip}/{bits}"),
             })
-            .collect()
+            .collect();
+        if self.all {
+            out.push("*".into());
+        }
+        out
     }
 }
 
@@ -220,23 +273,29 @@ pub fn url_host(url: &str) -> Option<String> {
 
 /// Scope first (a denial beats a confirmation), then the method policy.
 pub fn check(scope: &Scope, policy: &MethodPolicy, action: &Action) -> Decision {
+    const WIDEN: &str = "add hosts to SPALL_SCOPE, or run `scope all on` in the console";
     if scope.is_empty() {
-        return Decision::Deny(
-            "no engagement scope is configured, so nothing may be sent (set --scope / SPALL_SCOPE)"
-                .into(),
-        );
+        return Decision::Deny(format!(
+            "no engagement scope is configured, so nothing may be sent ({WIDEN})"
+        ));
     }
+    let in_scope = || scope.entries().join(", ");
     let Some(target) = url_host(action.url).filter(|h| !h.is_empty()) else {
         return Decision::Deny("the request has no target host".into());
     };
     if !scope.contains(&target) {
-        return Decision::Deny(format!("{} is not in scope", display_host(&target)));
+        return Decision::Deny(format!(
+            "{} is not in scope (scope: {}; {WIDEN})",
+            display_host(&target),
+            in_scope()
+        ));
     }
     if let Some(host) = action.host_header {
         if !scope.contains(host) {
             return Decision::Deny(format!(
-                "the Host header {} is not in scope",
-                display_host(host)
+                "the Host header {} is not in scope (scope: {}; {WIDEN})",
+                display_host(host),
+                in_scope()
             ));
         }
     }
@@ -339,7 +398,7 @@ mod tests {
     fn bad_entries_are_rejected_and_blanks_ignored() {
         assert!(scope(" , ,").is_empty());
         for bad in [
-            "*",
+            "**",
             "*.",
             "a b",
             "10.0.0.0/33",
@@ -358,6 +417,93 @@ mod tests {
     }
 
     #[test]
+    fn star_means_every_host() {
+        let all = scope("*");
+        assert!(!all.is_empty());
+        assert!(all.allows_all());
+        for h in ["a.test", "cdn.other.test:443", "10.1.2.3", "[::1]"] {
+            assert!(all.contains(h), "{h}");
+        }
+        assert!(!all.contains(""));
+        assert_eq!(scope("a.test, *").entries(), ["a.test", "*"]);
+        let d = check(
+            &all,
+            &MethodPolicy::default(),
+            &action("GET", "http://x.test/", Some("y.test")),
+        );
+        assert_eq!(d, Decision::Allow);
+        // It lifts the host check only; unsafe methods still need confirming.
+        let d = check(
+            &all,
+            &MethodPolicy::default(),
+            &action("DELETE", "http://x.test/", None),
+        );
+        assert!(matches!(d, Decision::NeedsConfirmation(_)), "{d:?}");
+    }
+
+    #[test]
+    fn all_hosts_can_be_switched_on_and_off_over_a_scope() {
+        let base = scope("a.test");
+        assert!(!base.allows_all());
+        let on = base.with_all(true);
+        assert!(on.contains("b.test") && on.allows_all());
+        assert_eq!(on.entries(), ["a.test", "*"]);
+        let off = scope("*, a.test").with_all(false);
+        assert!(!off.contains("b.test") && off.contains("a.test"));
+        assert!(Scope::default().with_all(false).is_empty());
+    }
+
+    #[test]
+    fn denials_name_the_scope_and_how_to_widen_it() {
+        let d = check(
+            &scope("a.test, *.b.test"),
+            &MethodPolicy::default(),
+            &action("GET", "http://c.test/", None),
+        );
+        let Decision::Deny(r) = d else {
+            panic!("{d:?}")
+        };
+        assert!(r.contains("\"c.test\" is not in scope"), "{r}");
+        assert!(r.contains("a.test, *.b.test"), "{r}");
+        assert!(
+            r.contains("SPALL_SCOPE") && r.contains("scope all on"),
+            "{r}"
+        );
+        let Decision::Deny(r) = check(
+            &Scope::default(),
+            &MethodPolicy::default(),
+            &action("GET", "http://c.test/", None),
+        ) else {
+            panic!()
+        };
+        assert!(
+            r.contains("SPALL_SCOPE") && r.contains("scope all on"),
+            "{r}"
+        );
+    }
+
+    #[test]
+    fn entries_can_be_added_and_removed_at_runtime() {
+        let mut s = Scope::default();
+        assert_eq!(s.add("*.Whatever.com"), Ok(true));
+        assert_eq!(s.add("*.whatever.com"), Ok(false), "already there");
+        assert_eq!(s.add("10.0.0.0/8"), Ok(true));
+        assert!(s.contains("api.whatever.com") && s.contains("10.9.9.9"));
+        assert!(s.add("http://x.test/").is_err());
+        assert_eq!(
+            s.add("*"),
+            Err("use `scope all on` to allow every host".into())
+        );
+        assert!(
+            s.remove("*.WHATEVER.com"),
+            "removal normalizes like parsing"
+        );
+        assert!(!s.remove("*.whatever.com"));
+        assert!(!s.remove("not an entry"));
+        assert_eq!(s.entries(), ["10.0.0.0/8"]);
+    }
+
+    #[test]
     fn empty_scope_denies_everything() {
         let d = check(
             &Scope::default(),
@@ -365,7 +511,7 @@ mod tests {
             &action("GET", "http://a.test/", None),
         );
         assert!(
-            matches!(d, Decision::Deny(ref r) if r.contains("--scope")),
+            matches!(d, Decision::Deny(ref r) if r.contains("SPALL_SCOPE")),
             "{d:?}"
         );
     }
