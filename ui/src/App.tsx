@@ -3,7 +3,7 @@ import { execute, paletteItems, type Ctx, type OutKind, type PaletteItem, type R
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { Console } from "./components/Console.tsx";
 import { Icon } from "./components/Icon.tsx";
-import { Inspector } from "./components/Inspector.tsx";
+import { Inspector, type Tab as InspectorTab } from "./components/Inspector.tsx";
 import { Launcher } from "./components/Launcher.tsx";
 import { Rail } from "./components/Rail.tsx";
 import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
@@ -30,7 +30,7 @@ import {
 import type { TrafficEntry } from "./types.ts";
 import { useHistory } from "./useHistory.ts";
 import { replaysOf } from "./lib/replays.ts";
-import { useChain, useReplayHistory } from "./useReplays.ts";
+import { useChain, useOriginal, useReplayHistory } from "./useReplays.ts";
 import { useSourceStatus } from "./useStatus.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
@@ -332,6 +332,9 @@ export function App() {
     [selected, replayHistory, store.items, history.items],
   );
   const chain = useChain(selected, findEntry);
+  const original = useOriginal(selected, findEntry);
+  // Opening an exchange on a given tab (Compare from the Replays list).
+  const [openTab, setOpenTab] = useState<{ id: string; tab: InspectorTab } | null>(null);
 
   const focusFilter = useCallback(() => filterInput.current?.focus(), []);
   const toggleMode = useCallback(() => {
@@ -557,7 +560,12 @@ export function App() {
             key={selected.id}
             entry={selected}
             onClose={() => setSelected(null)}
-            onOpen={(id) => void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"))}
+            onOpen={(id, tab) => {
+              setOpenTab(tab ? { id, tab } : null);
+              void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
+            }}
+            original={original}
+            initialTab={openTab?.id === selected.id ? openTab.tab : "request"}
             replays={replayList}
             chain={chain}
             replay={{

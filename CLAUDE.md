@@ -94,8 +94,8 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
   two presses, the second sending the gate's token (`ui/src/lib/replay.ts`).
 - **#19** (done): edit before replay (method, ordered headers, text body;
   `ui/src/lib/edit.ts`, `RequestEditor.tsx`; console edit flags).
-- **#20**: compare a replay with its original; a reusable diff (M4
-  evidence, M8 retests).
+- **#20** (done): compare a replay with its original; the reusable diff
+  is `ui/src/lib/diff.ts` (M4 evidence, M8 retests).
 - **#21** (done): the Replays tab, chains, and `replay:yes|no` in the
   filter (`ui/src/lib/replays.ts`, `useReplays.ts`).
 - **#22**: the action gate: server-side scope (URL host and effective

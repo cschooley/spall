@@ -5,6 +5,7 @@
 
 import { Fragment, useState } from "react";
 import { Body } from "./Body.tsx";
+import { Compare } from "./Compare.tsx";
 import { RequestEditor } from "./RequestEditor.tsx";
 import { draftOf, type Draft } from "../lib/edit.ts";
 import { editSummary } from "../lib/replays.ts";
@@ -25,7 +26,7 @@ import { toCurl } from "../lib/curl.ts";
 import { isSecretHeader } from "../lib/secrets.ts";
 import type { Header, TrafficEntry } from "../types.ts";
 
-type Tab = "request" | "response" | "replays";
+export type Tab = "request" | "response" | "replays" | "compare";
 
 /** This exchange's replays (#21): history plus live, newest first. */
 export interface ReplayList {
@@ -57,6 +58,8 @@ export function Inspector({
   onOpen,
   replays,
   chain,
+  original,
+  initialTab = "request",
 }: {
   entry: TrafficEntry;
   onClose: () => void;
@@ -64,10 +67,13 @@ export function Inspector({
   replays: ReplayList;
   /** Ids from the first original to this exchange; `missing` if a link is gone. */
   chain: { chain: string[]; missing: string | null };
-  /** Open another exchange by id (the original of a replay). */
-  onOpen(id: string): void;
+  /** For a replay: what it replayed (undefined while looking, null if gone). */
+  original: TrafficEntry | null | undefined;
+  initialTab?: Tab;
+  /** Open another exchange by id, optionally on a tab. */
+  onOpen(id: string, tab?: Tab): void;
 }) {
-  const [tab, setTab] = useState<Tab>("request");
+  const [tab, setTab] = useState<Tab>(initialTab === "compare" && !entry.replay_of ? "request" : initialTab);
   const [draft, setDraftState] = useState<Draft | null>(null);
   const setDraft = (d: Draft | null) => {
     setDraftState(d);
@@ -185,7 +191,7 @@ export function Inspector({
         </div>
       )}
       <div className="tabs" role="tablist">
-        {(["request", "response", "replays"] as const).map((t) => (
+        {(entry.replay_of ? (["request", "response", "replays", "compare"] as const) : (["request", "response", "replays"] as const)).map((t) => (
           <button key={t} type="button" role="tab" aria-selected={tab === t} className={tab === t ? "on" : undefined} onClick={() => setTab(t)}>
             {t}
             {t === "replays" ? <span className="count">{replays.items.length}</span> : null}
@@ -195,6 +201,12 @@ export function Inspector({
       <section className="pane" role="tabpanel" aria-label={tab}>
         {tab === "replays" ? (
           <Replays entry={entry} list={replays} onOpen={onOpen} />
+        ) : tab === "compare" ? (
+          original ? (
+            <Compare original={original} replay={entry} onOpen={(id) => onOpen(id)} />
+          ) : (
+            <p className="none">{original === undefined ? "Looking up the original…" : `The original (${entry.replay_of}) isn't in taphttp's history.`}</p>
+          )
         ) : draft && isReq ? (
           <RequestEditor original={entry} draft={draft} setDraft={setDraft} replay={replay} onCancel={() => setDraft(null)} />
         ) : (
@@ -215,7 +227,7 @@ export function Inspector({
   );
 }
 
-function Replays({ entry, list, onOpen }: { entry: TrafficEntry; list: ReplayList; onOpen(id: string): void }) {
+function Replays({ entry, list, onOpen }: { entry: TrafficEntry; list: ReplayList; onOpen(id: string, tab?: Tab): void }) {
   return (
     <>
       <h3>
@@ -235,6 +247,9 @@ function Replays({ entry, list, onOpen }: { entry: TrafficEntry; list: ReplayLis
                 <span>{r.duration_ms !== null ? durationText(r.duration_ms) : "—"}</span>
                 <span className="what">{editSummary(entry, r)}</span>
                 {r.meta?.actor ? <span className="who">{r.meta.actor}</span> : null}
+              </button>
+              <button type="button" className="cmp" title="Compare this replay with the original" onClick={() => onOpen(r.id, "compare")}>
+                Compare
               </button>
               {r.error ? <span className="error">{r.error}</span> : null}
             </li>

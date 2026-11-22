@@ -52,7 +52,7 @@ test("the Replays tab counts and lists replays live, and links both ways", async
   await expect(rows.first()).toContainText("method PUT · 1 header");
 
   // Open a replay from the list; "replay of" goes back.
-  await rows.nth(1).getByRole("button").click();
+  await rows.nth(1).locator("button[title^='Open ']").click();
   await expect(page.locator(".inspector .meta")).toContainText(`replay of ${orig.id}`);
   await page.locator(".inspector .meta button.orig").click();
   await expect(page.locator(".inspector .meta button.orig")).toHaveCount(0);
@@ -77,7 +77,7 @@ test("a replay of a replay shows the chain back to the first original", async ({
 
   // A one-step replay doesn't need a chain line.
   await tab(page).click();
-  await page.locator(".replays li button").first().click();
+  await page.locator(".replays li button[title^='Open ']").first().click();
   await expect(page.getByLabel("Replay chain")).toHaveCount(0);
 });
 

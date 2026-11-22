@@ -75,3 +75,28 @@ export function useChain(entry: TrafficEntry | null, find: (id: string) => Promi
   }, [entry]);
   return state.for === entry?.id ? state : { chain: entry ? [entry.id] : [], missing: null };
 }
+
+/**
+ * The exchange a replay was replayed from, for Compare (#20). `undefined`
+ * while looking, null if it can't be found.
+ */
+export function useOriginal(entry: TrafficEntry | null, find: (id: string) => Promise<TrafficEntry | null>) {
+  const [state, setState] = useState<{ for: string | null; original: TrafficEntry | null }>({ for: null, original: null });
+  const findRef = useRef(find);
+  useEffect(() => {
+    findRef.current = find;
+  }, [find]);
+  const id = entry?.replay_of ?? null;
+  useEffect(() => {
+    if (!id) return;
+    let live = true;
+    void findRef.current(id).then((original) => {
+      if (live) setState({ for: id, original });
+    });
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  if (!id) return null;
+  return state.for === id ? state.original : undefined;
+}
