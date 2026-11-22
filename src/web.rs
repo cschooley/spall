@@ -81,6 +81,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route(
+            "/api/openapi/parse",
+            post(api_openapi_parse).layer(DefaultBodyLimit::max(2 * crate::openapi::MAX_BYTES)),
+        )
+        .route(
             "/api/scope/parse",
             post(api_scope_parse).layer(DefaultBodyLimit::max(crate::scope_list::MAX_BYTES + 1024)),
         )
@@ -275,6 +279,34 @@ async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Re
                 "could not read the audit log",
             )
         }
+    }
+}
+
+/// Read an OpenAPI / Swagger file (#40): its servers as a scope preview
+/// (like a pasted list) and its paths. Changes nothing; the UI applies the
+/// scope entries and saves the spec through the usual audited routes.
+async fn api_openapi_parse(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(replayer) = &state.replayer else {
+        return no_engagements();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Text {
+        text: String,
+    }
+    let Ok(t) = serde_json::from_slice::<Text>(&body) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            r#"want {"text": "<the spec, JSON or YAML>"}"#,
+        );
+    };
+    // Parsing a few MiB of YAML is CPU work: off the async threads.
+    let scope = replayer.scope_now().with_all(false);
+    let now = taphttp_types::Timestamp::now().to_string();
+    match tokio::task::spawn_blocking(move || crate::openapi::import(&t.text, &scope, &now)).await {
+        Ok(Ok(import)) => axum::Json(import).into_response(),
+        Ok(Err(m)) => json_error(StatusCode::BAD_REQUEST, &m),
+        Err(_) => json_error(StatusCode::INTERNAL_SERVER_ERROR, "reading the spec failed"),
     }
 }
 

@@ -6,7 +6,7 @@ import { DEFAULT_RULES } from "./roe.ts";
 test("engagements from the API are shape-checked; junk is dropped, not trusted", () => {
   assert.deepEqual(
     asEngagement({ id: "a-1", name: "A", client: 7, starts: "2026-11-23", ends: "", scope: ["a.test", 3, "!b.test"], extra: "<b>" }),
-    { id: "a-1", name: "A", client: "", starts: "2026-11-23", ends: null, expires: null, scope: ["a.test", "!b.test"], notes: "", targetNotes: {}, rules: DEFAULT_RULES, testingNow: null },
+    { id: "a-1", name: "A", client: "", starts: "2026-11-23", ends: null, expires: null, scope: ["a.test", "!b.test"], notes: "", targetNotes: {}, apiSpecs: [], rules: DEFAULT_RULES, testingNow: null },
   );
   for (const bad of [null, "x", [], { id: 1, name: "x" }, { id: "x" }]) assert.equal(asEngagement(bad), null, JSON.stringify(bad));
   assert.deepEqual(asSummaries([{ id: "a", name: "A", active: true }, { nope: 1 }, { id: "b", name: "B", client: "C" }]), [
@@ -69,4 +69,14 @@ test("scope-list previews are shape-checked", async () => {
     },
   );
   assert.equal(asPreview({ nope: 1 }), null);
+});
+
+test("OpenAPI imports are shape-checked", async () => {
+  const { asImport, asApiSpecs } = await import("./engagement.ts");
+  const spec = { title: "ACME", version: "2", format: "openapi 3.0.3", servers: ["https://api.acme.test"], paths: ["/users", 5], imported: "t" };
+  const i = asImport({ spec, notes: ["relative server"], items: [], add: ["api.acme.test"], exclude: [] });
+  assert.deepEqual(i?.spec.paths, ["/users"]);
+  assert.deepEqual(i?.preview.add, ["api.acme.test"]);
+  assert.equal(asImport({ items: [] }), null, "no spec");
+  assert.deepEqual(asApiSpecs([{ nope: 1 }, spec]).length, 1);
 });

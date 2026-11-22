@@ -464,3 +464,5 @@ td.host .sc { display: inline-block; width: 1.2em; font-size: 9px; vertical-alig
 .eng .note.wrap { white-space: normal; }
 .eng .sect h3 label.check { display: inline-flex; gap: var(--vg-space-1); align-items: center; text-transform: none; letter-spacing: 0; font: var(--vg-text-xs) var(--vg-font-sans); }
 .eng .entries.hosts li { grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto; }
+.eng .sect-actions { display: inline-flex; gap: var(--vg-space-2); }
+.eng .paste ul.notes { margin: 0; padding-left: var(--vg-space-5); font: var(--vg-text-xs) var(--vg-font-mono); color: var(--vg-accent-rust); }

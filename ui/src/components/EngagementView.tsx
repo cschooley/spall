@@ -5,6 +5,7 @@
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ScopePaste } from "./ScopePaste.tsx";
+import { OpenApiImport } from "./OpenApiImport.tsx";
 import { parentWildcard, type HostListing, type HostState } from "../lib/hosts.ts";
 import { timeOf } from "../lib/format.ts";
 import type { EngagementInfo, ScopeVerdict } from "../commands/registry.ts";
@@ -237,18 +238,26 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
   const [verdict, setVerdict] = useState<ScopeVerdict | string | null>(null);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [note, setNote] = useState("");
-  // `scope paste` in the console opens this through #engagement/paste.
-  const [pasting, setPasting] = useState(() => window.location.hash === "#engagement/paste");
+  // `scope paste` / `scope import` in the console open these through
+  // #engagement/paste and #engagement/import.
+  const panelOf = () => (window.location.hash === "#engagement/paste" ? "paste" : window.location.hash === "#engagement/import" ? "import" : null);
+  const [panel, setPanel] = useState<"paste" | "import" | null>(panelOf);
   useEffect(() => {
     const onHash = () => {
-      if (window.location.hash === "#engagement/paste") setPasting(true);
+      const p = panelOf();
+      if (p) setPanel(p);
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
-  const closePaste = () => {
-    setPasting(false);
-    if (window.location.hash === "#engagement/paste") window.history.replaceState(null, "", "#engagement");
+  const closePanel = () => {
+    setPanel(null);
+    if (panelOf()) window.history.replaceState(null, "", "#engagement");
+  };
+  const forgetSpec = async (i: number) => {
+    const r = await send("/api/engagement", "PATCH", { api_specs: e.apiSpecs.filter((_, j) => j !== i) });
+    setErr(r);
+    if (!r) onChanged();
   };
   const inScope = e.scope.filter((x) => !x.startsWith("!"));
   const excluded = e.scope.filter((x) => x.startsWith("!")).map((x) => x.slice(1));
@@ -308,14 +317,20 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
       title={`Scope · ${inScope.length} in, ${excluded.length} excluded`}
       label="Scope"
       actions={
-        pasting ? null : (
-          <button type="button" onClick={() => setPasting(true)}>
-            paste a list
-          </button>
+        panel ? null : (
+          <>
+            <button type="button" onClick={() => setPanel("paste")}>
+              paste a list
+            </button>
+            <button type="button" onClick={() => setPanel("import")}>
+              import OpenAPI
+            </button>
+          </>
         )
       }
     >
-      {pasting ? <ScopePaste onApplied={onChanged} onClose={closePaste} /> : null}
+      {panel === "paste" ? <ScopePaste onApplied={onChanged} onClose={closePanel} /> : null}
+      {panel === "import" ? <OpenApiImport kept={e.apiSpecs} onApplied={onChanged} onClose={closePanel} /> : null}
       {inScope.length ? (
         <ul className="entries" aria-label="In scope">
           {inScope.map((x) => row(x, x))}
@@ -341,6 +356,24 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
         </button>
       </form>
       <ErrorLine msg={err} />
+      {e.apiSpecs.length ? (
+        <>
+          <h4>API descriptions</h4>
+          <ul className="entries" aria-label="API descriptions">
+            {e.apiSpecs.map((a, i) => (
+              <li key={i}>
+                <span className="entry">{`${a.title}${a.version ? ` ${a.version}` : ""}`}</span>
+                <span className="note" title={a.servers.join("\n")}>{`${a.format} · ${a.paths.length} paths · ${a.servers.length} servers`}</span>
+                <span className="row-actions">
+                  <button type="button" aria-label={`Forget ${a.title}`} onClick={() => void forgetSpec(i)}>
+                    forget
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
       <form className="inline" onSubmit={(ev) => void check(ev)}>
         <input aria-label="Check a URL or host" placeholder="check a URL or host" value={target} onChange={(ev) => setTarget(ev.target.value)} />
         <button type="submit" disabled={!target.trim()}>

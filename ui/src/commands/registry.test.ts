@@ -13,6 +13,7 @@ const ENG = {
   scope: ["*.acme.test", "acme.test", "!pay.acme.test"],
   notes: "",
   targetNotes: {},
+  apiSpecs: [],
   rules: DEFAULT_RULES,
   testingNow: { allowed: true, reason: null },
 };
@@ -48,7 +49,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
-    openScopePaste: () => void calls.push("paste"),
+    openScopePaste: (what = "paste") => void calls.push(what),
     hosts: async () => ({
       hosts: [
         { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
@@ -316,7 +317,7 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
-    openScopePaste: () => void calls.push("paste"),
+    openScopePaste: (what = "paste") => void calls.push(what),
     hosts: async () => ({
       hosts: [
         { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
@@ -355,10 +356,11 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     assert.equal(t.calls.length, 0, bad);
     assert.equal(t.lines.at(-1)![1], "warn", bad);
   }
-  assert.deepEqual(complete("scope ").options, ["add", "exclude", "remove", "check", "paste", "all"]);
+  assert.deepEqual(complete("scope ").options, ["add", "exclude", "remove", "check", "paste", "import", "all"]);
   const paste = fakeCtx();
   await execute("scope paste", paste.ctx);
-  assert.deepEqual(paste.calls, ["paste"]);
+  await execute("scope import", paste.ctx);
+  assert.deepEqual(paste.calls, ["paste", "import"]);
 });
 
 test("hostile hosts from scope check are printed as given, as text", async () => {

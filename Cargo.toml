@@ -18,6 +18,9 @@ futures-util = { version = "0.3", default-features = false }
 # Confirmation tokens (#22): random ids, and a hash binding each to one request.
 getrandom = "0.3"
 sha2 = "0.11"
+# OpenAPI import (#40): YAML specs. Pure Rust, no unsafe C; aliases are
+# size-checked before loading (src/openapi.rs).
+yaml-rust2 = { version = "0.13", default-features = false }
 # Plain-HTTP client for taphttp's lever API (compose network, no TLS).
 http-body-util = "0.1"
 # Engagement dates (#35) and testing windows (#36). The tz database is

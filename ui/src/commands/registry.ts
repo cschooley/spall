@@ -6,6 +6,7 @@
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
 import type { HostListing } from "../lib/hosts.ts";
+import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
@@ -41,8 +42,8 @@ export interface Ctx {
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
   /** Hosts seen in traffic with their scope state (#39), or an error message. */
   hosts(): Promise<HostListing | string>;
-  /** Open the Engagement view's paste-a-scope-list panel (#38). */
-  openScopePaste(): void;
+  /** Open the Engagement view's paste-a-scope-list panel (#38), or the OpenAPI import (#40). */
+  openScopePaste(what?: "paste" | "import"): void;
   /** Where a URL or host stands in scope (#34), or an error message. */
   checkScope(target: string): Promise<ScopeVerdict | string>;
   /** The active engagement (#35), or an error message. */
@@ -69,6 +70,8 @@ export interface EngagementInfo {
   notes: string;
   /** A note per scope entry (`!entry` for an exclusion). */
   targetNotes: Record<string, string>;
+  /** Imported API descriptions (#40). */
+  apiSpecs: ApiSpec[];
   rules: Rules;
   /** Whether the rules allow testing right now, and why not. */
   testingNow: { allowed: boolean; reason: string | null } | null;
@@ -127,7 +130,7 @@ export interface ScopeVerdict {
   by: string | null;
 }
 
-const SCOPE_USAGE = "usage: scope [add|exclude|remove <entry> | check <url|host> | paste | all on|off]";
+const SCOPE_USAGE = "usage: scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]";
 
 /** Console edits for `replay` (#19), applied to the captured request. */
 export interface ReplayEdit {
@@ -287,7 +290,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "scope",
-    usage: "scope [add|exclude|remove <entry> | check <url|host> | paste | all on|off]",
+    usage: "scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]",
     desc: "hosts replay may send to; exclusions (!entry) win; changes last until restart",
     group: "traffic",
     // Changing the scope changes the rules of engagement: humans only.
@@ -295,7 +298,7 @@ export const COMMANDS: readonly Command[] = [
     mcp: false,
     risk: "policy",
     palette: { label: "Show scope", hint: "scope" },
-    complete: (args) => (args.length <= 1 ? ["add", "exclude", "remove", "check", "paste", "all"] : args[0] === "all" ? ["on", "off"] : []),
+    complete: (args) => (args.length <= 1 ? ["add", "exclude", "remove", "check", "paste", "import", "all"] : args[0] === "all" ? ["on", "off"] : []),
     run: async (args, ctx) => {
       const show = (entries: readonly string[], all: boolean) => {
         const listed = entries.filter((e) => e !== "*" && !e.startsWith("!"));
@@ -312,8 +315,12 @@ export const COMMANDS: readonly Command[] = [
       }
       const [sub, arg, ...extra] = args;
       if (sub === "paste" && !arg) {
-        ctx.openScopePaste();
+        ctx.openScopePaste("paste");
         return ctx.out("scope: paste a list in the Engagement view; it previews every line before anything changes", "sys");
+      }
+      if (sub === "import" && !arg) {
+        ctx.openScopePaste("import");
+        return ctx.out("scope: choose an OpenAPI or Swagger file in the Engagement view; its servers are previewed before anything changes", "sys");
       }
       if (sub === "check") {
         if (!arg || extra.length) return ctx.out("usage: scope check <url|host>", "warn");

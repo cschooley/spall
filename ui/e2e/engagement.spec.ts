@@ -301,3 +301,41 @@ test("hosts from traffic: rows show their scope state, scope: filters, the Engag
   expect(await page.locator(".eng img").count()).toBe(0);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
+
+test("import an OpenAPI file: servers previewed, hosts applied, the spec kept (#40)", async ({ page }) => {
+  const api = engagementApi(page);
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  let sent: { text: string } | null = null;
+  await page.route("**/api/openapi/parse", async (r) => {
+    sent = r.request().postDataJSON() as { text: string };
+    await r.fulfill({
+      json: {
+        spec: { title: `ACME ${p}`, version: "2", format: "openapi 3.0.3", servers: ["https://api.acme.test/v2", "/rel"], paths: ["/orders/{id}", "/users"], imported: "2026-11-22T00:00:00Z" },
+        notes: ['server "/rel" is relative: its host is wherever the spec is served from'],
+        items: [{ line: 1, source: "https://api.acme.test/v2", entry: "api.acme.test", exclude: false, error: null, notes: ['path "/v2" dropped: scope is by host'], present: false }],
+        add: ["api.acme.test"],
+        exclude: [],
+      },
+    });
+  });
+  await page.goto("/#engagement/import");
+  const panel = page.getByRole("group", { name: "Import an OpenAPI file" });
+  await panel.getByLabel("OpenAPI file").setInputFiles({ name: "acme.yaml", mimeType: "text/yaml", buffer: Buffer.from("openapi: 3.0.3\n") });
+  await expect(panel.getByRole("status")).toHaveText(`ACME ${p} 2 (openapi 3.0.3) · 2 paths · 1 to add · 0 to exclude`);
+  await expect(panel.getByRole("list", { name: "Import notes" })).toContainText("is relative");
+  expect(sent).toEqual({ text: "openapi: 3.0.3\n" });
+  await panel.getByRole("button", { name: "apply 1 and keep the spec" }).click();
+  await expect(panel).toHaveCount(0);
+  expect(api.calls.slice(-2).map((c) => c.body)).toEqual([
+    { op: "apply", add: ["api.acme.test"], exclude: [] },
+    { api_specs: [{ title: `ACME ${p}`, version: "2", format: "openapi 3.0.3", servers: ["https://api.acme.test/v2", "/rel"], paths: ["/orders/{id}", "/users"], imported: "2026-11-22T00:00:00Z" }] },
+  ]);
+  const kept = page.getByRole("list", { name: "API descriptions" });
+  await expect(kept).toContainText(`ACME ${p} 2`);
+  await expect(kept).toContainText("openapi 3.0.3 · 2 paths · 2 servers");
+  await expect(page.getByRole("list", { name: "In scope" })).toContainText("api.acme.test");
+  await kept.getByRole("button", { name: `Forget ACME ${p}` }).click();
+  await expect(page.getByRole("list", { name: "API descriptions" })).toHaveCount(0);
+  expect(await page.locator(".eng img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});

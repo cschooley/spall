@@ -12,6 +12,7 @@
 //! Its rules of engagement (#36, `roe`) travel with it.
 
 use crate::gate::Scope;
+use crate::openapi::ApiSpec;
 use crate::roe::{Blackout, Period, Rules, Window};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -52,6 +53,9 @@ pub struct Engagement {
     /// Rules of engagement (#36). Files from before #36 get the defaults.
     #[serde(default)]
     pub rules: Rules,
+    /// Imported API descriptions (#40): servers and paths, for Surface.
+    #[serde(default)]
+    pub api_specs: Vec<ApiSpec>,
     pub created: String,
     pub updated: String,
 }
@@ -84,6 +88,7 @@ pub struct Patch {
     pub notes: Option<String>,
     pub target_notes: Option<BTreeMap<String, String>>,
     pub rules: Option<RulesPatch>,
+    pub api_specs: Option<Vec<ApiSpec>>,
 }
 
 /// A change to the rules of engagement; absent fields are left alone.
@@ -270,6 +275,9 @@ impl Engagement {
         if let Some(v) = p.target_notes {
             set!(target_notes, v);
         }
+        if let Some(v) = p.api_specs {
+            set!(api_specs, v);
+        }
         if let Some(r) = p.rules {
             let upper = |v: Vec<String>| -> Vec<String> {
                 v.iter()
@@ -446,6 +454,7 @@ impl Store {
                     scope: bootstrap.with_all(false).entries(),
                     target_notes: BTreeMap::new(),
                     rules: defaults.clone(),
+                    api_specs: Vec::new(),
                     created: ts.clone(),
                     updated: ts,
                 };
@@ -576,6 +585,7 @@ impl Store {
             scope: scope.entries(),
             target_notes: BTreeMap::new(),
             rules: self.defaults.clone(),
+            api_specs: Vec::new(),
             created: ts.clone(),
             updated: ts,
         };

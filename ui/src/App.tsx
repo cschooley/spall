@@ -449,8 +449,8 @@ export function App() {
         const body = await apiJson("/api/hosts");
         return typeof body === "string" ? body : (asListing(body) ?? "unexpected answer");
       },
-      openScopePaste: () => {
-        window.location.hash = "engagement/paste";
+      openScopePaste: (what = "paste") => {
+        window.location.hash = `engagement/${what}`;
       },
       setRules: async (patch) => {
         const body = await apiJson("/api/engagement", { method: "PATCH", body: { rules: patch } });

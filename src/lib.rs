@@ -11,6 +11,7 @@ pub mod gate;
 pub mod hosts;
 pub mod hub;
 pub mod lever;
+pub mod openapi;
 pub mod replay;
 pub mod roe;
 pub mod scope_list;

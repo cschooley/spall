@@ -29,6 +29,7 @@ export function asEngagement(v: unknown): EngagementInfo | null {
     scope: strings(o.scope),
     notes: str(o.notes),
     targetNotes: notesOf(o.target_notes),
+    apiSpecs: asApiSpecs(o.api_specs),
     rules: asRules(o.rules),
     testingNow: testingOf(o.testing_now),
   };
@@ -139,4 +140,32 @@ export function asPreview(v: unknown): Preview | null {
     ];
   });
   return { items, add: strings(o.add), exclude: strings(o.exclude) };
+}
+
+/** An imported API description kept on the engagement (#40). */
+export interface ApiSpec {
+  title: string;
+  version: string;
+  format: string;
+  servers: string[];
+  paths: string[];
+  imported: string;
+}
+
+export function asApiSpecs(v: unknown): ApiSpec[] {
+  if (!Array.isArray(v)) return [];
+  return v.flatMap((x: unknown): ApiSpec[] => {
+    const o = x as Record<string, unknown> | null;
+    if (!o || typeof o.title !== "string") return [];
+    const s = (k: string) => (typeof o[k] === "string" ? (o[k] as string) : "");
+    return [{ title: o.title, version: s("version"), format: s("format"), servers: strings(o.servers), paths: strings(o.paths), imported: s("imported") }];
+  });
+}
+
+/** An OpenAPI import preview (#40): the spec, its notes, and the scope preview. */
+export function asImport(v: unknown): { spec: ApiSpec; notes: string[]; preview: Preview } | null {
+  const preview = asPreview(v);
+  const o = v as Record<string, unknown> | null;
+  const [spec] = asApiSpecs([o?.spec]);
+  return preview && spec ? { spec, notes: strings(o?.notes), preview } : null;
 }

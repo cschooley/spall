@@ -1525,3 +1525,66 @@ async fn hosts_from_a_log_file_include_host_headers_and_are_all_unknown() {
     assert_eq!(names, ["admin.internal", "app.acme.test", "cdn.other.test"]);
     assert_eq!(l["counts"]["unknown"], 3);
 }
+
+#[tokio::test]
+async fn an_openapi_file_is_previewed_then_applied_and_kept_on_the_engagement() {
+    let (dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let token = dir.path().join("api-token");
+    let spec = "openapi: 3.0.3\ninfo: {title: ACME, version: '2'}\nservers:\n  - url: https://api.acme.test/v2\n  - url: https://example.com\npaths:\n  /users: {}\n  /orders/{id}: {}\n";
+    let body = serde_json::json!({ "text": spec }).to_string();
+    let res = post_text(spall, "/api/openapi/parse", &body, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let i = body_json(&res);
+    assert_eq!(
+        i["add"],
+        serde_json::json!(["api.acme.test"]),
+        "example.com is already in scope"
+    );
+    assert_eq!(
+        i["spec"]["paths"],
+        serde_json::json!(["/orders/{id}", "/users"]),
+        "sorted"
+    );
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(
+        status["scope"],
+        serde_json::json!(["example.com"]),
+        "a preview changes nothing"
+    );
+
+    let apply = serde_json::json!({ "op": "apply", "add": i["add"], "exclude": i["exclude"] });
+    assert!(post_text(spall, "/api/scope", &apply.to_string(), None)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let keep = serde_json::json!({ "api_specs": [i["spec"]] });
+    let res = send_text(spall, "PATCH", "/api/engagement", &keep.to_string(), None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let e = body_json(&get_text(spall, "/api/engagement").await);
+    assert_eq!(e["api_specs"][0]["title"], "ACME");
+    assert_eq!(
+        e["scope"],
+        serde_json::json!(["example.com", "api.acme.test"])
+    );
+
+    let bad = post_text(
+        spall,
+        "/api/openapi/parse",
+        r#"{"text":"title: nope\n"}"#,
+        None,
+    )
+    .await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+    let forged = post_text(
+        spall,
+        "/api/openapi/parse",
+        &body,
+        Some("Content-Type: application/json\r\nOrigin: http://evil.example\r\n"),
+    )
+    .await;
+    assert!(forged.starts_with("HTTP/1.1 403"), "{forged}");
+    let rec = audit_records(&token)
+        .into_iter()
+        .rfind(|r| r["action"] == "engagement")
+        .unwrap();
+    assert_eq!(rec["reason"], "set api_specs");
+}
