@@ -254,8 +254,9 @@ fn to_event(item: &Published) -> Event {
     }
 }
 
-/// Rejects requests whose Host is not allowlisted (DNS rebinding defense)
-/// and adds security headers to every response.
+/// Rejects requests whose Host is not allowlisted (DNS rebinding defense),
+/// then state-changing requests not from spall's own page (CSRF, see
+/// `csrf`), and adds security headers to every response.
 async fn guard(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let host = req
         .headers()
@@ -266,10 +267,14 @@ async fn guard(State(state): State<AppState>, req: Request, next: Next) -> Respo
         Some(h) => host_allowed(h, &state.allowed_hosts),
         None => false,
     };
-    let mut res = if allowed {
-        next.run(req).await
-    } else {
+    let mut res = if !allowed {
         (StatusCode::FORBIDDEN, "host not allowed\n").into_response()
+    } else if let Err(why) = crate::csrf::check(req.method(), req.headers()) {
+        // Same-origin guard (#17), on every route so new ones are covered
+        // by default. No CORS headers are ever sent.
+        json_error(StatusCode::FORBIDDEN, why)
+    } else {
+        next.run(req).await
     };
     let h = res.headers_mut();
     h.insert(
@@ -565,6 +570,74 @@ mod tests {
             .unwrap();
         let res = app(Arc::new(Hub::new(1))).oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    fn post_req(path: &str, headers: &[(&str, &str)]) -> Request {
+        let mut b = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::HOST, "127.0.0.1:3000");
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        b.body(Body::from("{}")).unwrap()
+    }
+
+    #[tokio::test]
+    async fn cross_site_posts_are_refused_on_every_route() {
+        for path in ["/api/replay", "/api/exchanges", "/", "/nope"] {
+            for headers in [
+                &[("content-type", "text/plain"), ("origin", "http://evil.example")][..],
+                &[("content-type", "application/json"), ("sec-fetch-site", "cross-site")][..],
+                &[("content-type", "application/json")][..],
+            ] {
+                let res = app(Arc::new(Hub::new(1)))
+                    .oneshot(post_req(path, headers))
+                    .await
+                    .unwrap();
+                assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path} {headers:?}");
+                assert!(res.headers().get("access-control-allow-origin").is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn same_origin_json_posts_get_past_the_guard() {
+        let res = app(Arc::new(Hub::new(1)))
+            .oneshot(post_req(
+                "/healthz",
+                &[
+                    ("content-type", "application/json"),
+                    ("sec-fetch-site", "same-origin"),
+                    ("origin", "http://127.0.0.1:3000"),
+                ],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn preflights_are_never_approved() {
+        let req = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/replay")
+            .header(header::HOST, "127.0.0.1:3000")
+            .header("origin", "http://evil.example")
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "content-type")
+            .body(Body::empty())
+            .unwrap();
+        let res = app(Arc::new(Hub::new(1))).oneshot(req).await.unwrap();
+        assert!(!res.status().is_success(), "{}", res.status());
+        for h in [
+            "access-control-allow-origin",
+            "access-control-allow-methods",
+            "access-control-allow-headers",
+            "access-control-allow-credentials",
+        ] {
+            assert!(res.headers().get(h).is_none(), "{h}");
+        }
     }
 
     #[tokio::test]
