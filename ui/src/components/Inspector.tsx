@@ -7,6 +7,7 @@ import { Fragment, useState } from "react";
 import { Body } from "./Body.tsx";
 import { RequestEditor } from "./RequestEditor.tsx";
 import { draftOf, type Draft } from "../lib/edit.ts";
+import { editSummary } from "../lib/replays.ts";
 import {
   bodyBytes,
   displayUrl,
@@ -18,12 +19,21 @@ import {
   shortId,
   statusClass,
   statusLine,
+  timeOf,
 } from "../lib/format.ts";
 import { toCurl } from "../lib/curl.ts";
 import { isSecretHeader } from "../lib/secrets.ts";
 import type { Header, TrafficEntry } from "../types.ts";
 
-type Tab = "request" | "response";
+type Tab = "request" | "response" | "replays";
+
+/** This exchange's replays (#21): history plus live, newest first. */
+export interface ReplayList {
+  items: TrafficEntry[];
+  /** false in log-file mode: only replays already loaded are known. */
+  complete: boolean;
+  error: string | null;
+}
 
 /** The replay control's state, owned by the app (the console shares it). */
 export interface ReplayControl {
@@ -45,10 +55,15 @@ export function Inspector({
   onClose,
   replay,
   onOpen,
+  replays,
+  chain,
 }: {
   entry: TrafficEntry;
   onClose: () => void;
   replay: ReplayControl;
+  replays: ReplayList;
+  /** Ids from the first original to this exchange; `missing` if a link is gone. */
+  chain: { chain: string[]; missing: string | null };
   /** Open another exchange by id (the original of a replay). */
   onOpen(id: string): void;
 }) {
@@ -116,6 +131,26 @@ export function Inspector({
             </button>
           ) : null}
         </div>
+        {chain.chain.length > 2 || chain.missing ? (
+          <div className="chain" aria-label="Replay chain">
+            {"chain: "}
+            {chain.missing ? <span title={`${chain.missing} isn't in taphttp's history`}>{"… → "}</span> : null}
+            {chain.chain.map((id, i) =>
+              id === entry.id ? (
+                <span key={id} className="here">
+                  this
+                </span>
+              ) : (
+                <Fragment key={id}>
+                  <button type="button" className="link" title={id} onClick={() => onOpen(id)}>
+                    {i === 0 && !chain.missing ? `${shortId(id)} (original)` : shortId(id)}
+                  </button>
+                  {" → "}
+                </Fragment>
+              ),
+            )}
+          </div>
+        ) : null}
         <button type="button" className="close" aria-label="Close inspector" title="Close (Esc)" onClick={onClose}>
           ×
         </button>
@@ -150,14 +185,17 @@ export function Inspector({
         </div>
       )}
       <div className="tabs" role="tablist">
-        {(["request", "response"] as const).map((t) => (
+        {(["request", "response", "replays"] as const).map((t) => (
           <button key={t} type="button" role="tab" aria-selected={tab === t} className={tab === t ? "on" : undefined} onClick={() => setTab(t)}>
             {t}
+            {t === "replays" ? <span className="count">{replays.items.length}</span> : null}
           </button>
         ))}
       </div>
       <section className="pane" role="tabpanel" aria-label={tab}>
-        {draft && isReq ? (
+        {tab === "replays" ? (
+          <Replays entry={entry} list={replays} onOpen={onOpen} />
+        ) : draft && isReq ? (
           <RequestEditor original={entry} draft={draft} setDraft={setDraft} replay={replay} onCancel={() => setDraft(null)} />
         ) : (
           <>
@@ -174,6 +212,36 @@ export function Inspector({
         )}
       </section>
     </aside>
+  );
+}
+
+function Replays({ entry, list, onOpen }: { entry: TrafficEntry; list: ReplayList; onOpen(id: string): void }) {
+  return (
+    <>
+      <h3>
+        {`Replays of this exchange`}
+        <span className="note">{list.complete ? " · newest first" : " · loaded replays only (log-file mode: no history API)"}</span>
+      </h3>
+      {list.error ? <p className="replay-msg">{list.error}</p> : null}
+      {list.items.length === 0 ? (
+        <p className="none">No replays yet. ⏎ replays this exchange; e edits first.</p>
+      ) : (
+        <ol className="replays">
+          {list.items.map((r) => (
+            <li key={r.id}>
+              <button type="button" className="link" title={`Open ${r.id}`} onClick={() => onOpen(r.id)}>
+                <span className="t">{timeOf(r.ts)}</span>
+                <span className={statusClass(r.status)}>{statusLine(r.status)}</span>
+                <span>{r.duration_ms !== null ? durationText(r.duration_ms) : "—"}</span>
+                <span className="what">{editSummary(entry, r)}</span>
+                {r.meta?.actor ? <span className="who">{r.meta.actor}</span> : null}
+              </button>
+              {r.error ? <span className="error">{r.error}</span> : null}
+            </li>
+          ))}
+        </ol>
+      )}
+    </>
   );
 }
 

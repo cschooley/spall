@@ -1,8 +1,8 @@
-// The filter bar's syntax: `host:x method:POST status:404|4xx free text`.
-// Exact filters and free text go to taphttp's GET /exchanges (via spall);
-// the same predicate runs client-side on live rows, mirroring the API's
-// semantics so both agree. Status classes are client-side only until
-// taphttp#9 adds them to the API.
+// The filter bar's syntax: `host:x method:POST status:404|4xx replay:yes
+// free text`. Filters and free text go to taphttp's GET /exchanges (via
+// spall); the same predicate runs client-side on live rows, mirroring the
+// API's semantics so both agree. `replay:` is client-side only: taphttp
+// filters on one original (`replay_of=<id>`), not on being a replay.
 
 export interface Query {
   host?: string;
@@ -10,6 +10,8 @@ export interface Query {
   status?: number;
   statusClass?: number;
   text?: string;
+  /** replay:yes (only replays) or replay:no (only originals). */
+  replay?: boolean;
   /** Tokens that look like filters but aren't supported (e.g. by:agent, M5). */
   ignored: string[];
 }
@@ -29,7 +31,8 @@ export function parseFilter(input: string): Query {
     else if (key === "method" && /^[a-z]+$/i.test(val)) q.method = val.toUpperCase();
     else if (key === "status" && /^[1-5]\d\d$/.test(val)) q.status = Number(val);
     else if (key === "status" && /^[1-5]xx$/i.test(val)) q.statusClass = Number(val[0]);
-    else if (["host", "method", "status", "by"].includes(key)) q.ignored.push(tok);
+    else if (key === "replay" && /^(yes|no)$/i.test(val)) q.replay = val.toLowerCase() === "yes";
+    else if (["host", "method", "status", "by", "replay"].includes(key)) q.ignored.push(tok);
     else words.push(tok); // e.g. "https://..." in free text
   }
   if (words.length) q.text = words.join(" ");
@@ -42,12 +45,13 @@ export function apiParams(q: Query): [string, string][] {
   if (q.host) p.push(["host", q.host]);
   if (q.method) p.push(["method", q.method]);
   if (q.status !== undefined) p.push(["status", String(q.status)]);
+  else if (q.statusClass !== undefined) p.push(["status", `${q.statusClass}xx`]);
   if (q.text) p.push(["q", q.text]);
   return p;
 }
 
 export function matchesQuery(
-  e: { host: string; method: string; url: string; status: number | null },
+  e: { host: string; method: string; url: string; status: number | null; replay_of?: string | null },
   q: Query,
 ): boolean {
   const lc = (s: string) => s.toLowerCase();
@@ -56,9 +60,10 @@ export function matchesQuery(
   if (q.status !== undefined && e.status !== q.status) return false;
   if (q.statusClass !== undefined && (e.status === null || Math.floor(e.status / 100) !== q.statusClass)) return false;
   if (q.text && !lc(e.url).includes(lc(q.text)) && !lc(e.host).includes(lc(q.text))) return false;
+  if (q.replay !== undefined && Boolean(e.replay_of) !== q.replay) return false;
   return true;
 }
 
 export function isEmptyQuery(q: Query): boolean {
-  return apiParams(q).length === 0 && q.statusClass === undefined;
+  return apiParams(q).length === 0 && q.replay === undefined;
 }

@@ -4,6 +4,10 @@ import type { TrafficEntry } from "./types.ts";
 
 export const PAGE_SIZE = 200;
 
+/** One empty list, so "off" returns the same items every render (a fresh
+ * [] each time made everything derived from it look changed, #21). */
+const NO_ITEMS: TrafficEntry[] = [];
+
 export interface History {
   /** Newest first, as /api/exchanges returns them. */
   items: TrafficEntry[];
@@ -102,6 +106,6 @@ export function useHistory(query: Query, mode: "wait" | "fetch" | "off"): Histor
     start(items[items.length - 1]!.id).then((r) => apply(r, false));
   }, [loading, hasMore, items, start, apply]);
 
-  if (mode === "off") return { items: [], loading: false, hasMore: false, unavailable: true, error: null, loadOlder };
+  if (mode === "off") return { items: NO_ITEMS, loading: false, hasMore: false, unavailable: true, error: null, loadOlder };
   return { items, loading: loading && mode === "fetch", hasMore, unavailable, error, loadOlder };
 }

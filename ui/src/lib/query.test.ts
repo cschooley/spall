@@ -24,14 +24,26 @@ test("unsupported or malformed tokens are reported, not guessed", () => {
   ]);
 });
 
-test("API params: exact filters and q; status classes stay client-side (taphttp#9)", () => {
+test("API params: exact filters, status classes (taphttp 0.4.0+) and q; replay: stays client-side", () => {
   assert.deepEqual(apiParams(parseFilter("host:a method:get status:503 x y")), [
     ["host", "a"],
     ["method", "GET"],
     ["status", "503"],
     ["q", "x y"],
   ]);
-  assert.deepEqual(apiParams(parseFilter("status:5xx")), []);
+  assert.deepEqual(apiParams(parseFilter("status:5xx")), [["status", "5xx"]]);
+  assert.deepEqual(apiParams(parseFilter("replay:yes")), [], "taphttp can't filter on having replay_of");
+});
+
+test("replay:yes / replay:no select replays or originals", () => {
+  assert.equal(parseFilter("replay:yes").replay, true);
+  assert.equal(parseFilter("replay:no").replay, false);
+  assert.deepEqual(parseFilter("replay:maybe").ignored, ["replay:maybe"]);
+  const orig = { ...e, replay_of: null };
+  const rep = { ...e, replay_of: "o1" };
+  assert.ok(matchesQuery(rep, parseFilter("replay:yes")) && !matchesQuery(orig, parseFilter("replay:yes")));
+  assert.ok(matchesQuery(orig, parseFilter("replay:no")) && !matchesQuery(rep, parseFilter("replay:no")));
+  assert.ok(matchesQuery({ host: "h", method: "GET", url: "/", status: 1 }, parseFilter("replay:no")), "no replay_of field: original");
 });
 
 const e = { host: "Shop.Example.test", method: "POST", url: "https://shop.example.test/api/Login?x=1", status: 401 };

@@ -33,12 +33,14 @@ async function fakeHistory(page: Page, all: TrafficEntry[]) {
   return requests;
 }
 
-test("filters become API parameters; status classes stay client-side", async ({ page }) => {
+test("filters become API parameters, status classes included; replay: stays client-side", async ({ page }) => {
   const t = token();
   const requests = await fakeHistory(page, []);
   await page.goto("/");
   await filterTo(page, `host:${t} method:post status:4xx login`);
-  await expect.poll(() => requests.at(-1)?.toString()).toBe(`host=${t}&method=POST&q=login&limit=200`);
+  await expect.poll(() => requests.at(-1)?.toString()).toBe(`host=${t}&method=POST&status=4xx&q=login&limit=200`);
+  await filterTo(page, `replay:yes ${t}`);
+  await expect.poll(() => requests.at(-1)?.toString()).toBe(`q=${t}&limit=200`);
   await filterTo(page, `status:404 ${t}`);
   await expect.poll(() => requests.at(-1)?.toString()).toBe(`status=404&q=${t}&limit=200`);
 });

@@ -29,6 +29,8 @@ import {
 } from "./lib/theme.ts";
 import type { TrafficEntry } from "./types.ts";
 import { useHistory } from "./useHistory.ts";
+import { replaysOf } from "./lib/replays.ts";
+import { useChain, useReplayHistory } from "./useReplays.ts";
 import { useSourceStatus } from "./useStatus.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
@@ -315,6 +317,21 @@ export function App() {
     [status.replay, armed, out, selected, rows, findEntry],
   );
 
+  // The open exchange's replays and chain (#21).
+  const replayHistory = useReplayHistory(
+    selected?.id ?? null,
+    status.source === "log" ? "off" : status.source === "pending" ? "wait" : "fetch",
+  );
+  const replayList = useMemo(
+    () => ({
+      items: selected ? replaysOf(selected.id, [replayHistory.items, store.items, history.items]) : [],
+      complete: replayHistory.complete,
+      error: replayHistory.error,
+    }),
+    [selected, replayHistory, store.items, history.items],
+  );
+  const chain = useChain(selected, findEntry);
+
   const focusFilter = useCallback(() => filterInput.current?.focus(), []);
   const toggleMode = useCallback(() => {
     const p = themeParts(theme);
@@ -521,6 +538,8 @@ export function App() {
             entry={selected}
             onClose={() => setSelected(null)}
             onOpen={(id) => void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"))}
+            replays={replayList}
+            chain={chain}
             replay={{
               available: status.replay,
               busy: replayBusy === selected.id,
