@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod csrf;
+pub mod gate;
 pub mod hub;
 pub mod lever;
 pub mod tailer;

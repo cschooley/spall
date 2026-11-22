@@ -587,8 +587,14 @@ mod tests {
     async fn cross_site_posts_are_refused_on_every_route() {
         for path in ["/api/replay", "/api/exchanges", "/", "/nope"] {
             for headers in [
-                &[("content-type", "text/plain"), ("origin", "http://evil.example")][..],
-                &[("content-type", "application/json"), ("sec-fetch-site", "cross-site")][..],
+                &[
+                    ("content-type", "text/plain"),
+                    ("origin", "http://evil.example"),
+                ][..],
+                &[
+                    ("content-type", "application/json"),
+                    ("sec-fetch-site", "cross-site"),
+                ][..],
                 &[("content-type", "application/json")][..],
             ] {
                 let res = app(Arc::new(Hub::new(1)))
