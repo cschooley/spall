@@ -455,3 +455,12 @@ main.eng-main { display: block; overflow: auto; background: var(--vg-bg-base); }
 .preview tr.ex td.to { color: var(--vg-accent-rust); }
 .preview tr.bad td.to { color: var(--vg-status-4xx); }
 .preview tr.same td { color: var(--vg-text-tertiary); }
+
+/* Scope state per host (#39): in verdigris, excluded rust, unknown muted. */
+td.host .sc { display: inline-block; width: 1.2em; font-size: 9px; vertical-align: 1px; }
+.sc-in { color: var(--vg-accent-verdigris); }
+.sc-out { color: var(--vg-accent-rust); }
+.sc-unknown { color: var(--vg-text-tertiary); }
+.eng .note.wrap { white-space: normal; }
+.eng .sect h3 label.check { display: inline-flex; gap: var(--vg-space-1); align-items: center; text-transform: none; letter-spacing: 0; font: var(--vg-text-xs) var(--vg-font-sans); }
+.eng .entries.hosts li { grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto; }

@@ -3,6 +3,7 @@
 // spall); the same predicate runs client-side on live rows, mirroring the
 // API's semantics so both agree. `replay:` is client-side only: taphttp
 // filters on one original (`replay_of=<id>`), not on being a replay.
+// `scope:` is client-side too, from spall's host states (#39).
 
 export interface Query {
   host?: string;
@@ -12,6 +13,8 @@ export interface Query {
   text?: string;
   /** replay:yes (only replays) or replay:no (only originals). */
   replay?: boolean;
+  /** scope:in|out|unknown, from the server's host states (#39). */
+  scope?: "in" | "out" | "unknown";
   /** Tokens that look like filters but aren't supported (e.g. by:agent, M5). */
   ignored: string[];
 }
@@ -32,7 +35,8 @@ export function parseFilter(input: string): Query {
     else if (key === "status" && /^[1-5]\d\d$/.test(val)) q.status = Number(val);
     else if (key === "status" && /^[1-5]xx$/i.test(val)) q.statusClass = Number(val[0]);
     else if (key === "replay" && /^(yes|no)$/i.test(val)) q.replay = val.toLowerCase() === "yes";
-    else if (["host", "method", "status", "by", "replay"].includes(key)) q.ignored.push(tok);
+    else if (key === "scope" && /^(in|out|unknown)$/i.test(val)) q.scope = val.toLowerCase() as Query["scope"];
+    else if (["host", "method", "status", "by", "replay", "scope"].includes(key)) q.ignored.push(tok);
     else words.push(tok); // e.g. "https://..." in free text
   }
   if (words.length) q.text = words.join(" ");
@@ -53,6 +57,8 @@ export function apiParams(q: Query): [string, string][] {
 export function matchesQuery(
   e: { host: string; method: string; url: string; status: number | null; replay_of?: string | null },
   q: Query,
+  /** A host's scope state, for scope:; a host the server hasn't seen yet is unknown. */
+  stateOf: (host: string) => "in" | "out" | "unknown" | null = () => null,
 ): boolean {
   const lc = (s: string) => s.toLowerCase();
   if (q.host && !lc(e.host).includes(lc(q.host))) return false;
@@ -61,9 +67,10 @@ export function matchesQuery(
   if (q.statusClass !== undefined && (e.status === null || Math.floor(e.status / 100) !== q.statusClass)) return false;
   if (q.text && !lc(e.url).includes(lc(q.text)) && !lc(e.host).includes(lc(q.text))) return false;
   if (q.replay !== undefined && Boolean(e.replay_of) !== q.replay) return false;
+  if (q.scope !== undefined && (stateOf(e.host) ?? "unknown") !== q.scope) return false;
   return true;
 }
 
 export function isEmptyQuery(q: Query): boolean {
-  return apiParams(q).length === 0 && q.replay === undefined;
+  return apiParams(q).length === 0 && q.replay === undefined && q.scope === undefined;
 }

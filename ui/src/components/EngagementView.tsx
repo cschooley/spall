@@ -5,6 +5,8 @@
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { ScopePaste } from "./ScopePaste.tsx";
+import { parentWildcard, type HostListing, type HostState } from "../lib/hosts.ts";
+import { timeOf } from "../lib/format.ts";
 import type { EngagementInfo, ScopeVerdict } from "../commands/registry.ts";
 import { apiJson, expiryText } from "../lib/engagement.ts";
 import { daysText, parseDays, parseSpan, rulesFormOf, rulesPatchOf, type Rules, type RulesForm } from "../lib/roe.ts";
@@ -18,7 +20,7 @@ async function send(path: string, method: string, body: unknown): Promise<Result
   return typeof res === "string" ? res : null;
 }
 
-export function EngagementView({ available, onChanged }: { available: boolean; onChanged(): void }) {
+export function EngagementView({ available, hosts, onChanged }: { available: boolean; hosts: HostListing | null; onChanged(): void }) {
   const st = useEngagement(available);
   const done = () => {
     st.refresh();
@@ -41,6 +43,7 @@ export function EngagementView({ available, onChanged }: { available: boolean; o
       <div className="eng-grid">
         <Details e={e} onChanged={done} />
         <ScopePanel e={e} onChanged={done} />
+        <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
         <Waiting />
       </div>
@@ -500,6 +503,75 @@ function RulesPanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
         <input aria-label="No-test note" placeholder="note" value={bo.note} onChange={(ev) => setBo({ ...bo, note: ev.target.value })} />
         <button type="submit">add no-test window</button>
       </form>
+      <ErrorLine msg={err} />
+    </Section>
+  );
+}
+
+const STATE_WORD: Record<HostState, string> = { in: "in scope", out: "excluded", unknown: "undecided" };
+
+/** Hosts seen in traffic (#39): decide each unknown one in a click. */
+function HostsPanel({ listing, onChanged }: { listing: HostListing | null; onChanged(): void }) {
+  const [all, setAll] = useState(false);
+  const [err, setErr] = useState<Result>(null);
+  if (!listing) return null;
+  const decide = async (op: "add" | "exclude", entry: string) => {
+    const r = await send("/api/scope", "POST", { op, entry });
+    setErr(r);
+    if (!r) onChanged();
+  };
+  const shown = all ? listing.hosts : listing.hosts.filter((h) => h.state === "unknown");
+  const c = listing.counts;
+  return (
+    <Section
+      title={`Hosts from traffic · ${c.unknown} undecided`}
+      label="Hosts from traffic"
+      actions={
+        <label className="check">
+          <input type="checkbox" checked={all} onChange={(ev) => setAll(ev.target.checked)} /> all
+        </label>
+      }
+    >
+      <p className="note wrap">{`${c.in} in scope · ${c.out} excluded · ${c.unknown} undecided, from recent and live traffic${listing.dropped ? ` (${listing.dropped} more not tracked)` : ""}`}</p>
+      {shown.length ? (
+        <ul className="entries hosts" aria-label={all ? "Hosts" : "Undecided hosts"}>
+          {shown.map((h) => {
+            const parent = parentWildcard(h.host);
+            return (
+              <li key={h.host} className={`h-${h.state}`}>
+                <span className="entry">
+                  <span className={`sc sc-${h.state}`} aria-hidden>
+                    ●
+                  </span>
+                  {h.host}
+                </span>
+                <span className="note" title={`first seen ${h.firstSeen}, last seen ${h.lastSeen}`}>
+                  {`${h.count}× · last ${timeOf(h.lastSeen)}${h.state === "unknown" ? "" : ` · ${STATE_WORD[h.state]}${h.by ? ` by ${h.by}` : ""}`}`}
+                </span>
+                {h.state === "unknown" ? (
+                  <span className="row-actions">
+                    <button type="button" aria-label={`Add ${h.host} to scope`} onClick={() => void decide("add", h.host)}>
+                      add
+                    </button>
+                    <button type="button" aria-label={`Exclude ${h.host}`} onClick={() => void decide("exclude", h.host)}>
+                      exclude
+                    </button>
+                    {parent ? (
+                      <button type="button" aria-label={`Exclude ${parent}`} onClick={() => void decide("exclude", parent)}>
+                        {`exclude ${parent}`}
+                      </button>
+                    ) : null}
+                  </span>
+                ) : (
+                  <span />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="empty">{all ? "No traffic yet." : "Nothing undecided: every host seen is in scope or excluded."}</p>
+      )}
       <ErrorLine msg={err} />
     </Section>
   );

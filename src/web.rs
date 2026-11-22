@@ -79,6 +79,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/audit", get(api_audit))
         .route("/api/scope", post(api_scope))
         .route("/api/scope/check", get(api_scope_check))
+        .route("/api/hosts", get(api_hosts))
         .route(
             "/api/scope/parse",
             post(api_scope_parse).layer(DefaultBodyLimit::max(crate::scope_list::MAX_BYTES + 1024)),
@@ -275,6 +276,35 @@ async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Re
             )
         }
     }
+}
+
+/// Hosts seen in traffic with their scope state (#39), most seen first.
+/// `?state=in|out|unknown` narrows the list (counts cover every host).
+/// Without the lever API there's no engagement, so every host is unknown.
+async fn api_hosts(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let scope = state
+        .replayer
+        .as_ref()
+        .map(|r| r.scope_now())
+        .unwrap_or_default();
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(raw.as_deref().unwrap_or("")).unwrap_or_default();
+    let want = pairs
+        .iter()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.as_str());
+    let want = match want {
+        None => None,
+        Some("in") => Some(crate::gate::HostState::In),
+        Some("out") => Some(crate::gate::HostState::Out),
+        Some("unknown") => Some(crate::gate::HostState::Unknown),
+        Some(_) => return json_error(StatusCode::BAD_REQUEST, "state must be in, out or unknown"),
+    };
+    let mut listing = state.hub.hosts.list(&scope);
+    if let Some(w) = want {
+        listing.hosts.retain(|h| h.state == w);
+    }
+    axum::Json(listing).into_response()
 }
 
 /// Preview a pasted scope list (#38): what each line becomes, against the

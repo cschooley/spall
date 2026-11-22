@@ -49,6 +49,15 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     openScopePaste: () => void calls.push("paste"),
+    hosts: async () => ({
+      hosts: [
+        { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
+        { host: "www.google-analytics.com", count: 4, firstSeen: "", lastSeen: "", state: "unknown" as const, by: null },
+        { host: "pay.acme.test", count: 1, firstSeen: "", lastSeen: "", state: "out" as const, by: "!pay.acme.test" },
+      ],
+      counts: { in: 1, out: 1, unknown: 1 },
+      dropped: 0,
+    }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
     ...over,
   };
@@ -308,6 +317,15 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     openScopePaste: () => void calls.push("paste"),
+    hosts: async () => ({
+      hosts: [
+        { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
+        { host: "www.google-analytics.com", count: 4, firstSeen: "", lastSeen: "", state: "unknown" as const, by: null },
+        { host: "pay.acme.test", count: 1, firstSeen: "", lastSeen: "", state: "out" as const, by: "!pay.acme.test" },
+      ],
+      counts: { in: 1, out: 1, unknown: 1 },
+      dropped: 0,
+    }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: "sso.a.test", state: "out", by: "!sso.a.test" }),
   });
   await execute("scope exclude sso.a.test", ctx);
@@ -466,4 +484,23 @@ test("roe set, window and blackout build rule changes", async () => {
   assert.equal(refused.lines.at(-1)![1], "warn");
   assert.deepEqual(complete("roe ").options, ["set", "window", "blackout"]);
   assert.deepEqual(complete("roe set ").options, ["methods", "safe", "rate", "tz", "agents", "destructive"]);
+});
+
+test("hosts lists what traffic has touched, with each host's scope state", async () => {
+  const { ctx, lines } = fakeCtx();
+  await execute("hosts", ctx);
+  assert.deepEqual(lines.slice(1), [
+    ["hosts: 1 in scope · 1 excluded · 1 undecided", "out"],
+    ["  in        12  app.acme.test  (*.acme.test)", "out"],
+    ["  ?          4  www.google-analytics.com", "warn"],
+    ["  out        1  pay.acme.test  (!pay.acme.test)", "out"],
+  ]);
+  lines.length = 0;
+  await execute("hosts --unknown", ctx);
+  assert.deepEqual(lines.slice(1).map(([t]) => t), ["hosts: 1 in scope · 1 excluded · 1 undecided", "  ?          4  www.google-analytics.com", "decide them in the Engagement view, or: scope add|exclude <host>"]);
+  const t = fakeCtx();
+  await execute("hosts --nope", t.ctx);
+  assert.equal(t.lines.at(-1)![1], "warn");
+  const h = COMMANDS.find((c) => c.name === "hosts")!;
+  assert.equal(h.risk, "read");
 });

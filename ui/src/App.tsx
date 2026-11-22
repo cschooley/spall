@@ -34,6 +34,8 @@ import { useHistory } from "./useHistory.ts";
 import { replaysOf } from "./lib/replays.ts";
 import { useChain, useOriginal, useReplayHistory } from "./useReplays.ts";
 import { useSourceStatus } from "./useStatus.ts";
+import { useHosts } from "./useHosts.ts";
+import { asListing, stateLookup } from "./lib/hosts.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
 const CONNECTION_LABEL: Record<Connection, string> = {
@@ -143,6 +145,9 @@ export function App() {
   const { store, connection, clear } = useTraffic();
   const [statusNonce, setStatusNonce] = useState(0);
   const status = useSourceStatus(5000, statusNonce);
+  // Host states (#39): polled while the engagement exists (lever API).
+  const hosts = useHosts(status.replay, statusNonce);
+  const hostOfState = useMemo(() => stateLookup(hosts.listing), [hosts.listing]);
   const [theme, setTheme] = useTheme();
   const [filterText, setFilterText] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -202,9 +207,9 @@ export function App() {
   }
 
   const rows = useMemo(() => {
-    const merged = mergeExchanges(history.items, store.items, (e) => matchesQuery(e, query));
+    const merged = mergeExchanges(history.items, store.items, (e) => matchesQuery(e, query, (h) => hostOfState(h)?.state ?? null));
     return clearedAt ? merged.filter((e) => tsKey(e.ts) > clearedAt) : merged;
-  }, [history.items, store.items, query, clearedAt]);
+  }, [history.items, store.items, query, clearedAt, hostOfState]);
 
   const select = useCallback((e: TrafficEntry | null) => setSelected(e), []);
   const clearAll = useCallback(() => {
@@ -440,6 +445,10 @@ export function App() {
         const engagement = asEngagement(o.engagement);
         return engagement ? { engagement, changed: o.changed === true } : "unexpected answer";
       },
+      hosts: async () => {
+        const body = await apiJson("/api/hosts");
+        return typeof body === "string" ? body : (asListing(body) ?? "unexpected answer");
+      },
       openScopePaste: () => {
         window.location.hash = "engagement/paste";
       },
@@ -587,7 +596,7 @@ export function App() {
 
       {view === "engagement" ? (
         <main className="eng-main">
-          <EngagementView available={status.replay} onChanged={() => setStatusNonce((n) => n + 1)} />
+          <EngagementView available={status.replay} hosts={hosts.listing} onChanged={() => setStatusNonce((n) => n + 1)} />
         </main>
       ) : (
         <main className={selected ? "with-inspector" : undefined}>
@@ -622,6 +631,7 @@ export function App() {
           </div>
           <TrafficTable
             rows={rows}
+            hostState={hosts.listing ? hostOfState : null}
             selectedId={selected?.id ?? null}
             onSelect={select}
             follow={follow}

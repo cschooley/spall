@@ -5,6 +5,7 @@
 
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
+import type { HostListing } from "../lib/hosts.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
@@ -38,6 +39,8 @@ export interface Ctx {
   changeScope(change: ScopeChange): Promise<{ scope: readonly string[]; all: boolean; changed: boolean } | string>;
   /** The newest replay attempts from the audit log, or an error message. */
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
+  /** Hosts seen in traffic with their scope state (#39), or an error message. */
+  hosts(): Promise<HostListing | string>;
   /** Open the Engagement view's paste-a-scope-list panel (#38). */
   openScopePaste(): void;
   /** Where a URL or host stands in scope (#34), or an error message. */
@@ -451,6 +454,31 @@ export const COMMANDS: readonly Command[] = [
         return apply({ blackouts: [...e.rules.blackouts, { from, to, note: note.join(" ") }] });
       }
       ctx.out(ROE_USAGE, "warn");
+    },
+  },
+  {
+    name: "hosts",
+    usage: "hosts [--unknown]",
+    desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",
+    group: "traffic",
+    // Reading scope state is fine for an agent; changing it never is.
+    mcp: true,
+    risk: "read",
+    palette: { label: "Hosts from traffic", hint: "hosts" },
+    complete: () => ["--unknown"],
+    run: async (args, ctx) => {
+      const unknownOnly = args[0] === "--unknown";
+      if (args.length > 1 || (args.length === 1 && !unknownOnly)) return ctx.out("usage: hosts [--unknown]", "warn");
+      const l = await ctx.hosts();
+      if (typeof l === "string") return ctx.out(`hosts: ${l}`, "warn");
+      ctx.out(`hosts: ${l.counts.in} in scope · ${l.counts.out} excluded · ${l.counts.unknown} undecided`);
+      const label = { in: "in", out: "out", unknown: "?" } as const;
+      for (const h of l.hosts) {
+        if (unknownOnly && h.state !== "unknown") continue;
+        ctx.out(`  ${label[h.state].padEnd(4)}${String(h.count).padStart(8)}  ${h.host}${h.by ? `  (${h.by})` : ""}`, h.state === "unknown" ? "warn" : "out");
+      }
+      if (unknownOnly && l.counts.unknown) ctx.out("decide them in the Engagement view, or: scope add|exclude <host>", "sys");
+      if (l.dropped) ctx.out(`${l.dropped} more hosts not tracked (table full)`, "sys");
     },
   },
   {

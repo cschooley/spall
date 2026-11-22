@@ -257,3 +257,47 @@ test("paste a scope list: the server previews every line, one click applies (#38
   expect(texts.at(-1)).toContain("Out of scope:");
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
+
+test("hosts from traffic: rows show their scope state, scope: filters, the Engagement view decides (#39)", async ({ page }) => {
+  const api = engagementApi(page);
+  const t = `h${Date.now().toString(36)}`;
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  const hosts = [
+    { host: `app.${t}.test`, count: 5, first_seen: "2026-11-22T10:00:00Z", last_seen: "2026-11-22T10:05:00Z", state: "in", by: `*.${t}.test` },
+    { host: `www.tracker-${t}.com`, count: 3, first_seen: "2026-11-22T10:00:00Z", last_seen: "2026-11-22T10:04:00Z", state: "unknown", by: null },
+    { host: `pay.${t}.test`, count: 1, first_seen: "2026-11-22T10:00:00Z", last_seen: "2026-11-22T10:01:00Z", state: "out", by: `!pay.${t}.test` },
+    { host: p, count: 1, first_seen: "2026-11-22T10:00:00Z", last_seen: "2026-11-22T10:01:00Z", state: "unknown", by: null },
+  ];
+  await page.route("**/api/hosts", (r) =>
+    r.fulfill({ json: { hosts, counts: { in: 1, out: 1, unknown: hosts.filter((h) => h.state === "unknown").length }, dropped: 0 } }),
+  );
+  const { append, entry } = await import("./fixtures.ts");
+  append(
+    entry({ host: `app.${t}.test`, url: `http://app.${t}.test/a` }),
+    entry({ host: `www.tracker-${t}.com`, url: `http://www.tracker-${t}.com/p.gif` }),
+    entry({ host: `pay.${t}.test`, url: `http://pay.${t}.test/x` }),
+  );
+  await page.goto("/");
+  const { filterTo } = await import("./fixtures.ts");
+  await filterTo(page, t);
+  await expect(page.locator("tr.row")).toHaveCount(3);
+  const marker = (h: string) => page.locator("tr.row", { hasText: h }).locator(".sc");
+  await expect(marker(`app.${t}.test`)).toHaveAttribute("data-scope", "in");
+  await expect(marker(`www.tracker-${t}.com`)).toHaveAttribute("data-scope", "unknown");
+  await expect(marker(`pay.${t}.test`)).toHaveAttribute("data-scope", "out");
+  await filterTo(page, `${t} scope:unknown`);
+  await expect(page.locator("tr.row")).toHaveCount(1);
+  await expect(page.locator("tr.row")).toContainText(`www.tracker-${t}.com`);
+
+  await page.goto("/#engagement");
+  const panel = page.getByRole("region", { name: "Hosts from traffic" });
+  const undecided = panel.getByRole("list", { name: "Undecided hosts" });
+  await expect(undecided.locator("li")).toHaveCount(2);
+  await expect(undecided).toContainText(p);
+  await panel.getByRole("button", { name: `Exclude *.tracker-${t}.com` }).click();
+  await expect.poll(() => api.calls.at(-1)?.body).toEqual({ op: "exclude", entry: `*.tracker-${t}.com` });
+  await panel.getByRole("checkbox").check();
+  await expect(panel.getByRole("list", { name: "Hosts" }).locator("li")).toHaveCount(4);
+  expect(await page.locator(".eng img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});

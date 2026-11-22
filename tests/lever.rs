@@ -319,6 +319,20 @@ async fn eventually(what: &str, mut f: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
+async fn eventually_async<F, Fut>(what: &str, mut f: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    for _ in 0..200 {
+        if f().await {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("timed out waiting for {what}");
+}
+
 fn ids_in_order(sse: &str) -> Vec<String> {
     sse.lines()
         .filter_map(|l| l.strip_prefix("id: "))
@@ -1433,4 +1447,81 @@ async fn a_pasted_scope_list_is_previewed_then_applied_in_one_audited_change() {
         .unwrap();
     assert_eq!(rec["reason"], "apply 2 in, 1 excluded");
     assert_eq!(rec["scope_after"].as_array().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn hosts_seen_in_traffic_carry_their_scope_state_live() {
+    let (_dir, _stub, spall) = replay_setup(&[], &[]).await;
+    eventually_async("e1 counted", || async {
+        body_json(&get_text(spall, "/api/hosts").await)["hosts"]
+            .as_array()
+            .is_some_and(|h| !h.is_empty())
+    })
+    .await;
+    let l = body_json(&get_text(spall, "/api/hosts").await);
+    assert_eq!(l["hosts"][0]["host"], "example.com");
+    assert_eq!(l["hosts"][0]["state"], "in");
+    assert_eq!(l["hosts"][0]["by"], "example.com");
+    post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"exclude","entry":"example.com"}"#,
+        None,
+    )
+    .await;
+    let l = body_json(&get_text(spall, "/api/hosts").await);
+    assert_eq!(
+        (l["hosts"][0]["state"].as_str(), l["counts"]["out"].as_u64()),
+        (Some("out"), Some(1))
+    );
+    post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"remove","entry":"example.com"}"#,
+        None,
+    )
+    .await;
+    let unknown = body_json(&get_text(spall, "/api/hosts?state=unknown").await);
+    assert_eq!(unknown["hosts"].as_array().unwrap().len(), 1);
+    let none = body_json(&get_text(spall, "/api/hosts?state=in").await);
+    assert!(none["hosts"].as_array().unwrap().is_empty());
+    assert_eq!(none["counts"]["unknown"], 1, "counts cover every host");
+    assert!(get_text(spall, "/api/hosts?state=maybe")
+        .await
+        .starts_with("HTTP/1.1 400"));
+}
+
+#[tokio::test]
+async fn hosts_from_a_log_file_include_host_headers_and_are_all_unknown() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    let log = token.with_file_name("unused.jsonl");
+    std::fs::write(&log, "").unwrap();
+    let spall = start_spall(None, &token).await;
+    let line = |host: &str, header: &str| {
+        format!(
+            r#"{{"id":"x","ts":"2026-11-22T10:00:00Z","host":"{host}","method":"GET","url":"http://{host}/","req_headers":[["Host","{header}"]]}}"#
+        )
+    };
+    let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+    use std::io::Write as _;
+    writeln!(f, "{}", line("cdn.other.test", "cdn.other.test")).unwrap();
+    writeln!(f, "{}", line("app.acme.test", "admin.internal:8080")).unwrap();
+    drop(f);
+    eventually_async("hosts counted", || async {
+        body_json(&get_text(spall, "/api/hosts").await)["hosts"]
+            .as_array()
+            .is_some_and(|h| h.len() == 3)
+    })
+    .await;
+    let l = body_json(&get_text(spall, "/api/hosts").await);
+    let mut names: Vec<_> = l["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["host"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["admin.internal", "app.acme.test", "cdn.other.test"]);
+    assert_eq!(l["counts"]["unknown"], 3);
 }

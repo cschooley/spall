@@ -8,6 +8,7 @@ pub mod confirm;
 pub mod csrf;
 pub mod engagement;
 pub mod gate;
+pub mod hosts;
 pub mod hub;
 pub mod lever;
 pub mod replay;
@@ -50,6 +51,7 @@ pub fn parse_entry(text: &str) -> Result<(TrafficEntry, Option<u32>), serde_json
 /// Publish a parsed entry. Returns false (and logs) if it cannot be
 /// serialized, which should not happen for a value that just parsed.
 pub fn publish_entry(entry: &TrafficEntry, hub: &Hub) -> bool {
+    hub.hosts.observe(entry);
     match Published::from_entry(entry) {
         Ok(p) => {
             hub.publish(p);

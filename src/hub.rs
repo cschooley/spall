@@ -27,6 +27,8 @@ impl Published {
 }
 
 pub struct Hub {
+    /// Hosts seen in everything published (#39).
+    pub hosts: crate::hosts::Hosts,
     history: Mutex<VecDeque<Arc<Published>>>,
     capacity: usize,
     tx: broadcast::Sender<Arc<Published>>,
@@ -38,6 +40,7 @@ impl Hub {
         // skips events rather than stalling the tailer.
         let (tx, _) = broadcast::channel(1024);
         Self {
+            hosts: crate::hosts::Hosts::default(),
             history: Mutex::new(VecDeque::with_capacity(history_capacity.min(4096))),
             capacity: history_capacity,
             tx,

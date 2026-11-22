@@ -5,6 +5,10 @@ here.
 
 ## Open
 
+### Distinct hosts in history
+
+[taphttp#21](https://github.com/cschooley/taphttp/issues/21): `GET /hosts`, the distinct hosts in history with counts and first/last seen. spall#39 builds scope from traffic, but spall only sees its backfill (the newest `--history` exchanges) and the live feed, so a host seen once early in a long engagement never reaches its list. spall keeps the scope state; taphttp only counts.
+
 ### Serve the public CA certificate
 
 [taphttp#20](https://github.com/cschooley/taphttp/issues/20): serve the public CA certificate over the lever API (`GET /ca.pem`, `/ca.der`), matching `/info`'s `ca.sha256`. spall#32 needs it to offer the certificate as a download from the UI, so testers don't need Docker to get it. spall never mounts the CA volume (the key lives there).

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { apiParams, matchesQuery, parseFilter } from "./query.ts";
+import { apiParams, isEmptyQuery, matchesQuery, parseFilter } from "./query.ts";
 
 test("parses tokens and free text", () => {
   assert.deepEqual(parseFilter("host:shop.example status:4xx method:post login form"), {
@@ -56,4 +56,16 @@ test("client predicate mirrors the API: host contains, method equals, q in URL o
     assert.ok(!matchesQuery(e, parseFilter(f)), f);
   }
   assert.ok(!matchesQuery({ ...e, status: null }, parseFilter("status:4xx")));
+});
+
+test("scope:in|out|unknown uses the server's host states", () => {
+  const e = { host: "app.acme.test:443", method: "GET", url: "/", status: 200 };
+  const states: Record<string, "in" | "out"> = { "app.acme.test:443": "in", "pay.acme.test": "out" };
+  const look = (h: string) => states[h] ?? null;
+  assert.equal(parseFilter("scope:IN").scope, "in");
+  assert.deepEqual(parseFilter("scope:maybe").ignored, ["scope:maybe"]);
+  assert.ok(matchesQuery(e, parseFilter("scope:in"), look));
+  assert.ok(!matchesQuery(e, parseFilter("scope:out"), look));
+  assert.ok(matchesQuery({ ...e, host: "new.test" }, parseFilter("scope:unknown"), look), "not seen yet: unknown");
+  assert.ok(!isEmptyQuery(parseFilter("scope:unknown")));
 });
