@@ -5,6 +5,10 @@ here.
 
 ## Open
 
+### CA install hints use container paths
+
+[taphttp#19](https://github.com/cschooley/taphttp/issues/19): `taphttp ca info` prints install commands for `/ca/ca.crt`, which doesn't exist on the host. It should point at `ca print`, show the fingerprint, and recommend a dedicated browser profile over system-wide trust. The README's "A browser for testing" covers it meanwhile.
+
 ### Log rotation semantics
 
 spall's `--log-file` tailer handles truncation and file replacement, but

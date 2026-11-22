@@ -65,10 +65,34 @@ taphttp terminates TLS using its own CA, so clients have to trust that CA. The C
 The proper way is to export the CA and trust it explicitly:
 
 ```sh
-docker compose exec taphttp taphttp ca info              # where the cert is, install hints
-docker compose exec taphttp taphttp ca print > taphttp-ca.pem
+docker compose exec -T taphttp taphttp ca print > taphttp-ca.pem
+openssl x509 -in taphttp-ca.pem -noout -fingerprint -sha256   # matches the "CA SHA-256" in taphttp's startup log
 curl -x http://127.0.0.1:8080 --cacert taphttp-ca.pem https://example.com
 ```
+
+(`taphttp ca info` prints install hints, but its paths are inside the container; use `ca print` from the host.)
+
+#### A browser for testing
+
+Use a separate Firefox profile that trusts the taphttp CA, not your everyday browser and not the system trust store. Whoever holds the CA key (the `taphttp-ca` volume) can impersonate any site to a browser that trusts it. Firefox keeps certificates per profile; Chromium on Linux shares one store (`~/.pki/nssdb`) across all profiles, and taphttp's per-host leaf certificates don't work with Chromium's `--ignore-certificate-errors-spki-list`.
+
+```sh
+mkdir -p ~/.spall-firefox
+cat > ~/.spall-firefox/user.js <<'EOF'
+user_pref("network.proxy.type", 1);
+user_pref("network.proxy.http", "127.0.0.1");
+user_pref("network.proxy.http_port", 8080);
+user_pref("network.proxy.ssl", "127.0.0.1");
+user_pref("network.proxy.ssl_port", 8080);
+// Firefox's background captive-portal checks would otherwise fill the Traffic view.
+user_pref("network.captive-portal-service.enabled", false);
+EOF
+firefox --no-remote --profile ~/.spall-firefox &
+```
+
+Then, in that window: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import `taphttp-ca.pem`, tick "Trust this CA to identify websites", and check the fingerprint. Use your `TAPHTTP_PORT` if you changed it. Firefox doesn't proxy localhost, so spall's UI still loads directly. With `libnss3-tools` installed, `certutil -A -d sql:$HOME/.spall-firefox -n taphttp -t C,, -i taphttp-ca.pem` does the import from the command line.
+
+Set `SPALL_SCOPE` to the hosts you're testing (see [Replay and scope](#replay-and-scope)), or every replay is denied.
 
 For a quick demo only, you can skip verification:
 
