@@ -38,6 +38,8 @@ export interface Ctx {
   changeScope(change: ScopeChange): Promise<{ scope: readonly string[]; all: boolean; changed: boolean } | string>;
   /** The newest replay attempts from the audit log, or an error message. */
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
+  /** Open the Engagement view's paste-a-scope-list panel (#38). */
+  openScopePaste(): void;
   /** Where a URL or host stands in scope (#34), or an error message. */
   checkScope(target: string): Promise<ScopeVerdict | string>;
   /** The active engagement (#35), or an error message. */
@@ -122,7 +124,7 @@ export interface ScopeVerdict {
   by: string | null;
 }
 
-const SCOPE_USAGE = "usage: scope [add|exclude|remove <entry> | check <url|host> | all on|off]";
+const SCOPE_USAGE = "usage: scope [add|exclude|remove <entry> | check <url|host> | paste | all on|off]";
 
 /** Console edits for `replay` (#19), applied to the captured request. */
 export interface ReplayEdit {
@@ -282,7 +284,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "scope",
-    usage: "scope [add|exclude|remove <entry> | check <url|host> | all on|off]",
+    usage: "scope [add|exclude|remove <entry> | check <url|host> | paste | all on|off]",
     desc: "hosts replay may send to; exclusions (!entry) win; changes last until restart",
     group: "traffic",
     // Changing the scope changes the rules of engagement: humans only.
@@ -290,7 +292,7 @@ export const COMMANDS: readonly Command[] = [
     mcp: false,
     risk: "policy",
     palette: { label: "Show scope", hint: "scope" },
-    complete: (args) => (args.length <= 1 ? ["add", "exclude", "remove", "check", "all"] : args[0] === "all" ? ["on", "off"] : []),
+    complete: (args) => (args.length <= 1 ? ["add", "exclude", "remove", "check", "paste", "all"] : args[0] === "all" ? ["on", "off"] : []),
     run: async (args, ctx) => {
       const show = (entries: readonly string[], all: boolean) => {
         const listed = entries.filter((e) => e !== "*" && !e.startsWith("!"));
@@ -306,6 +308,10 @@ export const COMMANDS: readonly Command[] = [
         return show(scope.entries, scope.all);
       }
       const [sub, arg, ...extra] = args;
+      if (sub === "paste" && !arg) {
+        ctx.openScopePaste();
+        return ctx.out("scope: paste a list in the Engagement view; it previews every line before anything changes", "sys");
+      }
       if (sub === "check") {
         if (!arg || extra.length) return ctx.out("usage: scope check <url|host>", "warn");
         const v = await ctx.checkScope(arg);

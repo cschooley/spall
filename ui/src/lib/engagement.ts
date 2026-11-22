@@ -98,5 +98,45 @@ export type ViewId = "engagement" | "traffic";
 
 /** The view a location hash names; Traffic by default. */
 export function viewFromHash(hash: string): ViewId {
-  return hash.replace(/^#/, "") === "engagement" ? "engagement" : "traffic";
+  return hash.replace(/^#/, "").split("/")[0] === "engagement" ? "engagement" : "traffic";
+}
+
+/** One line of a scope-list preview (#38), as spall's scope engine read it. */
+export interface PreviewItem {
+  line: number;
+  source: string;
+  entry: string | null;
+  exclude: boolean;
+  error: string | null;
+  notes: string[];
+  present: boolean;
+}
+
+export interface Preview {
+  items: PreviewItem[];
+  add: string[];
+  exclude: string[];
+}
+
+/** A scope-list preview from the API, or null if it isn't one. */
+export function asPreview(v: unknown): Preview | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  if (!Array.isArray(o.items)) return null;
+  const items = o.items.flatMap((x: unknown): PreviewItem[] => {
+    const i = x as Record<string, unknown> | null;
+    if (!i || typeof i.line !== "number" || typeof i.source !== "string") return [];
+    return [
+      {
+        line: i.line,
+        source: i.source,
+        entry: typeof i.entry === "string" ? i.entry : null,
+        exclude: i.exclude === true,
+        error: typeof i.error === "string" ? i.error : null,
+        notes: strings(i.notes),
+        present: i.present === true,
+      },
+    ];
+  });
+  return { items, add: strings(o.add), exclude: strings(o.exclude) };
 }

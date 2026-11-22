@@ -44,4 +44,29 @@ test("the authorization countdown", async () => {
   assert.equal(viewFromHash("#engagement"), "engagement");
   assert.equal(viewFromHash(""), "traffic");
   assert.equal(viewFromHash("#surface"), "traffic", "unbuilt views fall back");
+  assert.equal(viewFromHash("#engagement/paste"), "engagement");
+});
+
+test("scope-list previews are shape-checked", async () => {
+  const { asPreview } = await import("./engagement.ts");
+  assert.deepEqual(
+    asPreview({
+      items: [
+        { line: 2, source: "https://a.test/x", entry: "a.test", exclude: false, error: null, notes: ["path dropped"], present: false },
+        { line: 3, source: "nope!", entry: null, exclude: false, error: "not a hostname", notes: [], present: false },
+        { junk: true },
+      ],
+      add: ["a.test"],
+      exclude: [],
+    }),
+    {
+      items: [
+        { line: 2, source: "https://a.test/x", entry: "a.test", exclude: false, error: null, notes: ["path dropped"], present: false },
+        { line: 3, source: "nope!", entry: null, exclude: false, error: "not a hostname", notes: [], present: false },
+      ],
+      add: ["a.test"],
+      exclude: [],
+    },
+  );
+  assert.equal(asPreview({ nope: 1 }), null);
 });

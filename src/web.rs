@@ -80,6 +80,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scope", post(api_scope))
         .route("/api/scope/check", get(api_scope_check))
         .route(
+            "/api/scope/parse",
+            post(api_scope_parse).layer(DefaultBodyLimit::max(crate::scope_list::MAX_BYTES + 1024)),
+        )
+        .route(
             "/api/engagement",
             get(api_engagement).patch(api_engagement_patch),
         )
@@ -273,6 +277,31 @@ async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Re
     }
 }
 
+/// Preview a pasted scope list (#38): what each line becomes, against the
+/// current scope. Changes nothing; POST only because the text can be big.
+/// Same-origin JSON like every POST.
+async fn api_scope_parse(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(replayer) = &state.replayer else {
+        return no_engagements();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Text {
+        text: String,
+    }
+    let Ok(t) = serde_json::from_slice::<Text>(&body) else {
+        return json_error(StatusCode::BAD_REQUEST, r#"want {"text": "..."}"#);
+    };
+    match crate::scope_list::parse(&t.text, &replayer.scope_now().with_all(false)) {
+        Ok(items) => {
+            let (add, exclude) = crate::scope_list::to_apply(&items);
+            axum::Json(serde_json::json!({ "items": items, "add": add, "exclude": exclude }))
+                .into_response()
+        }
+        Err(m) => json_error(StatusCode::BAD_REQUEST, &m),
+    }
+}
+
 /// Where a target stands (`scope check <url|host>`): `?target=` is an
 /// absolute URL or a host (port allowed). Read-only.
 async fn api_scope_check(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
@@ -316,7 +345,7 @@ async fn api_scope(State(state): State<AppState>, body: axum::body::Bytes) -> Re
     let Ok(change) = serde_json::from_slice::<crate::replay::ScopeChange>(&body) else {
         return json_error(
             StatusCode::BAD_REQUEST,
-            r#"want {"op":"add"|"exclude"|"remove","entry":"..."} or {"op":"all","on":bool}"#,
+            r#"want {"op":"add"|"exclude"|"remove","entry":"..."}, {"op":"apply","add":[...],"exclude":[...]} or {"op":"all","on":bool}"#,
         );
     };
     match replayer.change_scope(&change) {

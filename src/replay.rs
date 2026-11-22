@@ -159,6 +159,14 @@ pub enum ScopeChange {
     All {
         on: bool,
     },
+    /// Several entries at once (a pasted list, #38; an OpenAPI file, #40):
+    /// all or nothing, one audit record.
+    Apply {
+        #[serde(default)]
+        add: Vec<String>,
+        #[serde(default)]
+        exclude: Vec<String>,
+    },
 }
 
 /// Everything the handler needs.
@@ -217,6 +225,27 @@ impl Replayer {
             ScopeChange::Remove { entry } => {
                 let (_, _, c) = self.engagements.change_scope(|s| Ok(s.remove(entry)))?;
                 (c, format!("remove {}", entry.trim()))
+            }
+            ScopeChange::Apply { add, exclude } => {
+                if add.len() + exclude.len() > crate::scope_list::MAX_LINES {
+                    return Err(EngagementError::Invalid(format!(
+                        "at most {} entries at once",
+                        crate::scope_list::MAX_LINES
+                    )));
+                }
+                let (before, after, _) = self.engagements.change_scope(|s| {
+                    for e in add {
+                        s.add(e)?;
+                    }
+                    for e in exclude {
+                        s.exclude(e)?;
+                    }
+                    Ok(())
+                })?;
+                (
+                    before != after,
+                    format!("apply {} in, {} excluded", add.len(), exclude.len()),
+                )
             }
             ScopeChange::All { on } => {
                 let was = self.all_hosts.swap(*on, Ordering::SeqCst);

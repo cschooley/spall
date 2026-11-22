@@ -1359,3 +1359,78 @@ async fn rules_of_engagement_gate_replays_and_changes_take_effect_on_the_next_se
         .collect();
     assert_eq!(rule_changes[0], "set rules.methods");
 }
+
+#[tokio::test]
+async fn a_pasted_scope_list_is_previewed_then_applied_in_one_audited_change() {
+    let (dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let token = dir.path().join("api-token");
+    let text = serde_json::json!({ "text": "In scope:\n- https://www.acme.test/login\n* *.api.acme.test\nexample.com\nOut of scope:\npay.acme.test (vendor)\nnot a host!\n" });
+    let res = post_text(spall, "/api/scope/parse", &text.to_string(), None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let preview = body_json(&res);
+    assert_eq!(
+        preview["add"],
+        serde_json::json!(["www.acme.test", "*.api.acme.test"])
+    );
+    assert_eq!(preview["exclude"], serde_json::json!(["pay.acme.test"]));
+    let items = preview["items"].as_array().unwrap();
+    assert!(items
+        .iter()
+        .any(|i| i["source"] == "example.com" && i["present"] == true));
+    assert!(
+        items.iter().any(|i| i["error"].is_string()),
+        "bad lines are reported, not dropped"
+    );
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(
+        status["scope"],
+        serde_json::json!(["example.com"]),
+        "a preview changes nothing"
+    );
+
+    // A cross-site page can't preview (it would learn the scope) or apply.
+    let forged = post_text(
+        spall,
+        "/api/scope/parse",
+        &text.to_string(),
+        Some("Content-Type: application/json\r\nOrigin: http://evil.example\r\n"),
+    )
+    .await;
+    assert!(forged.starts_with("HTTP/1.1 403"), "{forged}");
+
+    let apply =
+        serde_json::json!({ "op": "apply", "add": preview["add"], "exclude": preview["exclude"] });
+    let res = post_text(spall, "/api/scope", &apply.to_string(), None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert_eq!(
+        body_json(&res)["scope"],
+        serde_json::json!([
+            "example.com",
+            "www.acme.test",
+            "*.api.acme.test",
+            "!pay.acme.test"
+        ])
+    );
+    // All or nothing: one bad entry changes nothing.
+    let bad = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"apply","add":["ok.test","http://nope/"]}"#,
+        None,
+    )
+    .await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert!(!status["scope"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e == "ok.test"));
+
+    let rec = audit_records(&token)
+        .into_iter()
+        .rfind(|r| r["action"] == "scope")
+        .unwrap();
+    assert_eq!(rec["reason"], "apply 2 in, 1 excluded");
+    assert_eq!(rec["scope_after"].as_array().unwrap().len(), 4);
+}

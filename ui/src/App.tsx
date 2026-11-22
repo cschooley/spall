@@ -440,6 +440,9 @@ export function App() {
         const engagement = asEngagement(o.engagement);
         return engagement ? { engagement, changed: o.changed === true } : "unexpected answer";
       },
+      openScopePaste: () => {
+        window.location.hash = "engagement/paste";
+      },
       setRules: async (patch) => {
         const body = await apiJson("/api/engagement", { method: "PATCH", body: { rules: patch } });
         if (typeof body === "string") return body;

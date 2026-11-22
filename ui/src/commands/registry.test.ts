@@ -48,6 +48,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
+    openScopePaste: () => void calls.push("paste"),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
     ...over,
   };
@@ -306,6 +307,7 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
+    openScopePaste: () => void calls.push("paste"),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: "sso.a.test", state: "out", by: "!sso.a.test" }),
   });
   await execute("scope exclude sso.a.test", ctx);
@@ -335,7 +337,10 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     assert.equal(t.calls.length, 0, bad);
     assert.equal(t.lines.at(-1)![1], "warn", bad);
   }
-  assert.deepEqual(complete("scope ").options, ["add", "exclude", "remove", "check", "all"]);
+  assert.deepEqual(complete("scope ").options, ["add", "exclude", "remove", "check", "paste", "all"]);
+  const paste = fakeCtx();
+  await execute("scope paste", paste.ctx);
+  assert.deepEqual(paste.calls, ["paste"]);
 });
 
 test("hostile hosts from scope check are printed as given, as text", async () => {

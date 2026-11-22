@@ -12,6 +12,7 @@ pub mod hub;
 pub mod lever;
 pub mod replay;
 pub mod roe;
+pub mod scope_list;
 pub mod tailer;
 pub mod web;
 

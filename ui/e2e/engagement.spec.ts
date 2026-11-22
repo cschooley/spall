@@ -49,11 +49,12 @@ function engagementApi(page: Page, over: Json = {}) {
   });
   void page.route("**/api/engagements", (r) => r.fulfill({ json: [{ id: state.e.id, name: state.e.name, client: state.e.client, active: true }, ...state.others] }));
   void page.route("**/api/scope", async (r) => {
-    const c = r.request().postDataJSON() as { op: string; entry: string };
+    const c = r.request().postDataJSON() as { op: string; entry: string; add?: string[]; exclude?: string[] };
     state.calls.push({ method: "POST", path: "/api/scope", body: c });
     if (c.op === "add") state.e.scope = [c.entry, ...state.e.scope];
     if (c.op === "exclude") state.e.scope = [...state.e.scope, `!${c.entry}`];
     if (c.op === "remove") state.e.scope = state.e.scope.filter((x) => x !== c.entry);
+    if (c.op === "apply") state.e.scope = [...state.e.scope, ...(c.add ?? []), ...(c.exclude ?? []).map((x) => `!${x}`)];
     await r.fulfill({ json: { scope: state.e.scope, all: false, changed: true } });
   });
   void page.route("**/api/scope/check?*", (r) => r.fulfill({ json: { host: "pay.acme.test", state: "out", by: "!pay.acme.test" } }));
@@ -208,5 +209,51 @@ test("hostile engagement, scope and rule strings render as text", async ({ page 
   await expect(page.getByRole("region", { name: "Rules of engagement" })).toContainText(p);
   await expect(page.getByRole("region", { name: "Engagement details" })).toContainText("<script>");
   expect(await page.locator(".eng img, .eng script").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});
+
+test("paste a scope list: the server previews every line, one click applies (#38)", async ({ page }) => {
+  const api = engagementApi(page);
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  const texts: string[] = [];
+  await page.route("**/api/scope/parse", async (r) => {
+    const { text } = r.request().postDataJSON() as { text: string };
+    texts.push(text);
+    await r.fulfill({
+      json: {
+        items: [
+          { line: 2, source: "https://www.acme.test/login", entry: "www.acme.test", exclude: false, error: null, notes: ['path "/login" dropped: scope is by host'], present: false },
+          { line: 3, source: "*.acme.test", entry: "*.acme.test", exclude: false, error: null, notes: ["already in the scope"], present: true },
+          { line: 5, source: "pay.acme.test", entry: "pay.acme.test", exclude: true, error: null, notes: [], present: false },
+          { line: 6, source: p, entry: null, exclude: false, error: "not a hostname, *.wildcard, IP or CIDR", notes: [], present: false },
+        ],
+        add: ["www.acme.test"],
+        exclude: ["pay.acme.test"],
+      },
+    });
+  });
+  await page.goto("/");
+  // `scope paste` in the console opens the panel in the Engagement view.
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  await page.getByLabel("Console command").fill("scope paste");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#engagement\/paste$/);
+  const panel = page.getByRole("group", { name: "Paste a scope list" });
+  await panel.getByLabel("Scope list").fill(`In scope:\n- https://www.acme.test/login\n*.acme.test\nOut of scope:\npay.acme.test\n${p}`);
+  await expect(panel.getByRole("status")).toHaveText("1 to add · 1 to exclude · 1 already there · 1 not understood (skipped)");
+  const rows = panel.getByRole("table", { name: "Preview" }).locator("tbody tr");
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(0)).toContainText('add www.acme.testpath "/login" dropped');
+  await expect(rows.nth(2)).toContainText("exclude pay.acme.test");
+  await expect(rows.nth(3)).toContainText(p);
+  expect(await page.locator(".eng img").count()).toBe(0);
+  await panel.getByRole("button", { name: "apply 2" }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page).toHaveURL(/#engagement$/);
+  await expect(page.getByRole("list", { name: "In scope" })).toContainText("www.acme.test");
+  await expect(page.getByRole("list", { name: "Excluded" })).toContainText("pay.acme.test");
+  expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/scope", body: { op: "apply", add: ["www.acme.test"], exclude: ["pay.acme.test"] } });
+  expect(texts.at(-1)).toContain("Out of scope:");
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });

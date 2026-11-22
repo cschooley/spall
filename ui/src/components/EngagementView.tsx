@@ -3,7 +3,8 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { ScopePaste } from "./ScopePaste.tsx";
 import type { EngagementInfo, ScopeVerdict } from "../commands/registry.ts";
 import { apiJson, expiryText } from "../lib/engagement.ts";
 import { daysText, parseDays, parseSpan, rulesFormOf, rulesPatchOf, type Rules, type RulesForm } from "../lib/roe.ts";
@@ -233,6 +234,19 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
   const [verdict, setVerdict] = useState<ScopeVerdict | string | null>(null);
   const [noteFor, setNoteFor] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  // `scope paste` in the console opens this through #engagement/paste.
+  const [pasting, setPasting] = useState(() => window.location.hash === "#engagement/paste");
+  useEffect(() => {
+    const onHash = () => {
+      if (window.location.hash === "#engagement/paste") setPasting(true);
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  const closePaste = () => {
+    setPasting(false);
+    if (window.location.hash === "#engagement/paste") window.history.replaceState(null, "", "#engagement");
+  };
   const inScope = e.scope.filter((x) => !x.startsWith("!"));
   const excluded = e.scope.filter((x) => x.startsWith("!")).map((x) => x.slice(1));
   const change = async (op: "add" | "exclude" | "remove", value: string) => {
@@ -287,7 +301,18 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
     </li>
   );
   return (
-    <Section title={`Scope · ${inScope.length} in, ${excluded.length} excluded`} label="Scope">
+    <Section
+      title={`Scope · ${inScope.length} in, ${excluded.length} excluded`}
+      label="Scope"
+      actions={
+        pasting ? null : (
+          <button type="button" onClick={() => setPasting(true)}>
+            paste a list
+          </button>
+        )
+      }
+    >
+      {pasting ? <ScopePaste onApplied={onChanged} onClose={closePaste} /> : null}
       {inScope.length ? (
         <ul className="entries" aria-label="In scope">
           {inScope.map((x) => row(x, x))}
