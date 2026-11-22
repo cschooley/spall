@@ -82,9 +82,10 @@ curl -x http://127.0.0.1:8080 -k https://example.com
 
 - **Filter** (`/`): `host:example.com`, `method:POST`, `status:404` or `status:4xx`, plus free text matched against URL and host. Filters search taphttp's full history, not just what's on screen; scroll to the top for older pages.
 - **Inspector**: request and response tabs, headers in wire order (repeats numbered `n/N`), bodies (JSON pretty-printed; binary as type, size, sha256 and a hex view). Credential headers are highlighted and shortened until you click "show". Copy as curl, save a body to a file.
+- **Replay** (`⏎`, or the inspector's Replay button): resends the open exchange as captured, through taphttp, and opens the result; "replay of …" links back to the original. `POST`, `PUT`, `PATCH`, `DELETE` and other unsafe methods take two presses: the first arms the button ("press again to send DELETE to …"), the second sends. Arming lapses after 5 seconds or on any other key or click. Out-of-scope replays are refused with the reason (see [Replay and scope](#replay-and-scope)). Needs the lever API.
 - **Keys**: `?` lists them all. `j` / `k` move, `Esc` closes the inspector, `t` toggles light/dark, `x` shows hex.
 - **Command palette** (`Ctrl K`, `⌘K` on macOS): find a command you don't remember.
-- **Console** (`` ` ``): type commands you do remember (`help` lists them: `filter`, `open <id>`, `curl`, `theme`, …), with history and tab completion. System messages (reconnects, taphttp going away) land here too. The palette and console run the same commands, and so will the MCP server.
+- **Console** (`` ` ``): type commands you do remember (`help` lists them: `filter`, `open <id>`, `replay <id> [--yes]`, `scope`, `audit [--last N]`, `curl`, `theme`, …), with history and tab completion. System messages (reconnects, taphttp going away) land here too. The palette and console run the same commands, and so will the MCP server.
 - **Suite launcher** (top right): Kudzu's other tools. Ones not built yet are shown with their light off.
 
 Everything shown comes from captured traffic, so it's treated as hostile: rendered as text only, never as HTML, under a strict Content-Security-Policy.
@@ -150,6 +151,7 @@ In compose, set the scope in `.env` (`SPALL_SCOPE=app.example.test`); the audit 
 - `GET /api/exchanges/{id}`: one exchange, or 404
 - `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...]}` for the status bar
 - `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope; 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
+- `GET /api/audit?last=N`: the newest replay attempts from the audit log, oldest first (default 20, at most 500). 503 without `--taphttp-api`
 - `GET /healthz`: `ok`
 
 The browser never talks to taphttp or sees its token: spall adds the token server-side.

@@ -10,7 +10,9 @@ import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
 import { addLine, clearLog, emptyLog, markRead } from "./lib/consoleLog.ts";
 import { toCurl } from "./lib/curl.ts";
+import { durationText, shortId, statusLine } from "./lib/format.ts";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
+import { ARM_MS, armedFor, armLabel, postReplay, type Armed } from "./lib/replay.ts";
 import { isEmptyQuery, matchesQuery, parseFilter } from "./lib/query.ts";
 import { litSegments, requestRate } from "./lib/rate.ts";
 import {
@@ -115,6 +117,15 @@ function RateMeter({ live }: { live: TrafficEntry[] }) {
   );
 }
 
+/** The host a replay goes to, for the armed label. */
+function hostOf(e: TrafficEntry): string {
+  try {
+    return new URL(e.url).host || e.host;
+  } catch {
+    return e.host;
+  }
+}
+
 export function App() {
   const { store, connection, clear } = useTraffic();
   const status = useSourceStatus();
@@ -131,6 +142,10 @@ export function App() {
   const [log, setLog] = useState(() => addLine(emptyLog(), "spall console · type help", "sys", true));
   const [clearedAt, setClearedAt] = useState<string | null>(null);
   const filterInput = useRef<HTMLInputElement>(null);
+  // Replay (#18): one state for the button, ⏎ and the console.
+  const [armed, setArmed] = useState<Armed | null>(null);
+  const [replayBusy, setReplayBusy] = useState<string | null>(null);
+  const [replayMsg, setReplayMsg] = useState<{ id: string; text: string } | null>(null);
 
   const out = useCallback(
     (text: string, kind: OutKind = "out") => setLog((l) => addLine(l, text, kind, consoleOpen)),
@@ -217,6 +232,60 @@ export function App() {
     [rows, store.items, status.source],
   );
 
+  // Arming lapses after ARM_MS, and on selecting anything else.
+  useEffect(() => {
+    if (!armed) return;
+    const id = setTimeout(() => setArmed(null), Math.max(0, armed.until - Date.now()));
+    return () => clearTimeout(id);
+  }, [armed]);
+  const [armedOn, setArmedOn] = useState(selected?.id ?? null);
+  if (armedOn !== (selected?.id ?? null)) {
+    setArmedOn(selected?.id ?? null);
+    setArmed(null);
+  }
+
+  const replay = useCallback(
+    async (id: string, opts: { yes: boolean }) => {
+      const short = shortId(id);
+      if (!status.replay) {
+        const text = "replay needs taphttp's lever API (log-file mode)";
+        out(`replay ${short}: ${text}`, "warn");
+        setReplayMsg({ id, text });
+        return;
+      }
+      const arm = armedFor(armed, id, Date.now());
+      setArmed(null);
+      setReplayMsg(null);
+      setReplayBusy(id);
+      let result = await postReplay({ id, confirm: arm?.token });
+      if (result.kind === "confirm" && opts.yes) result = await postReplay({ id, confirm: result.token });
+      setReplayBusy(null);
+      const known = selected?.id === id ? selected : (rows.find((r) => r.id === id) ?? null);
+      switch (result.kind) {
+        case "sent": {
+          const e = result.entry;
+          out(`replay ${short} → ${statusLine(e.status)}${e.duration_ms !== null ? ` in ${durationText(e.duration_ms)}` : ""}, recorded as ${shortId(e.id)}`, "sys");
+          setSelected(e);
+          break;
+        }
+        case "failed":
+          out(`replay ${short} failed: ${result.entry.error ?? "no response"}; recorded as ${shortId(result.entry.id)}`, "warn");
+          setSelected(result.entry);
+          break;
+        case "confirm": {
+          const label = armLabel(known?.method ?? "it", known ? hostOf(known) : null);
+          setArmed({ id, token: result.token, label, until: Date.now() + ARM_MS });
+          out(`replay ${short}: ${result.reason}. ${label}, or replay ${id} --yes`, "sys");
+          break;
+        }
+        default:
+          out(`replay ${short}: ${result.reason}`, "warn");
+          setReplayMsg({ id, text: result.reason });
+      }
+    },
+    [status.replay, armed, out, selected, rows],
+  );
+
   const focusFilter = useCallback(() => filterInput.current?.focus(), []);
   const toggleMode = useCallback(() => {
     const p = themeParts(theme);
@@ -262,8 +331,23 @@ export function App() {
         }
         return true;
       },
+      replay,
+      scope: () => (status.replay ? status.scope : null),
+      audit: async (last) => {
+        try {
+          const res = await fetch(`/api/audit?last=${last}`);
+          const body: unknown = await res.json();
+          if (!res.ok) {
+            const msg = (body as { error?: unknown } | null)?.error;
+            return typeof msg === "string" ? msg : `HTTP ${res.status}`;
+          }
+          return Array.isArray(body) ? (body as Record<string, unknown>[]) : "unexpected answer";
+        } catch {
+          return "spall unreachable";
+        }
+      },
     }),
-    [out, focusFilter, openById, selected, clearAll, setTheme],
+    [out, focusFilter, openById, selected, clearAll, setTheme, replay, status.replay, status.scope],
   );
 
   const run = useCallback((line: string) => void execute(line, ctx), [ctx]);
@@ -287,6 +371,17 @@ export function App() {
         return;
       }
       if (palette || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== "Enter" && !["Shift", "Control", "Alt", "Meta"].includes(e.key)) setArmed(null);
+      if (e.key === "Enter") {
+        // A focused button or tab takes Enter itself (the Replay button's
+        // own click is the press); otherwise ⏎ replays the open exchange.
+        if ((e.target as HTMLElement | null)?.closest("button, a, [role='tab']")) return;
+        if (selected && !sheet) {
+          e.preventDefault();
+          void replay(selected.id, { yes: false });
+        }
+        return;
+      }
       if (e.key === consoleKey) {
         e.preventDefault();
         if (consoleOpen) closeConsole();
@@ -310,7 +405,17 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter]);
+  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter, selected, replay]);
+
+  // Any click outside the Replay button disarms it.
+  useEffect(() => {
+    if (!armed) return;
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest("[data-action='replay']")) setArmed(null);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [armed]);
 
   const historyNote = history.unavailable
     ? "live only (log-file mode: no history API)"
@@ -380,7 +485,22 @@ export function App() {
           appliedFilter={debounced}
           empty={isEmptyQuery(query) ? "No traffic. Point a client at 127.0.0.1:8080." : "No exchanges match this filter."}
         />
-        {selected ? <Inspector key={selected.id} entry={selected} onClose={() => setSelected(null)} /> : null}
+        {selected ? (
+          <Inspector
+            key={selected.id}
+            entry={selected}
+            onClose={() => setSelected(null)}
+            onOpen={(id) => void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"))}
+            replay={{
+              available: status.replay,
+              busy: replayBusy === selected.id,
+              // The expiry timer clears `armed`, so no clock read here.
+              armedLabel: armed?.id === selected.id ? armed.label : null,
+              message: replayMsg?.id === selected.id ? replayMsg.text : null,
+              onReplay: () => void replay(selected.id, { yes: false }),
+            }}
+          />
+        ) : null}
       </main>
 
       <footer className="statusbar">

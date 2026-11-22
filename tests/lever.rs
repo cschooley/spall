@@ -773,3 +773,31 @@ async fn an_unwritable_audit_log_stops_spall_in_api_mode() {
     let err = format!("{:#}", r.unwrap_err());
     assert!(err.contains("audit log"), "{err}");
 }
+
+#[tokio::test]
+async fn audit_endpoint_returns_the_newest_attempts() {
+    let (_dir, _stub, spall) = replay_setup(&[], &[]).await;
+    for body in [r#"{"id":"e1"}"#, r#"{"id":"e1","method":"DELETE"}"#] {
+        post_text(spall, "/api/replay", body, None).await;
+    }
+    let res = get_text(spall, "/api/audit?last=1").await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let recs = body_json(&res);
+    assert_eq!(recs.as_array().unwrap().len(), 1);
+    assert_eq!(recs[0]["outcome"], "needs_confirmation");
+    let all = body_json(&get_text(spall, "/api/audit").await);
+    let outcomes: Vec<_> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["outcome"].clone())
+        .collect();
+    assert_eq!(outcomes, ["sent", "needs_confirmation"]);
+    let bad = get_text(spall, "/api/audit?last=nope").await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let log_mode = start_spall(None, &dir.path().join("api-token")).await;
+    let res = get_text(log_mode, "/api/audit").await;
+    assert!(res.starts_with("HTTP/1.1 503"), "{res}");
+}

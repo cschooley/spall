@@ -50,6 +50,13 @@ export const test = base.extend<{ guard: void }>({
     async ({ page }, use) => {
       const problems: string[] = [];
       page.on("console", (m) => {
+        // The action gate answers with these on purpose (deny, refused
+        // token, needs confirmation, recorded failure); Chromium logs any
+        // non-2xx fetch. Only for /api/replay, only those statuses.
+        const gateAnswer =
+          /^Failed to load resource: the server responded with a status of (403|409|428|502)\b/.test(m.text()) &&
+          m.location().url.endsWith("/api/replay");
+        if (gateAnswer) return;
         if (m.type() === "error" || m.type() === "warning") problems.push(`console ${m.type()}: ${m.text()}`);
       });
       page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));

@@ -1,5 +1,5 @@
 // The ? sheet. Lists only keys that work today; keys for later features
-// (replay, flag, task the agent, e-stop) appear when those ship.
+// (flag, task the agent, e-stop) appear when those ship.
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || "");
 
 export function modKey(): string {
@@ -17,6 +17,7 @@ export function ShortcutSheet({ consoleKey, onClose }: { consoleKey: string; onC
   const traffic: [string[], string][] = [
     [["/"], "Filter"],
     [["j", "k"], "Next / previous row"],
+    [["⏎"], "Replay (unsafe methods: press twice)"],
     [["Esc"], "Close the inspector"],
     [["x"], "Hex view (binary body)"],
   ];

@@ -25,7 +25,24 @@ export interface Ctx {
   openKeys(): void;
   /** Set the console toggle key; false if not a single character. */
   setConsoleKey(key: string): boolean;
+  /**
+   * Replay an exchange through spall's gate (#18, #22), reporting through
+   * out(). An unsafe method arms on the first call and sends on the second
+   * (within a few seconds); `yes` does both at once.
+   */
+  replay(id: string, opts: { yes: boolean }): Promise<void>;
+  /** The engagement scope; null when replay isn't available. */
+  scope(): readonly string[] | null;
+  /** The newest replay attempts from the audit log, or an error message. */
+  audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
 }
+
+/**
+ * What running a command can do (#22), for MCP grants and approvals (M6):
+ * read (the UI or spall's state), sends-traffic (to a target, through the
+ * gate), unsafe-method (could change state there), destructive.
+ */
+export type Risk = "read" | "sends-traffic" | "unsafe-method" | "destructive";
 
 export interface Command {
   /** Stable identifier, shared with MCP (M5). Never a UI label. */
@@ -35,6 +52,7 @@ export interface Command {
   group: "traffic" | "view" | "app";
   /** May be offered to the agent over MCP. Never for export or promotion. */
   mcp: boolean;
+  risk: Risk;
   hidden?: boolean;
   /** Palette entry; commands that need arguments open the console prefilled. */
   palette?: { label: string; hint?: string; needsArgs?: boolean };
@@ -54,6 +72,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "this list",
     group: "app",
     mcp: true,
+    risk: "read",
     run: (_a, ctx) => {
       for (const c of COMMANDS) if (!c.hidden) ctx.out(`  ${c.usage.padEnd(24)} ${c.desc}`);
     },
@@ -64,6 +83,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "filter traffic (host: method: status: text); empty clears",
     group: "traffic",
     mcp: true,
+    risk: "read",
     palette: { label: "Filter traffic…", hint: "filter <query>", needsArgs: true },
     run: (_a, ctx, rest) => ctx.setFilter(rest),
   },
@@ -73,6 +93,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "open an exchange in the inspector",
     group: "traffic",
     mcp: true,
+    risk: "read",
     palette: { label: "Open exchange by id…", hint: "open <id>", needsArgs: true },
     run: async ([id], ctx) => {
       if (!id) return ctx.out("usage: open <id>", "warn");
@@ -86,6 +107,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "the selected exchange as a curl command (also copied)",
     group: "traffic",
     mcp: true,
+    risk: "read",
     palette: { label: "Copy as curl", hint: "curl" },
     run: async (_a, ctx) => {
       const text = ctx.curlText();
@@ -95,11 +117,74 @@ export const COMMANDS: readonly Command[] = [
     },
   },
   {
+    name: "replay",
+    usage: "replay <id> [--yes]",
+    desc: "resend an exchange as captured (unsafe methods: run twice, or --yes)",
+    group: "traffic",
+    // Agents replay inside task constraints from M6; the gate holds them to
+    // the same scope, method policy and audit as a human.
+    mcp: true,
+    risk: "sends-traffic",
+    palette: { label: "Replay exchange…", hint: "replay <id>", needsArgs: true },
+    run: async (args, ctx) => {
+      const flags = args.filter((a) => a.startsWith("-"));
+      const ids = args.filter((a) => !a.startsWith("-"));
+      const unknown = flags.find((f) => f !== "--yes");
+      if (unknown) return ctx.out(`replay: unknown option ${unknown}`, "warn");
+      if (ids.length > 1) return ctx.out("usage: replay <id> [--yes]", "warn");
+      const id = ids[0] ?? ctx.selected()?.id;
+      if (!id) return ctx.out("usage: replay <id> [--yes] (or select an exchange)", "warn");
+      if (!ID.test(id)) return ctx.out(`replay: not an exchange id: ${id}`, "warn");
+      await ctx.replay(id, { yes: flags.includes("--yes") });
+    },
+  },
+  {
+    name: "scope",
+    usage: "scope",
+    desc: "hosts replay may send to",
+    group: "traffic",
+    mcp: true,
+    risk: "read",
+    palette: { label: "Show scope", hint: "scope" },
+    run: (_a, ctx) => {
+      const scope = ctx.scope();
+      if (scope === null) return ctx.out("scope: replay needs taphttp's lever API", "warn");
+      if (scope.length === 0) return ctx.out("scope: no scope set, so every replay is denied (set SPALL_SCOPE)", "warn");
+      for (const s of scope) ctx.out(`  ${s}`);
+    },
+  },
+  {
+    name: "audit",
+    usage: "audit [--last N]",
+    desc: "recent replay attempts, denials included",
+    group: "traffic",
+    mcp: false,
+    risk: "read",
+    palette: { label: "Audit log", hint: "audit" },
+    run: async (args, ctx) => {
+      let last = 20;
+      const i = args.indexOf("--last");
+      if (i >= 0) {
+        const n = Number(args[i + 1]);
+        if (!Number.isInteger(n) || n < 1) return ctx.out("usage: audit [--last N]", "warn");
+        last = Math.min(n, 500);
+      }
+      const records = await ctx.audit(last);
+      if (typeof records === "string") return ctx.out(`audit: ${records}`, "warn");
+      if (records.length === 0) return ctx.out("audit: no replay attempts yet", "sys");
+      for (const r of records) {
+        const outcome = String(r.outcome ?? "?");
+        ctx.out(auditLine(r), ["denied", "failed", "confirmation_refused", "error"].includes(outcome) ? "warn" : "out");
+      }
+    },
+  },
+  {
     name: "newest",
     usage: "newest",
     desc: "jump to the newest exchange and follow",
     group: "traffic",
     mcp: false,
+    risk: "read",
     palette: { label: "Jump to newest", hint: "newest" },
     run: (_a, ctx) => ctx.jumpToNewest(),
   },
@@ -109,6 +194,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "hide what's in the table; new traffic still arrives",
     group: "traffic",
     mcp: false,
+    risk: "read",
     palette: { label: "Clear table", hint: "clear-table" },
     run: (_a, ctx) => ctx.clearTable(),
   },
@@ -118,6 +204,7 @@ export const COMMANDS: readonly Command[] = [
     desc: VIEWS.join(" | "),
     group: "view",
     mcp: false,
+    risk: "read",
     complete: () => VIEWS,
     run: ([view], ctx) => {
       if (view === "traffic") return ctx.out("already on traffic");
@@ -131,6 +218,7 @@ export const COMMANDS: readonly Command[] = [
     desc: THEMES.join(" | "),
     group: "app",
     mcp: false,
+    risk: "read",
     palette: { label: "Theme…", hint: "theme <name>", needsArgs: true },
     complete: () => THEMES,
     run: ([name], ctx) => {
@@ -145,6 +233,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "keyboard shortcuts",
     group: "app",
     mcp: false,
+    risk: "read",
     palette: { label: "Keyboard shortcuts", hint: "?" },
     run: (_a, ctx) => ctx.openKeys(),
   },
@@ -154,6 +243,7 @@ export const COMMANDS: readonly Command[] = [
     desc: "key that toggles this console (default `)",
     group: "app",
     mcp: false,
+    risk: "read",
     run: ([key], ctx) => {
       if (!key || !ctx.setConsoleKey(key)) return ctx.out("usage: console-key <one character>", "warn");
       ctx.out(`console key is now ${key}`, "sys");
@@ -165,10 +255,22 @@ export const COMMANDS: readonly Command[] = [
     desc: "clear the console",
     group: "app",
     mcp: false,
+    risk: "read",
     run: (_a, ctx) => ctx.clearConsole(),
   },
-  { name: "god", usage: "god", desc: "", group: "app", mcp: false, hidden: true, run: (_a, ctx) => ctx.out("no.") },
+  { name: "god", usage: "god", desc: "", group: "app", mcp: false, risk: "read", hidden: true, run: (_a, ctx) => ctx.out("no.") },
 ];
+
+/** One audit record as a console line: time, outcome, method, target, why. */
+function auditLine(r: Record<string, unknown>): string {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const time = str(r.ts).match(/T(\d\d:\d\d:\d\d)/)?.[1] ?? "--:--:--";
+  const parts = [time, str(r.outcome).padEnd(20), str(r.method).padEnd(7), str(r.target)];
+  if (r.confirmed === true) parts.push("(confirmed)");
+  const why = str(r.reason) || str(r.error);
+  if (why && r.outcome !== "sent") parts.push(`· ${why}`);
+  return parts.join(" ");
+}
 
 export function findCommand(name: string): Command | undefined {
   return COMMANDS.find((c) => c.name === name);

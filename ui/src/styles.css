@@ -204,6 +204,10 @@ td.m { font-weight: 500; }
 }
 .inspector .close { position: absolute; top: var(--vg-space-3); right: var(--vg-space-3); width: 26px; padding: 0; border-color: transparent; font-size: var(--vg-text-lg); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--vg-space-3); padding: var(--vg-space-4) var(--vg-space-5); border-bottom: 1px solid var(--vg-border-subtle); }
+.actions .replay kbd { margin-left: var(--vg-space-2); }
+/* Armed: an unsafe method waits for a second press (#18). */
+.actions .replay.armed { border-color: var(--vg-accent-rust); color: var(--vg-accent-rust); }
+.replay-msg { flex-basis: 100%; margin: 0; color: var(--vg-accent-rust); font: var(--vg-text-xs) var(--vg-font-mono); word-break: break-all; }
 .tabs { display: flex; padding: 0 var(--vg-space-5); border-bottom: 1px solid var(--vg-border-subtle); }
 .tabs button {
   height: 34px; border: 0; border-radius: 0; background: none; color: var(--vg-text-secondary);

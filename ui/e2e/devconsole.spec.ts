@@ -117,10 +117,10 @@ test("? opens the shortcut sheet (working keys only); Esc closes", async ({ page
   await page.keyboard.press("?");
   const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(sheet).toBeVisible();
-  for (const what of ["Command palette", "Console", "Switch view", "Light / dark", "Filter", "Next / previous row", "Hex view (binary body)"]) {
+  for (const what of ["Command palette", "Console", "Switch view", "Light / dark", "Filter", "Next / previous row", "Hex view (binary body)", "Replay"]) {
     await expect(sheet).toContainText(what);
   }
-  for (const later of ["Replay", "Flag candidate", "Task agent", "Halt"]) {
+  for (const later of ["Flag candidate", "Task agent", "Halt"]) {
     await expect(sheet).not.toContainText(later);
   }
   await page.keyboard.press("Escape");

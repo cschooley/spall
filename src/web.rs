@@ -75,6 +75,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(api_status))
         .route("/api/exchanges", get(api_exchanges))
         .route("/api/exchanges/{id}", get(api_exchange))
+        .route("/api/audit", get(api_audit))
         .route(
             "/api/replay",
             post(api_replay).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
@@ -217,6 +218,36 @@ async fn api_status(State(state): State<AppState>) -> Response {
     body["replay"] = state.replayer.is_some().into();
     body["scope"] = scope.into();
     axum::Json(body).into_response()
+}
+
+/// The newest replay attempts from the audit log (`?last=N`, default 20,
+/// at most 500), oldest first. Read-only; spall's own page and console.
+async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let Some(replayer) = &state.replayer else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the audit log needs taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(raw.as_deref().unwrap_or("")).unwrap_or_default();
+    let last = match pairs.iter().find(|(k, _)| k == "last") {
+        None => 20,
+        Some((_, v)) => match v.parse::<usize>() {
+            Ok(n) => n.min(500),
+            Err(_) => return json_error(StatusCode::BAD_REQUEST, "last must be a number"),
+        },
+    };
+    match replayer.audit.tail(last) {
+        Ok(records) => axum::Json(records).into_response(),
+        Err(e) => {
+            tracing::warn!("reading the audit log: {e}");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not read the audit log",
+            )
+        }
+    }
 }
 
 async fn api_replay(State(state): State<AppState>, body: axum::body::Bytes) -> Response {

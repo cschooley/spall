@@ -19,6 +19,9 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     clearConsole: () => void calls.push("clear-console"),
     openKeys: () => void calls.push("keys"),
     setConsoleKey: (k) => (calls.push(`key:${k}`), k.length === 1),
+    replay: async (id, opts) => void calls.push(`replay:${id}${opts.yes ? ":yes" : ""}`),
+    scope: () => ["app.example.test", "*.api.example.test"],
+    audit: async (last) => (calls.push(`audit:${last}`), []),
     ...over,
   };
   return { ctx, lines, calls };
@@ -123,4 +126,82 @@ test("palette items come from the registry; ones needing arguments go to the con
   for (const it of items) assert.ok(COMMANDS.some((c) => c.name === it.command), it.label);
   const open = items.find((i) => i.command === "open")!;
   assert.equal(open.prefill, "open ");
+});
+
+test("replay takes an id or the selected exchange, and --yes", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("replay abc-1", ctx);
+  await execute("replay --yes abc-1", ctx);
+  await execute("replay abc-1 --yes", ctx);
+  assert.deepEqual(calls, ["replay:abc-1", "replay:abc-1:yes", "replay:abc-1:yes"]);
+
+  const none = fakeCtx();
+  await execute("replay", none.ctx);
+  assert.deepEqual(none.lines.at(-1), ["usage: replay <id> [--yes] (or select an exchange)", "warn"]);
+  const sel = fakeCtx({ selected: () => ({ id: "sel-1" }) as never });
+  await execute("replay", sel.ctx);
+  assert.deepEqual(sel.calls, ["replay:sel-1"]);
+
+  for (const bad of ["replay ../x", "replay a b", "replay a --force"]) {
+    const t = fakeCtx();
+    await execute(bad, t.ctx);
+    assert.equal(t.calls.length, 0, bad);
+    assert.equal(t.lines.at(-1)![1], "warn", bad);
+  }
+  assert.equal(lines.length, 3, "replay's own output comes from ctx.replay");
+});
+
+test("scope lists the engagement scope, or says replay is unavailable", async () => {
+  const { ctx, lines } = fakeCtx();
+  await execute("scope", ctx);
+  assert.deepEqual(lines.slice(1), [
+    ["  app.example.test", "out"],
+    ["  *.api.example.test", "out"],
+  ]);
+  const empty = fakeCtx({ scope: () => [] });
+  await execute("scope", empty.ctx);
+  assert.equal(empty.lines.at(-1)![1], "warn");
+  assert.match(empty.lines.at(-1)![0], /no scope.*SPALL_SCOPE/);
+  const off = fakeCtx({ scope: () => null });
+  await execute("scope", off.ctx);
+  assert.match(off.lines.at(-1)![0], /lever API/);
+});
+
+test("audit prints the newest attempts, one line each", async () => {
+  const records = [
+    { ts: "2026-11-21T20:00:01.5Z", outcome: "sent", method: "GET", target: "http://a.test/x", exchange_id: "e1", result_id: "r1" },
+    { ts: "2026-11-21T20:00:02Z", outcome: "denied", method: "GET", target: "http://b.test/", exchange_id: "e2", reason: '"b.test" is not in scope' },
+    { ts: "2026-11-21T20:00:03Z", outcome: "sent", method: "DELETE", target: "http://a.test/", exchange_id: "e3", confirmed: true },
+  ];
+  const { ctx, lines, calls } = fakeCtx({ audit: async (n) => (calls.push(`audit:${n}`), records) });
+  await execute("audit --last 3", ctx);
+  assert.deepEqual(calls, ["audit:3"]);
+  assert.equal(lines.length, 4);
+  assert.match(lines[1]![0], /20:00:01 +sent +GET +http:\/\/a\.test\/x/);
+  assert.deepEqual(lines[2]![1], "warn", "denials stand out");
+  assert.match(lines[2]![0], /not in scope/);
+  assert.match(lines[3]![0], /confirmed/);
+
+  const t = fakeCtx();
+  await execute("audit", t.ctx);
+  assert.deepEqual(t.calls, ["audit:20"]);
+  assert.match(t.lines.at(-1)![0], /no replay attempts yet/);
+  const bad = fakeCtx();
+  await execute("audit --last x", bad.ctx);
+  assert.equal(bad.calls.length, 0);
+  const err = fakeCtx({ audit: async () => "the audit log needs taphttp's lever API" });
+  await execute("audit", err.ctx);
+  assert.deepEqual(err.lines.at(-1), ["audit: the audit log needs taphttp's lever API", "warn"]);
+});
+
+test("every command has a risk class; replay is the one that sends traffic", () => {
+  const RISKS = ["read", "sends-traffic", "unsafe-method", "destructive"];
+  for (const c of COMMANDS) assert.ok(RISKS.includes(c.risk), c.name);
+  assert.deepEqual(
+    COMMANDS.filter((c) => c.risk !== "read").map((c) => c.name),
+    ["replay"],
+  );
+  const item = paletteItems().find((i) => i.command === "replay")!;
+  assert.equal(item.label, "Replay exchange…");
+  assert.equal(item.prefill, "replay ");
 });

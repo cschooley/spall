@@ -1,7 +1,7 @@
-// The shared right-hand inspector (docs/ux.md: "One inspector"). M1 shows
-// one exchange: request/response tabs, headers, bodies, copy as curl, save
-// body. Replay (M2) and Flag candidate (M3) land here later, not as row
-// actions. Every value is attacker-controlled and rendered as text.
+// The shared right-hand inspector (docs/ux.md: "One inspector"): one
+// exchange, request/response tabs, headers, bodies, replay (M2), copy as
+// curl, save body. Flag candidate (M4) lands here later, not as a row
+// action. Every value is attacker-controlled and rendered as text.
 
 import { Fragment, useState } from "react";
 import { Body } from "./Body.tsx";
@@ -23,7 +23,30 @@ import type { Header, TrafficEntry } from "../types.ts";
 
 type Tab = "request" | "response";
 
-export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: () => void }) {
+/** The replay control's state, owned by the app (the console shares it). */
+export interface ReplayControl {
+  /** spall can replay (lever API mode). */
+  available: boolean;
+  busy: boolean;
+  /** Set while an unsafe method waits for its second press. */
+  armedLabel: string | null;
+  /** Why the last attempt didn't send (denied, refused, error). */
+  message: string | null;
+  onReplay(): void;
+}
+
+export function Inspector({
+  entry,
+  onClose,
+  replay,
+  onOpen,
+}: {
+  entry: TrafficEntry;
+  onClose: () => void;
+  replay: ReplayControl;
+  /** Open another exchange by id (the original of a replay). */
+  onOpen(id: string): void;
+}) {
   const [tab, setTab] = useState<Tab>("request");
   const [copied, setCopied] = useState<"idle" | "ok" | "failed">("idle");
   const [idCopied, setIdCopied] = useState(false);
@@ -73,13 +96,28 @@ export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: ()
           <span className={statusClass(entry.status)}>{statusLine(entry.status)}</span>
           {entry.error ? <span className="error">{entry.error}</span> : null}
           {entry.duration_ms !== null ? <span>{durationText(entry.duration_ms)}</span> : null}
-          {entry.replay_of ? <span>{`replay of ${entry.replay_of}`}</span> : null}
+          {entry.replay_of ? (
+            <button type="button" className="link orig" title="Open the original" onClick={() => onOpen(entry.replay_of!)}>
+              {`replay of ${entry.replay_of}`}
+            </button>
+          ) : null}
         </div>
         <button type="button" className="close" aria-label="Close inspector" title="Close (Esc)" onClick={onClose}>
           ×
         </button>
       </header>
       <div className="actions">
+        <button
+          type="button"
+          className={replay.armedLabel ? "replay armed" : "replay"}
+          data-action="replay"
+          disabled={!replay.available || replay.busy}
+          title={replay.available ? "Replay as captured (⏎)" : "Replay needs taphttp's lever API"}
+          onClick={replay.onReplay}
+        >
+          {replay.busy ? "Sending…" : (replay.armedLabel ?? "Replay")}
+          <kbd>⏎</kbd>
+        </button>
         <button type="button" onClick={copyCurl}>
           {copied === "ok" ? "copied" : copied === "failed" ? "copy failed" : "Copy as curl"}
         </button>
@@ -90,6 +128,11 @@ export function Inspector({ entry, onClose }: { entry: TrafficEntry; onClose: ()
         >
           {`Save ${tab} body`}
         </button>
+        {replay.message ? (
+          <p className="replay-msg" role="status">
+            {replay.message}
+          </p>
+        ) : null}
       </div>
       <div className="tabs" role="tablist">
         {(["request", "response"] as const).map((t) => (

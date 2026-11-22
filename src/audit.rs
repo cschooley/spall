@@ -100,6 +100,25 @@ impl AuditLog {
         &self.path
     }
 
+    /// The newest `n` records, oldest first, for the console's `audit`.
+    /// Lines that don't parse (a torn write, a foreign line) are skipped.
+    /// Reads the whole file: fine for an engagement's worth of attempts.
+    pub fn tail(&self, n: usize) -> std::io::Result<Vec<serde_json::Value>> {
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let _guard = self.file.lock().unwrap_or_else(|p| p.into_inner());
+        let text = std::fs::read_to_string(&self.path)?;
+        let mut out: Vec<serde_json::Value> = text
+            .lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .take(n)
+            .collect();
+        out.reverse();
+        Ok(out)
+    }
+
     /// Append one record as a single write, so lines never interleave.
     pub fn record(&self, rec: &Record) -> std::io::Result<()> {
         let mut line = serde_json::to_vec(rec)?;
@@ -151,6 +170,33 @@ mod tests {
         AuditLog::open(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[test]
+    fn tail_returns_the_newest_records_oldest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        let log = AuditLog::open(&path).unwrap();
+        assert!(log.tail(5).unwrap().is_empty());
+        for id in ["a", "b", "c"] {
+            log.record(&Record::new("replay", id, Outcome::Sent))
+                .unwrap();
+        }
+        // A torn or foreign line is skipped, not fatal.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"not json\n")
+            .unwrap();
+        let ids = |v: Vec<serde_json::Value>| -> Vec<String> {
+            v.iter()
+                .map(|r| r["exchange_id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(ids(log.tail(2).unwrap()), ["b", "c"]);
+        assert_eq!(ids(log.tail(10).unwrap()), ["a", "b", "c"]);
+        assert!(log.tail(0).unwrap().is_empty());
     }
 
     #[test]
