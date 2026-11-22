@@ -5,6 +5,10 @@ here.
 
 ## Open
 
+### Serve the public CA certificate
+
+[taphttp#20](https://github.com/cschooley/taphttp/issues/20): serve the public CA certificate over the lever API (`GET /ca.pem`, `/ca.der`), matching `/info`'s `ca.sha256`. spall#32 needs it to offer the certificate as a download from the UI, so testers don't need Docker to get it. spall never mounts the CA volume (the key lives there).
+
 ### CA install hints use container paths
 
 [taphttp#19](https://github.com/cschooley/taphttp/issues/19): `taphttp ca info` prints install commands for `/ca/ca.crt`, which doesn't exist on the host. It should point at `ca print`, show the fingerprint, and recommend a dedicated browser profile over system-wide trust. The README's "A browser for testing" covers it meanwhile.
