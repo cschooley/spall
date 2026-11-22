@@ -5,6 +5,7 @@
 
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
+import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
 
@@ -48,6 +49,8 @@ export interface Ctx {
   useEngagement(which: string): Promise<EngagementInfo | string>;
   /** Set one detail on the active engagement; "" clears a date. */
   setEngagement(field: EngagementField, value: string): Promise<{ engagement: EngagementInfo; changed: boolean } | string>;
+  /** Change the active engagement's rules of engagement (#36); `rate_limit: 0` is off. */
+  setRules(patch: Partial<Rules>): Promise<{ engagement: EngagementInfo; changed: boolean } | string>;
 }
 
 export interface EngagementInfo {
@@ -59,6 +62,9 @@ export interface EngagementInfo {
   expires: string | null;
   scope: readonly string[];
   notes: string;
+  rules: Rules;
+  /** Whether the rules allow testing right now, and why not. */
+  testingNow: { allowed: boolean; reason: string | null } | null;
 }
 
 export interface EngagementSummary {
@@ -70,6 +76,39 @@ export interface EngagementSummary {
 
 export const ENGAGEMENT_FIELDS = ["name", "client", "starts", "ends", "expires", "notes"] as const;
 export type EngagementField = (typeof ENGAGEMENT_FIELDS)[number];
+const ROE_USAGE =
+  "usage: roe [set <methods|safe|rate|tz|agents|destructive> <value> | window add <days> <HH:MM-HH:MM> | window remove <n> | window clear | blackout add <from> <to> [note] | blackout remove <n> | blackout clear]";
+const ROE_FIELDS = ["methods", "safe", "rate", "tz", "agents", "destructive"];
+const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+
+/** A `roe set` value as a rules change, or a message. */
+function roeSet(field: string, value: string): Partial<Rules> | string {
+  const yesNo = (v: string) => (/^(yes|on|true)$/i.test(v) ? true : /^(no|off|false)$/i.test(v) ? false : null);
+  switch (field) {
+    case "methods":
+    case "safe": {
+      const list = parseMethods(value);
+      if (list === null) return "methods: comma-separated names like GET,POST (or any)";
+      return field === "methods" ? { methods: list } : { safe_methods: list };
+    }
+    case "rate": {
+      if (/^(off|none|0)$/i.test(value)) return { rate_limit: 0 };
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? { rate_limit: n } : "rate: sends per second, like 5 or 0.5 (or off)";
+    }
+    case "tz":
+      return value ? { time_zone: value } : "tz: an IANA zone like Europe/Berlin";
+    case "agents":
+    case "destructive": {
+      const b = yesNo(value);
+      if (b === null) return `${field}: yes or no`;
+      return field === "agents" ? { agents_allowed: b } : { destructive_allowed: b };
+    }
+    default:
+      return `fields: ${ROE_FIELDS.join(", ")}`;
+  }
+}
+
 const ENGAGEMENT_USAGE = "usage: engagement [list | new <name> | use <id|name> | set <field> <value>]";
 
 export type ScopeChange = { op: "add" | "exclude" | "remove"; entry: string } | { op: "all"; on: boolean };
@@ -338,6 +377,72 @@ export const COMMANDS: readonly Command[] = [
         return;
       }
       ctx.out(ENGAGEMENT_USAGE, "warn");
+    },
+  },
+  {
+    name: "roe",
+    usage: "roe [set <field> <value> | window add|remove|clear | blackout add|remove|clear]",
+    desc: "rules of engagement: methods, confirmation, rate, time zone, testing and no-test windows, agents",
+    group: "traffic",
+    // The rules bound every action, a human's or an agent's: humans only.
+    mcp: false,
+    risk: "policy",
+    palette: { label: "Rules of engagement", hint: "roe" },
+    complete: (args) =>
+      args.length <= 1
+        ? ["set", "window", "blackout"]
+        : args[0] === "set" && args.length === 2
+          ? ROE_FIELDS
+          : (args[0] === "window" || args[0] === "blackout") && args.length === 2
+            ? ["add", "remove", "clear"]
+            : [],
+    run: async (args, ctx) => {
+      const warn = (msg: string) => ctx.out(`roe: ${msg}`, "warn");
+      const show = (e: EngagementInfo) => {
+        for (const line of describeRules(e.rules)) ctx.out(line);
+        const now = e.testingNow;
+        if (now) ctx.out(now.allowed ? "testing now: allowed" : `testing now: not allowed: ${now.reason ?? "?"}`, now.allowed ? "out" : "warn");
+      };
+      const apply = async (patch: Partial<Rules>) => {
+        const res = await ctx.setRules(patch);
+        if (typeof res === "string") return warn(res);
+        if (!res.changed) ctx.out("roe: no change", "sys");
+        show(res.engagement);
+      };
+      const [sub, ...rest] = args;
+      if (sub === undefined) {
+        const e = await ctx.engagement();
+        return typeof e === "string" ? warn(e) : show(e);
+      }
+      if (sub === "set" && rest.length >= 2) {
+        const [field, ...value] = rest;
+        const patch = roeSet(field!, value.join(" ").trim());
+        return typeof patch === "string" ? warn(patch) : apply(patch);
+      }
+      if ((sub === "window" || sub === "blackout") && rest.length >= 1) {
+        const [op, ...more] = rest;
+        const key = sub === "window" ? "windows" : "blackouts";
+        if (op === "clear" && more.length === 0) return apply({ [key]: [] });
+        if (op !== "add" && op !== "remove") return ctx.out(ROE_USAGE, "warn");
+        const e = await ctx.engagement();
+        if (typeof e === "string") return warn(e);
+        if (op === "remove") {
+          const n = Number(more[0]);
+          const list = e.rules[key];
+          if (more.length !== 1 || !Number.isInteger(n) || n < 1 || n > list.length) return warn(`${sub} remove: a number from 1 to ${list.length} (roe lists them)`);
+          return apply({ [key]: list.filter((_, i) => i !== n - 1) });
+        }
+        if (sub === "window") {
+          const days = more[0] ? parseDays(more[0]) : null;
+          const span = more[1] ? parseSpan(more[1]) : null;
+          if (more.length !== 2 || !days || !span) return warn("window add <days: mon-fri, sat,sun, daily> <HH:MM-HH:MM>");
+          return apply({ windows: [...e.rules.windows, { days, ...span }] });
+        }
+        const [from, to, ...note] = more;
+        if (!from || !to || !LOCAL.test(from) || !LOCAL.test(to)) return warn("blackout add <YYYY-MM-DDTHH:MM> <YYYY-MM-DDTHH:MM> [note]");
+        return apply({ blackouts: [...e.rules.blackouts, { from, to, note: note.join(" ") }] });
+      }
+      ctx.out(ROE_USAGE, "warn");
     },
   },
   {

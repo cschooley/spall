@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { DEFAULT_RULES } from "../lib/roe.ts";
 import { COMMANDS, complete, execute, paletteItems, tokenize, type Ctx, type OutKind } from "./registry.ts";
 
 const ENG = {
@@ -11,6 +12,8 @@ const ENG = {
   expires: null,
   scope: ["*.acme.test", "acme.test", "!pay.acme.test"],
   notes: "",
+  rules: DEFAULT_RULES,
+  testingNow: { allowed: true, reason: null },
 };
 
 function fakeCtx(over: Partial<Ctx> = {}) {
@@ -43,6 +46,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     newEngagement: async (name) => (calls.push(`new:${name}`), { ...ENG, id: "n-1", name, scope: [] }),
     useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
+    setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
     ...over,
   };
@@ -222,6 +226,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["replay", "sends-traffic"],
       ["scope", "policy"],
       ["engagement", "policy"],
+      ["roe", "policy"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");
@@ -299,6 +304,7 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     newEngagement: async (name) => (calls.push(`new:${name}`), { ...ENG, id: "n-1", name, scope: [] }),
     useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
+    setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: "sso.a.test", state: "out", by: "!sso.a.test" }),
   });
   await execute("scope exclude sso.a.test", ctx);
@@ -377,4 +383,81 @@ test("engagement shows the active engagement; list, new, use and set change it",
   assert.equal(eng.risk, "policy");
   assert.equal(eng.mcp, false, "agents may read the engagement later, never change it");
   assert.deepEqual(complete("engagement set ").options, ["name", "client", "starts", "ends", "expires", "notes"]);
+});
+
+test("roe shows the rules and whether testing is allowed now", async () => {
+  const { ctx, lines } = fakeCtx();
+  await execute("roe", ctx);
+  assert.deepEqual(lines.slice(1).map(([t]) => t), [
+    "methods: any · confirm all but GET, HEAD, OPTIONS · rate 10/s · time zone UTC",
+    "testing windows: any time",
+    "no-test windows: none",
+    "agents: not allowed · destructive actions: not allowed",
+    "testing now: allowed",
+  ]);
+  const closed = fakeCtx({ engagement: async () => ({ ...ENG, testingNow: { allowed: false, reason: "outside the testing windows (...)" } }) });
+  await execute("roe", closed.ctx);
+  assert.deepEqual(closed.lines.at(-1), ["testing now: not allowed: outside the testing windows (...)", "warn"]);
+});
+
+test("roe set, window and blackout build rule changes", async () => {
+  const withWindows = {
+    ...ENG,
+    rules: { ...DEFAULT_RULES, windows: [{ days: ["sat" as const], start: "10:00", end: "12:00" }], blackouts: [{ from: "2026-11-26T18:00", to: "2026-11-27T08:00", note: "" }] },
+  };
+  const { ctx, calls, lines } = fakeCtx({ engagement: async () => withWindows });
+  for (const cmd of [
+    "roe set methods get,post",
+    "roe set methods any",
+    "roe set safe GET",
+    "roe set rate 2.5",
+    "roe set rate off",
+    "roe set tz America/Chicago",
+    "roe set agents yes",
+    "roe set destructive no",
+    "roe window add mon-fri 09:00-17:00",
+    "roe window remove 1",
+    "roe window clear",
+    "roe blackout add 2026-12-24T00:00 2026-12-27T00:00 holiday freeze",
+    "roe blackout remove 1",
+  ]) await execute(cmd, ctx);
+  assert.deepEqual(calls, [
+    'rules:{"methods":["GET","POST"]}',
+    'rules:{"methods":[]}',
+    'rules:{"safe_methods":["GET"]}',
+    'rules:{"rate_limit":2.5}',
+    'rules:{"rate_limit":0}',
+    'rules:{"time_zone":"America/Chicago"}',
+    'rules:{"agents_allowed":true}',
+    'rules:{"destructive_allowed":false}',
+    'rules:{"windows":[{"days":["sat"],"start":"10:00","end":"12:00"},{"days":["mon","tue","wed","thu","fri"],"start":"09:00","end":"17:00"}]}',
+    'rules:{"windows":[]}',
+    'rules:{"windows":[]}',
+    'rules:{"blackouts":[{"from":"2026-11-26T18:00","to":"2026-11-27T08:00","note":""},{"from":"2026-12-24T00:00","to":"2026-12-27T00:00","note":"holiday freeze"}]}',
+    'rules:{"blackouts":[]}',
+  ]);
+  assert.ok(lines.some(([t]) => t.startsWith("testing windows:")), "prints the rules after a change");
+
+  for (const bad of [
+    "roe set rate fast",
+    "roe set rate -1",
+    "roe set agents maybe",
+    "roe set colour red",
+    "roe set methods G@T",
+    "roe window add funday 09:00-17:00",
+    "roe window add mon 9-5",
+    "roe window remove 7",
+    "roe blackout add 2026-12-24 2026-12-27",
+    "roe frob",
+  ]) {
+    const t = fakeCtx({ engagement: async () => withWindows });
+    await execute(bad, t.ctx);
+    assert.equal(t.calls.length, 0, bad);
+    assert.equal(t.lines.at(-1)![1], "warn", bad);
+  }
+  const refused = fakeCtx({ setRules: async () => 'rules of engagement: time zone "Mars/Olympus": not an IANA zone' });
+  await execute("roe set tz Mars/Olympus", refused.ctx);
+  assert.equal(refused.lines.at(-1)![1], "warn");
+  assert.deepEqual(complete("roe ").options, ["set", "window", "blackout"]);
+  assert.deepEqual(complete("roe set ").options, ["methods", "safe", "rate", "tz", "agents", "destructive"]);
 });

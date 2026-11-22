@@ -235,6 +235,11 @@ async fn api_status(State(state): State<AppState>) -> Response {
         }
         None => serde_json::Value::Null,
     };
+    body["testing"] = state
+        .replayer
+        .as_ref()
+        .map(|r| r.testing_now())
+        .unwrap_or(serde_json::Value::Null);
     axum::Json(body).into_response()
 }
 
@@ -350,6 +355,7 @@ async fn api_engagement(State(state): State<AppState>) -> Response {
     };
     let mut body = serde_json::to_value(r.engagements.active()).unwrap_or_default();
     body["scope_all"] = r.scope_now().allows_all().into();
+    body["testing_now"] = r.testing_now();
     axum::Json(body).into_response()
 }
 

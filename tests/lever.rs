@@ -1112,12 +1112,12 @@ async fn engagements_are_edited_created_and_switched_through_the_api_and_audited
 
     let patch = |body: &'static str| send_text(spall, "PATCH", "/api/engagement", body, None);
     let res =
-        patch(r#"{"name":"ACME Q4","client":"ACME","starts":"2026-11-23","ends":"2026-12-04"}"#)
+        patch(r#"{"name":"ACME Q4","client":"ACME","starts":"2026-01-05","ends":"2099-12-31"}"#)
             .await;
     assert!(res.starts_with("HTTP/1.1 200"), "{res}");
     assert_eq!(body_json(&res)["engagement"]["name"], "ACME Q4");
     for (bad, want) in [
-        (r#"{"ends":"2026-11-01"}"#, "ends: before starts"),
+        (r#"{"ends":"2026-01-01"}"#, "ends: before starts"),
         (r#"{"scope":["x.test"]}"#, "POST /api/scope"),
         (r#"{"starts":"tomorrow"}"#, "YYYY-MM-DD"),
     ] {
@@ -1260,4 +1260,102 @@ async fn a_corrupt_engagement_stops_spall_instead_of_resetting_scope() {
         err.contains("engagements") && err.contains("not JSON"),
         "{err}"
     );
+}
+
+#[tokio::test]
+async fn rules_of_engagement_gate_replays_and_changes_take_effect_on_the_next_send() {
+    let (dir, stub, spall) = replay_setup(&[], &[]).await;
+    let token = dir.path().join("api-token");
+    let patch = |body: String| async move {
+        send_text(spall, "PATCH", "/api/engagement", &body, None).await
+    };
+    let replay = |body: &'static str| post_text(spall, "/api/replay", body, None);
+
+    // Methods: DELETE isn't allowed at all (no confirmation can lift it).
+    let res = patch(r#"{"rules":{"methods":["GET","post"]}}"#.into()).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let denied = replay(r#"{"id":"e1","method":"DELETE"}"#).await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+    assert!(body_json(&denied)["error"]
+        .as_str()
+        .unwrap()
+        .contains("DELETE isn't allowed by the rules of engagement (allowed: GET, POST)"));
+
+    // Rate: 1 per second. The first send goes, the next is refused, and
+    // switching the ceiling off lets the next one through.
+    patch(r#"{"rules":{"rate_limit":1}}"#.into()).await;
+    assert!(replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 200"));
+    let limited = replay(r#"{"id":"e1"}"#).await;
+    assert!(limited.starts_with("HTTP/1.1 429"), "{limited}");
+    assert!(
+        limited.to_ascii_lowercase().contains("retry-after: 1"),
+        "{limited}"
+    );
+    assert_eq!(body_json(&limited)["decision"], "rate_limited");
+    patch(r#"{"rules":{"rate_limit":0}}"#.into()).await;
+    assert!(replay(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 200"));
+
+    // A no-test window around now: nothing goes, and status says why.
+    let now = jiff::Timestamp::now().to_zoned(jiff::tz::TimeZone::UTC);
+    let fmt = |z: jiff::Zoned| z.datetime().strftime("%Y-%m-%dT%H:%M").to_string();
+    let from = fmt(now.checked_sub(jiff::Span::new().hours(1)).unwrap());
+    let to = fmt(now.checked_add(jiff::Span::new().hours(1)).unwrap());
+    let res = patch(format!(
+        r#"{{"rules":{{"blackouts":[{{"from":"{from}","to":"{to}","note":"change freeze"}}]}}}}"#
+    ))
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let blocked = replay(r#"{"id":"e1"}"#).await;
+    assert!(blocked.starts_with("HTTP/1.1 403"), "{blocked}");
+    assert!(
+        body_json(&blocked)["error"]
+            .as_str()
+            .unwrap()
+            .contains("no-test window"),
+        "{blocked}"
+    );
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["testing"]["allowed"], false);
+    assert!(status["testing"]["reason"]
+        .as_str()
+        .unwrap()
+        .ends_with(": change freeze"));
+    patch(r#"{"rules":{"blackouts":[]}}"#.into()).await;
+
+    // An expired authorization stops everything.
+    let yesterday = now.date().yesterday().unwrap().to_string();
+    patch(format!(r#"{{"expires":"{yesterday}"}}"#)).await;
+    let expired = replay(r#"{"id":"e1"}"#).await;
+    assert!(
+        body_json(&expired)["error"]
+            .as_str()
+            .unwrap()
+            .contains("expired"),
+        "{expired}"
+    );
+    let e = body_json(&get_text(spall, "/api/engagement").await);
+    assert_eq!(e["testing_now"]["allowed"], false);
+
+    let bad = patch(r#"{"rules":{"time_zone":"Mars/Olympus"}}"#.into()).await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+    assert_eq!(
+        stub.replays().len(),
+        2,
+        "only the two allowed sends reached taphttp"
+    );
+    let outcomes: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "replay")
+        .map(|r| r["outcome"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["denied", "sent", "rate_limited", "sent", "denied", "denied"]
+    );
+    let rule_changes: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "engagement")
+        .filter_map(|r| r["reason"].as_str().map(String::from))
+        .collect();
+    assert_eq!(rule_changes[0], "set rules.methods");
 }

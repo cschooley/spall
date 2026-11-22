@@ -54,7 +54,7 @@ export const test = base.extend<{ guard: void }>({
         // token, needs confirmation, recorded failure); Chromium logs any
         // non-2xx fetch. Only for /api/replay, only those statuses.
         const gateAnswer =
-          /^Failed to load resource: the server responded with a status of (403|409|428|502)\b/.test(m.text()) &&
+          /^Failed to load resource: the server responded with a status of (403|409|428|429|502)\b/.test(m.text()) &&
           m.location().url.endsWith("/api/replay");
         if (gateAnswer) return;
         if (m.type() === "error" || m.type() === "warning") problems.push(`console ${m.type()}: ${m.text()}`);

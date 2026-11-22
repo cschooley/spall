@@ -347,3 +347,38 @@ test("engagement commands from the console (#35); the status bar names the engag
   await expect(page.locator(".statusbar .engagement-name")).toHaveText("ACME Q4");
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
+
+test("roe from the console (#36); the status bar says when testing isn't allowed", async ({ page }) => {
+  let testing = { allowed: true, reason: null as string | null };
+  const rules = { methods: [], safe_methods: ["GET", "HEAD", "OPTIONS"], rate_limit: 10, time_zone: "UTC", windows: [] as unknown[], blackouts: [], agents_allowed: false, destructive_allowed: false };
+  await page.route("**/api/status", (r) =>
+    r.fulfill({
+      json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["a.test"], scope_all: false, engagement: { id: "e-1", name: "E" }, testing },
+    }),
+  );
+  const patches: unknown[] = [];
+  await page.route("**/api/engagement", async (r) => {
+    const eng = { id: "e-1", name: "E", scope: ["a.test"], rules, testing_now: testing };
+    if (r.request().method() === "PATCH") {
+      const body = r.request().postDataJSON() as { rules: { windows?: unknown[] } };
+      patches.push(body);
+      if (body.rules.windows) rules.windows = body.rules.windows;
+      testing = { allowed: false, reason: "outside the testing windows (sat 10:00-12:00 UTC; it is mon 09:00 there)" };
+      return r.fulfill({ json: { engagement: eng, changed: true } });
+    }
+    return r.fulfill({ json: eng });
+  });
+  await page.goto("/");
+  await expect(page.locator(".statusbar .engagement-name")).toHaveText("E");
+  await expect(page.locator(".statusbar .testing-closed")).toHaveCount(0);
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  const input = page.getByLabel("Console command");
+  await input.fill("roe window add sat 10:00-12:00");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText("testing windows: 1) sat 10:00-12:00");
+  await expect(page.locator(".con-log")).toContainText("testing now: not allowed: outside the testing windows");
+  expect(patches).toEqual([{ rules: { windows: [{ days: ["sat"], start: "10:00", end: "12:00" }] } }]);
+  await expect(page.locator(".statusbar .testing-closed")).toHaveText("● not testing now");
+  await expect(page.locator(".statusbar .testing-closed")).toHaveAttribute("title", /outside the testing windows/);
+});

@@ -56,7 +56,8 @@ export function readReplayResponse(status: number, body: unknown): ReplayResult 
       ? { kind: "confirm", token: body.confirm, reason: msg }
       : { kind: "error", reason: "spall asked for confirmation without a token" };
   }
-  if (status === 403) return { kind: "denied", reason: msg };
+  // 403: the gate said no; 429: over the rules' rate ceiling (#36).
+  if (status === 403 || status === 429) return { kind: "denied", reason: msg };
   if (status === 409) return { kind: "refused", reason: msg };
   return { kind: "error", reason: msg };
 }

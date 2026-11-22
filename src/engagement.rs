@@ -9,9 +9,10 @@
 //! doesn't parse, or has a newer schema, stops spall instead of silently
 //! starting with a different scope.
 //!
-//! Rules of engagement (methods, rate, testing windows, time zone) are #36.
+//! Its rules of engagement (#36, `roe`) travel with it.
 
 use crate::gate::Scope;
+use crate::roe::{Blackout, Period, Rules, Window};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -21,7 +22,7 @@ use std::sync::Mutex;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Engagement {
     pub schema_version: u32,
     /// Lowercase letters, digits and `-`; also the file name.
@@ -48,6 +49,9 @@ pub struct Engagement {
     /// A note per scope entry ("staging only", "owned by the client's CDN").
     #[serde(default)]
     pub target_notes: BTreeMap<String, String>,
+    /// Rules of engagement (#36). Files from before #36 get the defaults.
+    #[serde(default)]
+    pub rules: Rules,
     pub created: String,
     pub updated: String,
 }
@@ -79,6 +83,22 @@ pub struct Patch {
     pub contacts: Option<Vec<Contact>>,
     pub notes: Option<String>,
     pub target_notes: Option<BTreeMap<String, String>>,
+    pub rules: Option<RulesPatch>,
+}
+
+/// A change to the rules of engagement; absent fields are left alone.
+/// `rate_limit: 0` switches the ceiling off.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RulesPatch {
+    pub methods: Option<Vec<String>>,
+    pub safe_methods: Option<Vec<String>>,
+    pub rate_limit: Option<f64>,
+    pub time_zone: Option<String>,
+    pub windows: Option<Vec<Window>>,
+    pub blackouts: Option<Vec<Blackout>>,
+    pub agents_allowed: Option<bool>,
+    pub destructive_allowed: Option<bool>,
 }
 
 /// A new engagement (`POST /api/engagements`, `engagement new`).
@@ -173,6 +193,9 @@ impl Engagement {
         if scope.entries() != self.scope {
             return Err("scope: entries aren't in normal form".into());
         }
+        self.rules
+            .validate()
+            .map_err(|e| format!("rules of engagement: {e}"))?;
         if self.target_notes.len() > 500 {
             return Err("target notes: at most 500".into());
         }
@@ -247,7 +270,59 @@ impl Engagement {
         if let Some(v) = p.target_notes {
             set!(target_notes, v);
         }
+        if let Some(r) = p.rules {
+            let upper = |v: Vec<String>| -> Vec<String> {
+                v.iter()
+                    .map(|m| m.trim().to_ascii_uppercase())
+                    .filter(|m| !m.is_empty())
+                    .collect()
+            };
+            macro_rules! rule {
+                ($f:ident, $v:expr) => {{
+                    let after = $v;
+                    note(
+                        concat!("rules.", stringify!($f)),
+                        serde_json::json!(self.rules.$f),
+                        serde_json::json!(after),
+                    );
+                    self.rules.$f = after;
+                }};
+            }
+            if let Some(v) = r.methods {
+                rule!(methods, upper(v));
+            }
+            if let Some(v) = r.safe_methods {
+                rule!(safe_methods, upper(v));
+            }
+            if let Some(v) = r.rate_limit {
+                rule!(rate_limit, (v != 0.0).then_some(v));
+            }
+            if let Some(v) = r.time_zone {
+                rule!(time_zone, v.trim().to_string());
+            }
+            if let Some(v) = r.windows {
+                rule!(windows, v);
+            }
+            if let Some(v) = r.blackouts {
+                rule!(blackouts, v);
+            }
+            if let Some(v) = r.agents_allowed {
+                rule!(agents_allowed, v);
+            }
+            if let Some(v) = r.destructive_allowed {
+                rule!(destructive_allowed, v);
+            }
+        }
         changes
+    }
+
+    /// The dates the rules check against.
+    pub fn period(&self) -> Period {
+        Period {
+            starts: self.starts.clone(),
+            ends: self.ends.clone(),
+            expires: self.expires.clone(),
+        }
     }
 }
 
@@ -309,6 +384,8 @@ struct State {
 pub struct Store {
     dir: PathBuf,
     state: Mutex<State>,
+    /// Rules a new engagement starts with (from --safe-methods).
+    defaults: Rules,
 }
 
 /// What opening the store did, for startup logging.
@@ -330,7 +407,11 @@ impl Store {
     /// Open (creating the directory, mode 0700) and load the active
     /// engagement. With none on disk, create one from `bootstrap` (the
     /// --scope config, `*` dropped: that stays a process flag).
-    pub fn open(dir: &Path, bootstrap: &Scope) -> anyhow::Result<(Store, Opened)> {
+    pub fn open(
+        dir: &Path,
+        bootstrap: &Scope,
+        defaults: &Rules,
+    ) -> anyhow::Result<(Store, Opened)> {
         use anyhow::Context;
         create_dir_private(dir).with_context(|| format!("creating {}", dir.display()))?;
         let mut opened = Opened::default();
@@ -364,6 +445,7 @@ impl Store {
                     notes: String::new(),
                     scope: bootstrap.with_all(false).entries(),
                     target_notes: BTreeMap::new(),
+                    rules: defaults.clone(),
                     created: ts.clone(),
                     updated: ts,
                 };
@@ -382,6 +464,7 @@ impl Store {
                 scope: active.parsed_scope().map_err(anyhow::Error::msg)?,
                 active,
             }),
+            defaults: defaults.clone(),
         };
         let (_, skipped) = store.load_all();
         opened.skipped = skipped;
@@ -492,6 +575,7 @@ impl Store {
             notes: String::new(),
             scope: scope.entries(),
             target_notes: BTreeMap::new(),
+            rules: self.defaults.clone(),
             created: ts.clone(),
             updated: ts,
         };
@@ -621,7 +705,7 @@ mod tests {
     use super::*;
 
     fn open(dir: &Path, scope: &str) -> (Store, Opened) {
-        Store::open(dir, &Scope::parse(scope).unwrap()).unwrap()
+        Store::open(dir, &Scope::parse(scope).unwrap(), &Rules::default()).unwrap()
     }
 
     #[test]
@@ -690,13 +774,13 @@ mod tests {
             let dir = tempfile::TempDir::new().unwrap();
             fs::write(dir.path().join("active"), "x").unwrap();
             fs::write(dir.path().join("x.json"), &bad).unwrap();
-            let err = Store::open(dir.path(), &Scope::parse("a.test").unwrap()).err();
+            let err = Store::open(dir.path(), &Scope::parse("a.test").unwrap(), &Rules::default()).err();
             assert!(err.is_some(), "{bad}");
             assert_eq!(fs::read_to_string(dir.path().join("x.json")).unwrap(), bad, "left alone");
         }
         let dir = tempfile::TempDir::new().unwrap();
         fs::write(dir.path().join("active"), "../etc/passwd").unwrap();
-        assert!(Store::open(dir.path(), &Scope::default()).is_err());
+        assert!(Store::open(dir.path(), &Scope::default(), &Rules::default()).is_err());
     }
 
     #[test]
@@ -818,6 +902,53 @@ mod tests {
             serde_json::from_str::<Patch>(r#"{"scope": ["x.test"]}"#).is_err(),
             "scope isn't patched here"
         );
+    }
+
+    #[test]
+    fn rules_are_patched_validated_and_default_for_old_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let defaults = Rules {
+            safe_methods: vec!["GET".into()],
+            ..Rules::default()
+        };
+        let (s, _) = Store::open(dir.path(), &Scope::parse("a.test").unwrap(), &defaults).unwrap();
+        assert_eq!(
+            s.active().rules.safe_methods,
+            ["GET"],
+            "a new engagement starts from the config"
+        );
+        let patch = |r: RulesPatch| {
+            s.update(Patch {
+                rules: Some(r),
+                ..Patch::default()
+            })
+        };
+        let (e, changes) = patch(RulesPatch {
+            methods: Some(vec!["get".into(), " post ".into()]),
+            rate_limit: Some(0.0),
+            time_zone: Some("America/Chicago".into()),
+            ..RulesPatch::default()
+        })
+        .unwrap();
+        assert_eq!(e.rules.methods, ["GET", "POST"]);
+        assert_eq!(e.rules.rate_limit, None, "0 switches the ceiling off");
+        assert_eq!(
+            changes["rules.time_zone"],
+            serde_json::json!({ "before": "UTC", "after": "America/Chicago" })
+        );
+        assert!(
+            matches!(patch(RulesPatch { time_zone: Some("Nowhere/Land".into()), ..RulesPatch::default() }), Err(Error::Invalid(m)) if m.contains("rules of engagement: time zone"))
+        );
+        assert_eq!(s.active().rules.time_zone, "America/Chicago");
+
+        // A file written before #36 has no rules: it loads with the defaults.
+        let id = s.active().id;
+        let path = dir.path().join(format!("{id}.json"));
+        let mut v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        v.as_object_mut().unwrap().remove("rules");
+        fs::write(&path, v.to_string()).unwrap();
+        assert_eq!(load(&path).unwrap().rules, Rules::default());
     }
 
     #[test]

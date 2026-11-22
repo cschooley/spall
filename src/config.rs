@@ -61,7 +61,8 @@ pub struct Config {
     pub scope: Scope,
 
     /// Methods that replay without confirmation, comma-separated. Any
-    /// other method needs a second, confirmed request.
+    /// other method needs a second, confirmed request. Seeds a new
+    /// engagement's rules of engagement (#36); after that the rules decide.
     #[arg(long, env = "SPALL_SAFE_METHODS", default_value = "GET,HEAD,OPTIONS", value_parser = parse_methods)]
     pub safe_methods: MethodPolicy,
 

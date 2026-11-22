@@ -3,6 +3,7 @@
 // Engagement details are tester-entered, but still rendered as text only.
 
 import type { EngagementInfo, EngagementSummary } from "../commands/registry.ts";
+import { asRules } from "./roe.ts";
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const optStr = (v: unknown) => (typeof v === "string" && v !== "" ? v : null);
@@ -22,7 +23,16 @@ export function asEngagement(v: unknown): EngagementInfo | null {
     expires: optStr(o.expires),
     scope: strings(o.scope),
     notes: str(o.notes),
+    rules: asRules(o.rules),
+    testingNow: testingOf(o.testing_now),
   };
+}
+
+/** `{allowed, reason}` from the API, or null. */
+export function testingOf(v: unknown): { allowed: boolean; reason: string | null } | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as { allowed?: unknown; reason?: unknown };
+  return typeof o.allowed === "boolean" ? { allowed: o.allowed, reason: typeof o.reason === "string" ? o.reason : null } : null;
 }
 
 export function asSummaries(v: unknown): EngagementSummary[] | null {

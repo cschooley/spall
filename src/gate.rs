@@ -8,6 +8,7 @@
 //! The scope engine here is spall's only one (#34): the gate, `scope
 //! check`, and host states in traffic all ask [`Scope::explain`].
 
+use crate::roe::{self, Actor, Class, Period, Rules};
 use serde::Serialize;
 use std::net::IpAddr;
 
@@ -421,6 +422,11 @@ impl MethodPolicy {
         }
     }
 
+    /// The safe methods, uppercase.
+    pub fn methods(&self) -> &[String] {
+        &self.safe
+    }
+
     fn is_safe(&self, method: &str) -> bool {
         self.safe.iter().any(|m| m.eq_ignore_ascii_case(method))
     }
@@ -434,6 +440,8 @@ pub struct Action<'a> {
     pub url: &'a str,
     /// The effective `Host` header, if the request has one.
     pub host_header: Option<&'a str>,
+    pub actor: Actor,
+    pub class: Class,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,6 +503,35 @@ pub fn check(scope: &Scope, policy: &MethodPolicy, action: &Action) -> Decision 
     Decision::Allow
 }
 
+/// The whole gate (#22, #34, #36): the rules of engagement in every layer
+/// (the engagement's, then a task's, which can only narrow), then scope,
+/// then whether the method needs confirmation in any layer. Every denial
+/// beats a confirmation. `now` is passed in so the decision is testable.
+pub fn decide(
+    scope: &Scope,
+    layers: &[&Rules],
+    period: &Period,
+    action: &Action,
+    now: jiff::Timestamp,
+) -> Decision {
+    if let Err(reason) = roe::check_layers(
+        layers,
+        period,
+        now,
+        action.actor,
+        action.class,
+        action.method,
+    ) {
+        return Decision::Deny(reason);
+    }
+    let safe: Vec<&str> = layers
+        .first()
+        .map(|r| r.safe_methods.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let safe = safe.into_iter().filter(|m| roe::safe_in_all(layers, m));
+    check(scope, &MethodPolicy::new(safe), action)
+}
+
 /// Why a host may not be sent to, if it may not. `what` prefixes the host.
 fn host_denial(scope: &Scope, host: &str, what: &str) -> Option<Decision> {
     let v = scope.explain(host);
@@ -532,7 +569,73 @@ mod tests {
             method,
             url,
             host_header: host,
+            actor: Actor::Human,
+            class: Class::Send,
         }
+    }
+
+    #[test]
+    fn decide_checks_the_rules_first_then_scope_then_confirmation() {
+        let s = scope("a.test");
+        let rules = Rules {
+            methods: vec!["GET".into(), "POST".into()],
+            ..Rules::default()
+        };
+        let p = Period {
+            expires: Some("2026-11-30".into()),
+            ..Period::default()
+        };
+        let now: jiff::Timestamp = "2026-11-23T12:00:00Z".parse().unwrap();
+        let d = |a: &Action, now| decide(&s, &[&rules], &p, a, now);
+        assert_eq!(
+            d(&action("GET", "http://a.test/", None), now),
+            Decision::Allow
+        );
+        assert!(matches!(
+            d(&action("POST", "http://a.test/", None), now),
+            Decision::NeedsConfirmation(_)
+        ));
+        let Decision::Deny(r) = d(&action("DELETE", "http://a.test/", None), now) else {
+            panic!()
+        };
+        assert!(r.contains("DELETE isn't allowed"), "{r}");
+        // The rules beat scope: an expired engagement says so even out of scope.
+        let later: jiff::Timestamp = "2026-12-01T12:00:00Z".parse().unwrap();
+        let Decision::Deny(r) = d(&action("GET", "http://b.test/", None), later) else {
+            panic!()
+        };
+        assert!(r.contains("expired"), "{r}");
+        let mut agent = action("GET", "http://a.test/", None);
+        agent.actor = Actor::Agent;
+        assert!(matches!(d(&agent, now), Decision::Deny(ref r) if r.contains("agents")));
+        // A task layer that calls POST safe can't lift the engagement's confirmation.
+        let task = Rules {
+            safe_methods: vec!["GET".into(), "POST".into()],
+            ..Rules::default()
+        };
+        let d2 = decide(
+            &s,
+            &[&rules, &task],
+            &p,
+            &action("POST", "http://a.test/", None),
+            now,
+        );
+        assert!(matches!(d2, Decision::NeedsConfirmation(_)), "{d2:?}");
+        let task = Rules {
+            safe_methods: vec![],
+            ..Rules::default()
+        };
+        let d3 = decide(
+            &s,
+            &[&rules, &task],
+            &p,
+            &action("GET", "http://a.test/", None),
+            now,
+        );
+        assert!(
+            matches!(d3, Decision::NeedsConfirmation(_)),
+            "a task can require more confirmation: {d3:?}"
+        );
     }
 
     #[test]

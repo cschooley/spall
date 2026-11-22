@@ -21,6 +21,10 @@ test("each /api/replay answer becomes one kind of result", () => {
     kind: "denied",
     reason: '"x.test" is not in scope',
   });
+  assert.deepEqual(readReplayResponse(429, { decision: "rate_limited", error: "the rules of engagement allow 1 sends per second; retry in 0.4s" }), {
+    kind: "denied",
+    reason: "the rules of engagement allow 1 sends per second; retry in 0.4s",
+  });
   assert.deepEqual(readReplayResponse(409, { error: "confirmation expired" }), { kind: "refused", reason: "confirmation expired" });
   assert.deepEqual(readReplayResponse(404, { error: "no such exchange" }), { kind: "error", reason: "no such exchange" });
   assert.deepEqual(readReplayResponse(503, { error: "replay needs taphttp's lever API" }), {

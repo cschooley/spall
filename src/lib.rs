@@ -11,6 +11,7 @@ pub mod gate;
 pub mod hub;
 pub mod lever;
 pub mod replay;
+pub mod roe;
 pub mod tailer;
 pub mod web;
 
@@ -158,13 +159,20 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                     config.audit_log.display()
                 )
             })?;
-            let (engagements, opened) = engagement::Store::open(&config.engagements, &config.scope)
-                .with_context(|| {
-                    format!(
-                        "loading engagements from {} (set --engagements / SPALL_ENGAGEMENTS)",
-                        config.engagements.display()
-                    )
-                })?;
+            let (engagements, opened) = engagement::Store::open(
+                &config.engagements,
+                &config.scope,
+                &roe::Rules {
+                    safe_methods: config.safe_methods.methods().to_vec(),
+                    ..roe::Rules::default()
+                },
+            )
+            .with_context(|| {
+                format!(
+                    "loading engagements from {} (set --engagements / SPALL_ENGAGEMENTS)",
+                    config.engagements.display()
+                )
+            })?;
             for skipped in &opened.skipped {
                 tracing::warn!("engagement file skipped: {skipped}");
             }
@@ -196,7 +204,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 lever: lever.clone(),
                 engagements,
                 all_hosts: std::sync::atomic::AtomicBool::new(config.scope.allows_all()),
-                policy: config.safe_methods.clone(),
+                limiter: std::sync::Mutex::new(roe::Limiter::default()),
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,
             }))

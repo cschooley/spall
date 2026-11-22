@@ -30,6 +30,8 @@ pub enum Outcome {
     Error,
     /// The scope was changed at runtime (`scope add|exclude|remove|all`).
     ScopeChanged,
+    /// Allowed, but over the rules' rate ceiling; nothing was sent.
+    RateLimited,
     /// The engagement's details changed, or another one became active.
     EngagementChanged,
 }

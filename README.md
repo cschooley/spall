@@ -153,7 +153,7 @@ cargo run -- --log-file ./traffic.jsonl
 | `--history` | `SPALL_HISTORY` | `1000` (entries replayed to a newly opened page) |
 | `--poll-ms` | `SPALL_POLL_MS` | `250` (log tailing only) |
 | `--scope` | `SPALL_SCOPE` | empty: every replay is denied. `*` allows every host. Seeds the first engagement only; see [Engagements](#engagements) |
-| `--safe-methods` | `SPALL_SAFE_METHODS` | `GET,HEAD,OPTIONS` (replay without confirmation) |
+| `--safe-methods` | `SPALL_SAFE_METHODS` | `GET,HEAD,OPTIONS` (replay without confirmation). Seeds a new engagement's rules only; see [Rules of engagement](#rules-of-engagement) |
 | `--audit-log` | `SPALL_AUDIT_LOG` | `/data/audit.jsonl` (lever API mode; spall won't start if it can't write it) |
 | `--engagements` | `SPALL_ENGAGEMENTS` | `/data/engagements` (lever API mode; created if missing) |
 
@@ -167,7 +167,8 @@ Replay resends a captured request through taphttp. Every attempt goes through on
 
 - **Scope.** Both the request's URL host and its `Host` header must match `--scope`: comma-separated exact hosts (`app.example.test`), wildcards (`*.example.test`, subdomains only), IPs and CIDRs (`10.0.0.0/8`), and exclusions (`!sso.example.test`), which win over every other entry and over `*`: use them for the production database, the third-party SSO or the payment provider inside a wildcard. Internationalized names match in either form (`bücher.test` is `xn--bcher-kva.test`); ports, case, trailing dots, IPv6 zone ids and IPv4-mapped IPv6 addresses don't change a match. Hostnames are never resolved to match a CIDR. With no scope set, nothing is sent: traffic you captured in passing (CDNs, the OAuth provider) stays out of reach. A denial names the current scope and how to widen it.
 - **Changing scope while you work.** In the console: `scope` shows it, `scope add *.whatever.com`, `scope exclude pay.whatever.com` and `scope remove <entry>` (`scope remove !<entry>` lifts an exclusion) edit it, `scope check <url|host>` says whether a target is in, excluded or unknown and which entry decided, and `scope all on` / `scope all off` allow every host (third parties included) or go back. Entry changes are saved on the active engagement; every-host lasts until spall restarts or you switch engagements. All of it is written to the audit log and can't be done by an agent. `SPALL_SCOPE=*` starts with every host allowed. While every host is in scope, the status bar says so. Unsafe methods still take two presses.
-- **Unsafe methods.** Anything not in `--safe-methods` needs confirmation. The first request returns 428 with a single-use `confirm` token, valid for 2 minutes and bound to that exact request; sending the same request with it goes through.
+- **Rules of engagement.** Checked before scope: the engagement's dates and authorization expiry, its testing and no-test windows, which methods may be sent at all, and a rate ceiling. See [Rules of engagement](#rules-of-engagement).
+- **Unsafe methods.** Anything not in the rules' safe methods needs confirmation. The first request returns 428 with a single-use `confirm` token, valid for 2 minutes and bound to that exact request; sending the same request with it goes through.
 - **Audit.** Every attempt is a line in `--audit-log`, including denials, unconfirmed attempts and failures: time, actor, exchange, method, target, Host header, decision and reason, whether it was confirmed, the outcome, taphttp's status and the resulting exchange. The file is append-only and mode 0600 (URLs can carry tokens).
 
 In compose, set the first scope in `.env` (`SPALL_SCOPE=app.example.test`); the audit log and engagements are on the `spall-data` volume.
@@ -181,17 +182,34 @@ The engagement is what you're testing under: a name, the client, start and end d
 - **Audit:** every change is in the audit log with before and after, and every record names the engagement it was made under. Agents can't create, switch or edit engagements.
 - **A damaged file stops spall.** An engagement file that doesn't parse, or comes from a newer spall, stops startup rather than letting spall start with a different scope. Fix the file or move it aside.
 
+### Rules of engagement
+
+Each engagement carries rules that the gate enforces on every replay. Agents will be held to the same rules (M6). A task can narrow them but never widen them.
+
+| Rule | Default | Console |
+|---|---|---|
+| Methods that may be sent at all | any | `roe set methods GET,POST` (or `any`) |
+| Methods sent without confirmation | `GET, HEAD, OPTIONS` (from `--safe-methods`) | `roe set safe GET,HEAD` |
+| Rate ceiling, sends per second | 10 | `roe set rate 2` (or `off`) |
+| Time zone for dates and windows | `UTC` | `roe set tz America/Chicago` |
+| Testing windows (weekly) | any time | `roe window add mon-fri 09:00-17:00`; `22:00-06:00` runs past midnight |
+| No-test windows | none | `roe blackout add 2026-12-24T00:00 2026-12-27T00:00 holiday freeze` |
+| Agents may act | no | `roe set agents yes` |
+| Destructive actions | no | `roe set destructive yes` |
+
+`roe` shows the rules and whether testing is allowed right now. `roe window remove <n>`, `roe blackout remove <n>` and `clear` edit the lists. Nothing is sent before the engagement's start date, after its end date, or after its authorization expires; each date runs through the whole day in the rules' time zone. A replay outside the rules is refused with the reason, and the status bar shows "not testing now" while that's the case. Over the rate ceiling, spall answers 429 with `Retry-After`; denied and unconfirmed attempts don't count toward it. Rule changes are audited with before and after, like other engagement changes. The time zone database is bundled, so zones work in the image, which has no system zoneinfo.
+
 ## Endpoints
 
 - `GET /`: live console
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`, `replay_of`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
-- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null}` for the status bar
-- `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope; 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null, "testing": {"allowed", "reason"} | null}` for the status bar
+- `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope or outside the rules of engagement; 429 over the rate ceiling (`Retry-After`); 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
 - `POST /api/scope`: `{"op": "add" | "exclude" | "remove", "entry": "..."}` or `{"op": "all", "on": bool}`. Same-origin JSON only; audited with the entries before and after; entries are saved on the active engagement, `all` lasts until restart. Returns `{"scope": [...], "all": bool, "changed": bool}`; exclusions are listed as `!entry`
 - `GET /api/scope/check?target=<url or host>`: `{"host", "state": "in" | "out" | "unknown", "by": entry | null}`
-- `GET /api/engagement`: the active engagement. `PATCH /api/engagement`: change any of `name`, `client`, `starts`, `ends`, `expires`, `contacts`, `notes`, `target_notes` (not `scope`: use `/api/scope`); returns `{"engagement", "changed"}`
+- `GET /api/engagement`: the active engagement, with `testing_now: {allowed, reason}`. `PATCH /api/engagement`: change any of `name`, `client`, `starts`, `ends`, `expires`, `contacts`, `notes`, `target_notes` and `rules` (any of `methods`, `safe_methods`, `rate_limit` (0 is off), `time_zone`, `windows`, `blackouts`, `agents_allowed`, `destructive_allowed`), but not `scope`: use `/api/scope`. Returns `{"engagement", "changed"}`
 - `GET /api/engagements`: `[{"id", "name", "client", "active"}]`. `POST /api/engagements`: `{"name", "client"?, "scope"?: [...]}` creates one and makes it active (201). `POST /api/engagements/active`: `{"id": id or name}` switches. All same-origin JSON, audited; 400 bad input, 404 no such engagement, 503 without `--taphttp-api`
 - `GET /api/audit?last=N`: the newest replay attempts from the audit log, oldest first (default 20, at most 500). 503 without `--taphttp-api`
 - `GET /healthz`: `ok`

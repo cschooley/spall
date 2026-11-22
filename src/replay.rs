@@ -10,13 +10,15 @@
 use crate::audit::{AuditLog, Outcome, Record};
 use crate::confirm::{fingerprint, Confirmations};
 use crate::engagement::{Engagement, Error as EngagementError, New, Patch, Store};
-use crate::gate::{self, Action, Decision, MethodPolicy, Scope};
+use crate::gate::{self, Action, Decision, Scope};
 use crate::lever::Lever;
+use crate::roe::{self, Actor, Class, Limiter};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use taphttp_types::TrafficEntry;
 
@@ -167,7 +169,8 @@ pub struct Replayer {
     pub engagements: Store,
     /// Every host allowed (`scope all on`, `SPALL_SCOPE=*`): this process only.
     pub all_hosts: AtomicBool,
-    pub policy: MethodPolicy,
+    /// The rules' rate ceiling, shared by every send (#36).
+    pub limiter: Mutex<Limiter>,
     pub confirmations: Confirmations,
     pub audit: AuditLog,
 }
@@ -235,6 +238,15 @@ impl Replayer {
             tracing::warn!("scope: every host is in scope until restart or `scope all off`");
         }
         Ok((now, changed))
+    }
+
+    /// Whether the rules allow testing right now (dates, windows), and why not.
+    pub fn testing_now(&self) -> serde_json::Value {
+        let e = self.engagements.active();
+        match e.rules.check_time(&e.period(), jiff::Timestamp::now()) {
+            Ok(()) => serde_json::json!({ "allowed": true, "reason": null }),
+            Err(r) => serde_json::json!({ "allowed": false, "reason": r }),
+        }
     }
 
     /// Change the active engagement's details; audited with before/after.
@@ -362,14 +374,20 @@ impl Replayer {
         rec.host_header = eff.host_header.clone();
         let scope = self.scope_now();
         rec.scope_all = scope.allows_all();
-        let decision = gate::check(
+        let engagement = self.engagements.active();
+        let layers = [&engagement.rules];
+        let decision = gate::decide(
             &scope,
-            &self.policy,
+            &layers,
+            &engagement.period(),
             &Action {
                 method: &eff.method,
                 url: &eff.url,
                 host_header: eff.host_header.as_deref(),
+                actor: Actor::Human,
+                class: Class::Send,
             },
+            jiff::Timestamp::now(),
         );
         rec.decision = Some(decision.kind());
         rec.reason = decision.reason().map(String::from);
@@ -431,6 +449,35 @@ impl Replayer {
                 }
             }
             Decision::Allow => {}
+        }
+
+        // The rate ceiling counts sends only: denials and unconfirmed
+        // attempts above never reach it.
+        let rate = roe::rate_of(&layers);
+        let wait = self
+            .limiter
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take(rate, Instant::now());
+        if let Err(wait) = wait {
+            let secs = wait.as_secs_f64();
+            let msg = format!(
+                "the rules of engagement allow {} sends per second; retry in {secs:.1}s",
+                rate.unwrap_or_default()
+            );
+            rec.outcome = Outcome::RateLimited;
+            rec.error = Some(msg.clone());
+            self.audit(&rec);
+            let mut res = json(
+                StatusCode::TOO_MANY_REQUESTS,
+                serde_json::json!({ "error": msg, "decision": "rate_limited", "retry_after_secs": secs }),
+            );
+            if let Ok(v) =
+                axum::http::HeaderValue::from_str(&format!("{}", secs.ceil().max(1.0) as u64))
+            {
+                res.headers_mut().insert(axum::http::header::RETRY_AFTER, v);
+            }
+            return res;
         }
 
         match self.lever.post_json("/replay", body, REPLAY_TIMEOUT).await {

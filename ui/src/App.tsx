@@ -431,6 +431,16 @@ export function App() {
         const engagement = asEngagement(o.engagement);
         return engagement ? { engagement, changed: o.changed === true } : "unexpected answer";
       },
+      setRules: async (patch) => {
+        const body = await apiJson("/api/engagement", { method: "PATCH", body: { rules: patch } });
+        if (typeof body === "string") return body;
+        setStatusNonce((n) => n + 1);
+        const o = body as { engagement?: unknown; changed?: unknown };
+        // PATCH returns the engagement without testing_now: fetch it fresh.
+        const fresh = await apiJson("/api/engagement");
+        const engagement = asEngagement(typeof fresh === "string" ? o.engagement : fresh);
+        return engagement ? { engagement, changed: o.changed === true } : "unexpected answer";
+      },
       checkScope: async (target) => {
         try {
           const res = await fetch(`/api/scope/check?target=${encodeURIComponent(target)}`);
@@ -638,6 +648,11 @@ export function App() {
         {status.engagement ? (
           <span className="engagement-name" title={`Engagement ${status.engagement.id} (engagement in the console)`}>
             {status.engagement.name}
+          </span>
+        ) : null}
+        {status.testing && !status.testing.allowed ? (
+          <span className="testing-closed" title={status.testing.reason ?? "The rules of engagement don't allow testing now (roe in the console)."}>
+            ● not testing now
           </span>
         ) : null}
         {status.scopeAll ? (
