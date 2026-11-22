@@ -1,11 +1,12 @@
-//! Client for taphttp's lever API (taphttp v0.3.0+), used when spall is
+//! Client for taphttp's lever API (taphttp v0.6.0+), used when spall is
 //! started with `--taphttp-api`.
 //!
 //! - [`Follower`] backfills recent history from `GET /exchanges`, then
 //!   follows the `/feed` WebSocket with `?since=<last id>` so reconnects
 //!   lose nothing. It re-syncs on `reset` and resumes on `lagged`.
-//! - [`Lever::get`] is used by the web layer to proxy history queries;
-//!   the browser never sees the token or talks to taphttp directly.
+//! - [`Lever::get`] is used by the web layer to proxy history queries, and
+//!   [`Lever::post_json`] to forward replays; the browser never sees the
+//!   token or talks to taphttp directly.
 //!
 //! The token is read from `--taphttp-token-file` on every request, so spall
 //! can start before taphttp has created it. It is never logged.
@@ -14,7 +15,7 @@ use crate::hub::Hub;
 use crate::{parse_entry, publish_entry, SchemaWarner};
 use anyhow::{anyhow, bail, Context};
 use futures_util::StreamExt;
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::header::{HeaderValue, AUTHORIZATION};
 use hyper::{Request, Response, StatusCode};
@@ -44,7 +45,7 @@ pub struct Lever {
     /// `http://host:port`, validated by config.
     base: String,
     token_file: PathBuf,
-    http: Client<HttpConnector, Empty<Bytes>>,
+    http: Client<HttpConnector, Full<Bytes>>,
     /// True while the follower holds an open `/feed` connection.
     connected: AtomicBool,
 }
@@ -88,9 +89,56 @@ impl Lever {
     pub async fn get(&self, path_and_query: &str) -> anyhow::Result<Response<Incoming>> {
         let req = Request::get(format!("{}{path_and_query}", self.base))
             .header(AUTHORIZATION, self.auth_header()?)
-            .body(Empty::new())
+            .body(Full::new(Bytes::new()))
             .context("building request")?;
-        tokio::time::timeout(REQUEST_TIMEOUT, self.http.request(req))
+        self.send(req, REQUEST_TIMEOUT).await
+    }
+
+    /// `POST <base><path>` with a JSON body and the bearer token. Returns
+    /// the status and the whole body; errors only for transport problems.
+    /// `timeout` covers the whole call, so a replay to a slow target gets
+    /// longer than a history query.
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> anyhow::Result<(StatusCode, Bytes)> {
+        let req = Request::post(format!("{}{path}", self.base))
+            .header(AUTHORIZATION, self.auth_header()?)
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(Full::new(Bytes::from(body)))
+            .context("building request")?;
+        let res = self.send(req, timeout).await?;
+        let status = res.status();
+        let bytes = res
+            .into_body()
+            .collect()
+            .await
+            .context("reading taphttp response")?
+            .to_bytes();
+        Ok((status, bytes))
+    }
+
+    /// `GET` and read the whole body.
+    pub async fn get_bytes(&self, path: &str) -> anyhow::Result<(StatusCode, Bytes)> {
+        let res = self.get(path).await?;
+        let status = res.status();
+        let bytes = res
+            .into_body()
+            .collect()
+            .await
+            .context("reading taphttp response")?
+            .to_bytes();
+        Ok((status, bytes))
+    }
+
+    async fn send(
+        &self,
+        req: Request<Full<Bytes>>,
+        timeout: Duration,
+    ) -> anyhow::Result<Response<Incoming>> {
+        tokio::time::timeout(timeout, self.http.request(req))
             .await
             .map_err(|_| anyhow!("taphttp API timed out"))?
             .context("taphttp API request failed")

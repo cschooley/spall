@@ -9,6 +9,7 @@ pub mod csrf;
 pub mod gate;
 pub mod hub;
 pub mod lever;
+pub mod replay;
 pub mod tailer;
 pub mod web;
 
@@ -148,12 +149,39 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
             config.taphttp_token_file.clone(),
         ))
     });
+    let replayer = match &lever {
+        Some(lever) => {
+            let audit = audit::AuditLog::open(&config.audit_log).with_context(|| {
+                format!(
+                    "opening the audit log {} (set --audit-log / SPALL_AUDIT_LOG)",
+                    config.audit_log.display()
+                )
+            })?;
+            if config.scope.is_empty() {
+                tracing::warn!(
+                    "no engagement scope (--scope / SPALL_SCOPE): every replay will be denied"
+                );
+            } else {
+                tracing::info!("replay scope: {}", config.scope.entries().join(", "));
+            }
+            tracing::info!("audit log: {}", config.audit_log.display());
+            Some(Arc::new(replay::Replayer {
+                lever: lever.clone(),
+                scope: config.scope.clone(),
+                policy: config.safe_methods.clone(),
+                confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
+                audit,
+            }))
+        }
+        None => None,
+    };
     let state = web::AppState {
         hub: hub.clone(),
         allowed_hosts: Arc::new(config.allowed_hosts.clone()),
         lever: lever.clone(),
         ui: Arc::new(web::EmbeddedUi),
         proxy_address: Arc::from(config.proxy_address.as_str()),
+        replayer,
     };
     let source = async {
         match lever {

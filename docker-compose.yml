@@ -13,6 +13,10 @@
 #   taphttp-ca     CA cert and key. taphttp only; never mount it elsewhere.
 #   traffic        taphttp's traffic.jsonl and traffic.db. taphttp only.
 #   taphttp-token  Lever API token. Read-only in spall.
+#   spall-data     spall's audit log of replay attempts. spall only.
+#
+# Replay is denied until you set an engagement scope, e.g. in .env:
+#   SPALL_SCOPE=app.example.test,*.api.example.test
 
 services:
   taphttp:
@@ -51,14 +55,18 @@ services:
       SPALL_TAPHTTP_TOKEN_FILE: /token/api-token
       # Shown in the status bar; keep in step with taphttp's published port.
       SPALL_PROXY_ADDRESS: 127.0.0.1:${TAPHTTP_PORT:-8080}
+      # Hosts replay may send to (exact, *.wildcard, IP, CIDR). Empty: none.
+      SPALL_SCOPE: ${SPALL_SCOPE:-}
       RUST_LOG: info
     ports:
       - "127.0.0.1:${SPALL_PORT:-3000}:3000"
     volumes:
       - taphttp-token:/token:ro
+      - spall-data:/data
     restart: unless-stopped
 
 volumes:
   traffic:
   taphttp-ca:
   taphttp-token:
+  spall-data:

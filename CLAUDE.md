@@ -86,8 +86,9 @@ the mockup shows a Replay button (`⏎`) and a Replays tab.
 
 Issues (GitHub milestone "M2 replay"), roughly in order:
 
-- **#17**: `POST /api/replay` plus a same-origin (CSRF) guard on every
-  state-changing route. Everything else builds on it.
+- **#17** (done): `POST /api/replay` plus a same-origin (CSRF) guard on
+  every state-changing route (`src/csrf.rs`, run in `web::guard`).
+  Everything else builds on it.
 - **#18**: replay as captured from the inspector (`⏎`) and console;
   includes the decision on confirming unsafe methods.
 - **#19**: edit before replay (method, headers, body).
@@ -97,7 +98,12 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
 - **#22**: the action gate: server-side scope (URL host and effective
   `Host` header), unsafe-method policy with a single-use confirmation
   token (#18's second `⏎` sends it), and an audit record for every
-  attempt. #17 routes through it; M6 agents reuse it.
+  attempt. #17 routes through it; M6 agents reuse it. Server side done:
+  `src/gate.rs` (pure check), `src/confirm.rs` (tokens), `src/audit.rs`
+  (JSONL), `src/replay.rs` (the chain); `--scope`, `--safe-methods`,
+  `--audit-log`. Still open: console `audit` / `scope` commands and the
+  registry's risk classes (with #18).
+
 What exists: taphttp v0.6.0 (`taphttp-types` 0.5.0, schema v5;
 cschooley/taphttp#10 shipped). `POST /replay` takes `{id, method?,
 req_headers?, headers?, body?, body_encoding?, meta?}`:

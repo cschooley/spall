@@ -103,7 +103,8 @@ With the lever API (recommended):
 
 ```sh
 taphttp start --api-listen 127.0.0.1:8081 --api-token-file ./api-token &
-cargo run -- --taphttp-api http://127.0.0.1:8081 --taphttp-token-file ./api-token
+cargo run -- --taphttp-api http://127.0.0.1:8081 --taphttp-token-file ./api-token \
+  --audit-log ./audit.jsonl --scope app.example.test
 ```
 
 Or tail taphttp's log file (no history search):
@@ -123,8 +124,23 @@ cargo run -- --log-file ./traffic.jsonl
 | `--allowed-host` | `SPALL_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` |
 | `--history` | `SPALL_HISTORY` | `1000` (entries replayed to a newly opened page) |
 | `--poll-ms` | `SPALL_POLL_MS` | `250` (log tailing only) |
+| `--scope` | `SPALL_SCOPE` | empty: every replay is denied. See [Replay and scope](#replay-and-scope) |
+| `--safe-methods` | `SPALL_SAFE_METHODS` | `GET,HEAD,OPTIONS` (replay without confirmation) |
+| `--audit-log` | `SPALL_AUDIT_LOG` | `/data/audit.jsonl` (lever API mode; spall won't start if it can't write it) |
 
 `--allowed-host` is checked against the request's `Host` header to block DNS-rebinding attacks on the local console. Requests for any other host get a 403.
+
+Every request other than GET and HEAD must come from spall's own page: `Content-Type: application/json`, and a same-origin `Origin` or `Sec-Fetch-Site`. Anything else gets a 403, and spall sends no CORS headers, so another site can't make your browser replay your captured traffic.
+
+### Replay and scope
+
+Replay resends a captured request through taphttp. Every attempt goes through one server-side gate, which a human and (later) an agent share:
+
+- **Scope.** Both the request's URL host and its `Host` header must match `--scope`: comma-separated exact hosts (`app.example.test`), wildcards (`*.example.test`, subdomains only), IPs and CIDRs (`10.0.0.0/8`). Hostnames are never resolved to match a CIDR. With no scope set, nothing is sent: traffic you captured in passing (CDNs, the OAuth provider) stays out of reach.
+- **Unsafe methods.** Anything not in `--safe-methods` needs confirmation. The first request returns 428 with a single-use `confirm` token, valid for 2 minutes and bound to that exact request; sending the same request with it goes through.
+- **Audit.** Every attempt is a line in `--audit-log`, including denials, unconfirmed attempts and failures: time, actor, exchange, method, target, Host header, decision and reason, whether it was confirmed, the outcome, taphttp's status and the resulting exchange. The file is append-only and mode 0600 (URLs can carry tokens).
+
+In compose, set the scope in `.env` (`SPALL_SCOPE=app.example.test`); the audit log is on the `spall-data` volume.
 
 ## Endpoints
 
@@ -132,7 +148,8 @@ cargo run -- --log-file ./traffic.jsonl
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`, `replay_of`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
-- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080"}` for the status bar
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...]}` for the status bar
+- `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope; 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
 - `GET /healthz`: `ok`
 
 The browser never talks to taphttp or sees its token: spall adds the token server-side.

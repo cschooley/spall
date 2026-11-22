@@ -1,3 +1,4 @@
+use crate::gate::{MethodPolicy, Scope};
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -51,9 +52,42 @@ pub struct Config {
     #[arg(long, env = "SPALL_HISTORY", default_value_t = 1000)]
     pub history: usize,
 
+    /// Engagement scope for replays (#22), comma-separated: exact hosts,
+    /// `*.example.test` (subdomains only), IPs and CIDRs. Both a replay's
+    /// URL host and its Host header must match. Empty (the default) means
+    /// nothing may be sent.
+    #[arg(long, env = "SPALL_SCOPE", default_value = "", value_parser = Scope::parse)]
+    pub scope: Scope,
+
+    /// Methods that replay without confirmation, comma-separated. Any
+    /// other method needs a second, confirmed request.
+    #[arg(long, env = "SPALL_SAFE_METHODS", default_value = "GET,HEAD,OPTIONS", value_parser = parse_methods)]
+    pub safe_methods: MethodPolicy,
+
+    /// Append-only audit log of every replay attempt (JSON lines, mode
+    /// 0600). Opened at startup with --taphttp-api; spall won't start if it
+    /// can't write it.
+    #[arg(long, env = "SPALL_AUDIT_LOG", default_value = "/data/audit.jsonl")]
+    pub audit_log: PathBuf,
+
     /// How often to check the log file for new data, in milliseconds
     #[arg(long, env = "SPALL_POLL_MS", default_value_t = 250, value_parser = clap::value_parser!(u64).range(10..))]
     pub poll_ms: u64,
+}
+
+fn parse_methods(s: &str) -> Result<MethodPolicy, String> {
+    let methods: Vec<&str> = s
+        .split(',')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .collect();
+    if let Some(bad) = methods
+        .iter()
+        .find(|m| !m.bytes().all(|b| b.is_ascii_alphabetic() || b == b'-'))
+    {
+        return Err(format!("{bad:?} is not an HTTP method"));
+    }
+    Ok(MethodPolicy::new(methods))
 }
 
 /// Accept `http://host[:port]` with no path, query or credentials, and
@@ -144,6 +178,34 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn replay_defaults_deny_everything_and_audit_to_data() {
+        let c = Config::try_parse_from(["spall"]).unwrap();
+        assert!(c.scope.is_empty(), "empty scope: no replay may be sent");
+        assert_eq!(c.audit_log, PathBuf::from("/data/audit.jsonl"));
+        assert_eq!(c.safe_methods, MethodPolicy::default());
+    }
+
+    #[test]
+    fn scope_and_method_policy_are_parsed() {
+        let c = Config::try_parse_from([
+            "spall",
+            "--scope",
+            "app.example.test, *.api.example.test,10.0.0.0/8",
+            "--safe-methods",
+            "GET,HEAD",
+            "--audit-log",
+            "/tmp/a.jsonl",
+        ])
+        .unwrap();
+        assert!(c.scope.contains("x.api.example.test"));
+        assert!(c.scope.contains("10.2.3.4"));
+        assert!(!c.scope.contains("example.test"));
+        assert_eq!(c.safe_methods, MethodPolicy::new(["GET", "HEAD"]));
+        assert_eq!(c.audit_log, PathBuf::from("/tmp/a.jsonl"));
+        assert!(Config::try_parse_from(["spall", "--scope", "http://x.test/"]).is_err());
     }
 
     #[test]

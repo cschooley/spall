@@ -1,0 +1,453 @@
+//! `POST /api/replay` (#17): resend a captured exchange through taphttp,
+//! optionally with a different method, headers or body.
+//!
+//! The order is fixed: the same-origin guard (in `web::guard`, before any
+//! of this), input validation, the original fetched from taphttp, the
+//! action gate (scope, method policy, confirmation), then taphttp's
+//! `POST /replay`. Nothing reaches taphttp unless the gate allows it, and
+//! every attempt with a valid exchange id gets exactly one audit record.
+
+use crate::audit::{AuditLog, Outcome, Record};
+use crate::confirm::{fingerprint, Confirmations};
+use crate::gate::{self, Action, Decision, MethodPolicy, Scope};
+use crate::lever::Lever;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use taphttp_types::TrafficEntry;
+
+/// Request bodies up to this size (the JSON, headers and body together).
+pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+/// A replay waits on the target, so it gets longer than a history query.
+const REPLAY_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_HEADERS: usize = 256;
+const MAX_HEADER_NAME: usize = 256;
+const MAX_HEADER_VALUE: usize = 16 * 1024;
+const MAX_METHOD: usize = 32;
+
+/// What the browser (or the console) sends. Unknown fields, `meta`
+/// included, are ignored: spall sets the attribution itself.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ReplayRequest {
+    pub id: String,
+    #[serde(default)]
+    pub method: Option<String>,
+    /// The whole ordered header list, replacing the captured one.
+    #[serde(default)]
+    pub req_headers: Option<Vec<(String, String)>>,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub body_encoding: Option<String>,
+    /// A confirmation token from an earlier 428 for this exact request.
+    #[serde(default)]
+    pub confirm: Option<String>,
+}
+
+/// HTTP `token` characters (RFC 9110), used for methods and header names.
+fn is_token(s: &str, max: usize) -> bool {
+    !s.is_empty()
+        && s.len() <= max
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+}
+
+/// Check the edits; `Err` is a message safe to show.
+pub fn validate(req: &ReplayRequest) -> Result<(), String> {
+    if !crate::web::valid_exchange_id(&req.id) {
+        return Err("invalid exchange id".into());
+    }
+    if let Some(m) = &req.method {
+        if !is_token(m, MAX_METHOD) {
+            return Err("method must be an HTTP token (letters, digits, -)".into());
+        }
+    }
+    if let Some(headers) = &req.req_headers {
+        if headers.len() > MAX_HEADERS {
+            return Err(format!("at most {MAX_HEADERS} headers"));
+        }
+        for (name, value) in headers {
+            if !is_token(name, MAX_HEADER_NAME) {
+                return Err(format!("invalid header name {name:?}"));
+            }
+            if value.len() > MAX_HEADER_VALUE
+                || value.bytes().any(|b| b == b'\r' || b == b'\n' || b == 0)
+            {
+                return Err(format!("invalid value for header {name:?}"));
+            }
+        }
+    }
+    match req.body_encoding.as_deref() {
+        None | Some("utf8") | Some("base64") => {}
+        Some(_) => return Err("body_encoding must be \"utf8\" or \"base64\"".into()),
+    }
+    Ok(())
+}
+
+/// The body for taphttp's `POST /replay`: only the fields the caller
+/// changed, plus spall's attribution. serde_json's map is ordered, so the
+/// bytes are canonical and double as the confirmation fingerprint input.
+pub fn forward_body(req: &ReplayRequest) -> Vec<u8> {
+    let mut m = serde_json::Map::new();
+    m.insert("id".into(), req.id.clone().into());
+    if let Some(v) = &req.method {
+        m.insert("method".into(), v.clone().into());
+    }
+    if let Some(v) = &req.req_headers {
+        let pairs: Vec<serde_json::Value> = v
+            .iter()
+            .map(|(k, val)| serde_json::json!([k, val]))
+            .collect();
+        m.insert("req_headers".into(), pairs.into());
+    }
+    if let Some(v) = &req.body {
+        m.insert("body".into(), v.clone().into());
+    }
+    if let Some(v) = &req.body_encoding {
+        m.insert("body_encoding".into(), v.clone().into());
+    }
+    m.insert("meta".into(), serde_json::json!({ "actor": "human" }));
+    serde_json::to_vec(&serde_json::Value::Object(m)).unwrap_or_default()
+}
+
+/// What the gate needs to know about the request that would be sent.
+pub struct Effective {
+    pub method: String,
+    pub url: String,
+    pub host_header: Option<String>,
+}
+
+pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
+    let host_header = match &req.req_headers {
+        Some(h) => h
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("host"))
+            .map(|(_, v)| v.clone()),
+        None => original.req_headers.get("host").map(String::from),
+    };
+    Effective {
+        method: req
+            .method
+            .clone()
+            .unwrap_or_else(|| original.method.clone()),
+        url: original.url.clone(),
+        host_header,
+    }
+}
+
+/// Everything the handler needs.
+pub struct Replayer {
+    pub lever: Arc<Lever>,
+    pub scope: Scope,
+    pub policy: MethodPolicy,
+    pub confirmations: Confirmations,
+    pub audit: AuditLog,
+}
+
+fn json(status: StatusCode, body: serde_json::Value) -> Response {
+    (status, axum::Json(body)).into_response()
+}
+
+fn error(status: StatusCode, msg: &str) -> Response {
+    json(status, serde_json::json!({ "error": msg }))
+}
+
+/// taphttp's body as JSON for the browser: a JSON body as-is, anything
+/// else (a plain-text error) wrapped as a string.
+fn upstream_json(body: &[u8]) -> serde_json::Value {
+    serde_json::from_slice(body)
+        .unwrap_or_else(|_| serde_json::json!({ "error": String::from_utf8_lossy(body).trim() }))
+}
+
+impl Replayer {
+    fn audit(&self, rec: &Record) {
+        if let Err(e) = self.audit.record(rec) {
+            tracing::error!(
+                "audit log {} write failed: {e}",
+                self.audit.path().display()
+            );
+        }
+    }
+
+    pub async fn handle(&self, raw: &[u8]) -> Response {
+        let req: ReplayRequest = match serde_json::from_slice(raw) {
+            Ok(r) => r,
+            Err(_) => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "body must be a JSON replay request",
+                )
+            }
+        };
+        if let Err(msg) = validate(&req) {
+            if crate::web::valid_exchange_id(&req.id) {
+                let mut rec = Record::new("replay", &req.id, Outcome::Error);
+                rec.error = Some(msg.clone());
+                self.audit(&rec);
+            }
+            return error(StatusCode::BAD_REQUEST, &msg);
+        }
+
+        let mut rec = Record::new("replay", &req.id, Outcome::Error);
+
+        // The original, to know where this would go.
+        let original = match self
+            .lever
+            .get_bytes(&format!("/exchanges/{}", req.id))
+            .await
+        {
+            Ok((StatusCode::OK, body)) => match serde_json::from_slice::<TrafficEntry>(&body) {
+                Ok(e) => e,
+                Err(_) => {
+                    rec.error = Some("taphttp returned an unreadable exchange".into());
+                    self.audit(&rec);
+                    return error(
+                        StatusCode::BAD_GATEWAY,
+                        "taphttp returned an unreadable exchange",
+                    );
+                }
+            },
+            Ok((StatusCode::NOT_FOUND, _)) => {
+                rec.error = Some("no such exchange".into());
+                self.audit(&rec);
+                return error(StatusCode::NOT_FOUND, "no such exchange");
+            }
+            Ok((status, _)) => {
+                rec.upstream_status = Some(status.as_u16());
+                rec.error = Some("taphttp refused the lookup".into());
+                self.audit(&rec);
+                return error(StatusCode::BAD_GATEWAY, "taphttp API unavailable");
+            }
+            Err(e) => {
+                tracing::warn!("replay: looking up {}: {e:#}", req.id);
+                rec.error = Some("taphttp API unavailable".into());
+                self.audit(&rec);
+                return error(StatusCode::BAD_GATEWAY, "taphttp API unavailable");
+            }
+        };
+
+        let eff = effective(&original, &req);
+        rec.method = Some(eff.method.clone());
+        rec.target = Some(eff.url.clone());
+        rec.host_header = eff.host_header.clone();
+        let decision = gate::check(
+            &self.scope,
+            &self.policy,
+            &Action {
+                method: &eff.method,
+                url: &eff.url,
+                host_header: eff.host_header.as_deref(),
+            },
+        );
+        rec.decision = Some(decision.kind());
+        rec.reason = decision.reason().map(String::from);
+
+        let body = forward_body(&req);
+        match &decision {
+            Decision::Deny(reason) => {
+                rec.outcome = Outcome::Denied;
+                self.audit(&rec);
+                return json(
+                    StatusCode::FORBIDDEN,
+                    serde_json::json!({ "error": reason, "decision": "deny" }),
+                );
+            }
+            Decision::NeedsConfirmation(reason) => {
+                let fp = fingerprint(&body);
+                let now = Instant::now();
+                match &req.confirm {
+                    Some(token) => {
+                        if let Err(refused) = self.confirmations.redeem(token, fp, now) {
+                            rec.outcome = Outcome::ConfirmationRefused;
+                            rec.error = Some(refused.message().into());
+                            self.audit(&rec);
+                            return json(
+                                StatusCode::CONFLICT,
+                                serde_json::json!({
+                                    "error": refused.message(),
+                                    "decision": "needs_confirmation",
+                                }),
+                            );
+                        }
+                        rec.confirmed = true;
+                    }
+                    None => {
+                        let token = match self.confirmations.issue(fp, now) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                tracing::error!("no randomness for a confirmation token: {e}");
+                                rec.error = Some("could not issue a confirmation".into());
+                                self.audit(&rec);
+                                return error(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "could not issue a confirmation",
+                                );
+                            }
+                        };
+                        rec.outcome = Outcome::NeedsConfirmation;
+                        self.audit(&rec);
+                        return json(
+                            StatusCode::PRECONDITION_REQUIRED,
+                            serde_json::json!({
+                                "error": reason,
+                                "decision": "needs_confirmation",
+                                "confirm": token,
+                                "expires_in_secs": self.confirmations.ttl().as_secs(),
+                            }),
+                        );
+                    }
+                }
+            }
+            Decision::Allow => {}
+        }
+
+        match self.lever.post_json("/replay", body, REPLAY_TIMEOUT).await {
+            Ok((status, bytes)) => {
+                rec.upstream_status = Some(status.as_u16());
+                let value = upstream_json(&bytes);
+                let result_id = value.get("id").and_then(|v| v.as_str()).map(String::from);
+                match status {
+                    StatusCode::OK => {
+                        rec.outcome = Outcome::Sent;
+                        rec.result_id = result_id;
+                        self.audit(&rec);
+                        json(StatusCode::OK, value)
+                    }
+                    // A recorded failed attempt: the entry, with `error` set.
+                    StatusCode::BAD_GATEWAY if result_id.is_some() => {
+                        rec.outcome = Outcome::Failed;
+                        rec.result_id = result_id;
+                        rec.error = value
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        self.audit(&rec);
+                        json(StatusCode::BAD_GATEWAY, value)
+                    }
+                    StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND => {
+                        let msg = value
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("taphttp refused the replay")
+                            .to_string();
+                        rec.error = Some(msg.clone());
+                        self.audit(&rec);
+                        error(status, &msg)
+                    }
+                    _ => {
+                        rec.error = Some(format!("taphttp answered {status}"));
+                        self.audit(&rec);
+                        error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("replay of {}: {e:#}", req.id);
+                rec.error = Some("taphttp API unavailable".into());
+                self.audit(&rec);
+                error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(id: &str) -> ReplayRequest {
+        ReplayRequest {
+            id: id.into(),
+            method: None,
+            req_headers: None,
+            body: None,
+            body_encoding: None,
+            confirm: None,
+        }
+    }
+
+    #[test]
+    fn unknown_fields_and_browser_meta_are_ignored() {
+        let r: ReplayRequest =
+            serde_json::from_str(r#"{"id":"a1","meta":{"actor":"agent"},"evil":1}"#).unwrap();
+        assert_eq!(r, req("a1"));
+        let fwd: serde_json::Value = serde_json::from_slice(&forward_body(&r)).unwrap();
+        assert_eq!(
+            fwd,
+            serde_json::json!({"id": "a1", "meta": {"actor": "human"}})
+        );
+    }
+
+    #[test]
+    fn only_changed_fields_are_forwarded_in_canonical_order() {
+        let mut r = req("a1");
+        r.method = Some("POST".into());
+        r.req_headers = Some(vec![("x-b".into(), "1".into()), ("x-a".into(), "2".into())]);
+        r.body = Some("aGk=".into());
+        r.body_encoding = Some("base64".into());
+        r.confirm = Some("tok".into());
+        let text = String::from_utf8(forward_body(&r)).unwrap();
+        assert_eq!(
+            text,
+            r#"{"body":"aGk=","body_encoding":"base64","id":"a1","meta":{"actor":"human"},"method":"POST","req_headers":[["x-b","1"],["x-a","2"]]}"#,
+            "keys sorted, header order kept, the token not forwarded"
+        );
+    }
+
+    #[test]
+    fn edits_are_validated() {
+        assert_eq!(validate(&req("3f2a-b")), Ok(()));
+        let bad = |f: &dyn Fn(&mut ReplayRequest)| {
+            let mut r = req("a1");
+            f(&mut r);
+            validate(&r).is_err()
+        };
+        assert!(bad(&|r| r.id = "../x".into()));
+        assert!(bad(&|r| r.method = Some("GET /x".into())));
+        assert!(bad(&|r| r.method = Some(String::new())));
+        assert!(bad(&|r| r.method = Some("X".repeat(33))));
+        assert!(bad(
+            &|r| r.req_headers = Some(vec![("bad name".into(), "v".into())])
+        ));
+        assert!(bad(
+            &|r| r.req_headers = Some(vec![("x".into(), "a\r\nInjected: 1".into())])
+        ));
+        assert!(bad(
+            &|r| r.req_headers = Some(vec![("x".into(), "a\0".into())])
+        ));
+        assert!(bad(
+            &|r| r.req_headers = Some(vec![("x".into(), "v".into()); 257])
+        ));
+        assert!(bad(&|r| r.body_encoding = Some("hex".into())));
+        assert!(!bad(&|r| r.method = Some("PROPFIND".into())));
+    }
+
+    fn original() -> TrafficEntry {
+        serde_json::from_str(r#"{"id":"o1","ts":"2026-11-21T00:00:00Z","host":"app.test","method":"GET","url":"https://app.test/x","req_headers":[["host","app.test"],["cookie","s=1"]],"status":200,"duration_ms":1}"#).unwrap()
+    }
+
+    #[test]
+    fn effective_request_uses_overrides_or_the_original() {
+        let e = effective(&original(), &req("o1"));
+        assert_eq!(
+            (e.method.as_str(), e.host_header.as_deref()),
+            ("GET", Some("app.test"))
+        );
+        assert_eq!(e.url, "https://app.test/x");
+
+        let mut r = req("o1");
+        r.method = Some("DELETE".into());
+        r.req_headers = Some(vec![("Host".into(), "admin.internal".into())]);
+        let e = effective(&original(), &r);
+        assert_eq!(
+            (e.method.as_str(), e.host_header.as_deref()),
+            ("DELETE", Some("admin.internal"))
+        );
+
+        // Headers replaced without a Host: hyper derives it from the URL.
+        r.req_headers = Some(vec![]);
+        assert_eq!(effective(&original(), &r).host_header, None);
+    }
+}

@@ -1,16 +1,18 @@
 //! spall in lever-API mode against a stub taphttp API (no Docker).
 //!
-//! The stub follows taphttp v0.3.0's documented contract: bearer auth,
+//! The stub follows taphttp v0.6.0's documented contract: bearer auth,
 //! `GET /exchanges` newest first with a `before=<id>` cursor,
-//! `GET /exchanges/{id}`, and a `/feed` WebSocket that resumes with
-//! `?since=<id>` and sends `reset` / `lagged` control frames.
+//! `GET /exchanges/{id}`, a `/feed` WebSocket that resumes with
+//! `?since=<id>` and sends `reset` / `lagged` control frames, and
+//! `POST /replay` (200 with the recorded replay, 502 with a recorded
+//! failure, 400 for bad input).
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, RawQuery, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use clap::Parser;
 use std::collections::HashMap;
@@ -46,6 +48,8 @@ struct StubState {
     /// Send `{"type":"lagged"}` on the next feed connection, then close.
     lagged_next: AtomicBool,
     live: Mutex<Option<broadcast::Sender<String>>>,
+    /// Body of each POST /replay, parsed.
+    replays: Mutex<Vec<serde_json::Value>>,
 }
 
 #[derive(Clone)]
@@ -68,6 +72,32 @@ impl Stub {
     }
     fn exchange_queries(&self) -> Vec<String> {
         self.0.exchange_queries.lock().unwrap().clone()
+    }
+    fn replays(&self) -> Vec<serde_json::Value> {
+        self.0.replays.lock().unwrap().clone()
+    }
+}
+
+/// `POST /replay`: exchange "fails" gets a recorded failure (502), "bad"
+/// a 400; anything else a recorded replay `r-<id>`.
+async fn replay(State(s): State<Stub>, body: String) -> Response {
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    s.0.replays.lock().unwrap().push(v.clone());
+    let id = v["id"].as_str().unwrap().to_string();
+    let json = |status, extra: &str| {
+        let e = entry(&format!("r-{id}")).replace(
+            r#""replay_of":null"#,
+            &format!(r#""replay_of":"{id}"{extra}"#),
+        );
+        (status, [(header::CONTENT_TYPE, "application/json")], e).into_response()
+    };
+    match id.as_str() {
+        "fails" => json(
+            StatusCode::BAD_GATEWAY,
+            r#","error":"connect error: Connection refused""#,
+        ),
+        "bad" => (StatusCode::BAD_REQUEST, "invalid header value").into_response(),
+        _ => json(StatusCode::OK, ""),
     }
 }
 
@@ -177,6 +207,7 @@ async fn start_stub() -> (Stub, SocketAddr) {
         .route("/exchanges", get(exchanges))
         .route("/exchanges/{id}", get(exchange))
         .route("/feed", get(feed))
+        .route("/replay", post(replay))
         .layer(middleware::from_fn(auth))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -190,6 +221,16 @@ fn write_token(path: &FsPath) {
 }
 
 async fn start_spall(api: Option<SocketAddr>, token_file: &FsPath) -> SocketAddr {
+    start_spall_with(api, token_file, &[]).await
+}
+
+/// Like `start_spall`, with extra flags. The audit log goes next to the
+/// token file (`audit.jsonl`) unless the flags say otherwise.
+async fn start_spall_with(
+    api: Option<SocketAddr>,
+    token_file: &FsPath,
+    extra: &[&str],
+) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let mut args = vec![
@@ -207,6 +248,17 @@ async fn start_spall(api: Option<SocketAddr>, token_file: &FsPath) -> SocketAddr
         args.push("--taphttp-api".into());
         args.push(format!("http://{api}"));
     }
+    if !extra.contains(&"--audit-log") {
+        args.push("--audit-log".into());
+        args.push(
+            token_file
+                .with_file_name("audit.jsonl")
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+    }
+    args.extend(extra.iter().map(|s| s.to_string()));
     let config = spall::config::Config::try_parse_from(args).unwrap();
     tokio::spawn(spall::serve(config, listener));
     addr
@@ -451,4 +503,273 @@ async fn history_proxy_is_unavailable_without_api() {
     let spall = start_spall(None, &token).await;
     let res = get_text(spall, "/api/exchanges").await;
     assert!(res.starts_with("HTTP/1.1 503"), "{res}");
+}
+
+/// POST `body` to spall as its own page would (JSON, same origin), or with
+/// the given headers instead.
+async fn post_text(addr: SocketAddr, path: &str, body: &str, headers: Option<&str>) -> String {
+    let headers = headers.unwrap_or(
+        "Content-Type: application/json\r\nOrigin: http://127.0.0.1\r\nSec-Fetch-Site: same-origin\r\n",
+    );
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = String::new();
+    tokio::time::timeout(Duration::from_secs(10), s.read_to_string(&mut out))
+        .await
+        .expect("timed out")
+        .unwrap();
+    out
+}
+
+fn body_json(res: &str) -> serde_json::Value {
+    let (_, body) = res.split_once("\r\n\r\n").unwrap();
+    serde_json::from_str(body).unwrap_or_else(|e| panic!("{e}: {res}"))
+}
+
+fn audit_records(token_file: &FsPath) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(token_file.with_file_name("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// A stub with e1 (and the given ids), and spall following it with
+/// `example.com` in scope.
+async fn replay_setup(ids: &[&str], extra: &[&str]) -> (tempfile::TempDir, Stub, SocketAddr) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    for id in ids {
+        stub.push(id);
+    }
+    let mut flags = vec!["--scope", "example.com"];
+    flags.extend_from_slice(extra);
+    let spall = start_spall_with(Some(api), &token, &flags).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    (dir, stub, spall)
+}
+
+#[tokio::test]
+async fn replay_in_scope_is_forwarded_with_spalls_attribution() {
+    let (dir, stub, spall) = replay_setup(&[], &[]).await;
+    let res = post_text(
+        spall,
+        "/api/replay",
+        r#"{"id":"e1","meta":{"actor":"agent"},"evil":1}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let entry = body_json(&res);
+    assert_eq!(entry["replay_of"], "e1");
+    assert_eq!(entry["id"], "r-e1");
+    assert_eq!(
+        stub.replays(),
+        vec![serde_json::json!({"id": "e1", "meta": {"actor": "human"}})],
+        "token added by spall (the stub checks it); browser meta and unknown fields dropped"
+    );
+    let audit = audit_records(&dir.path().join("api-token"));
+    assert_eq!(audit.len(), 1, "{audit:?}");
+    assert_eq!(audit[0]["outcome"], "sent");
+    assert_eq!(audit[0]["decision"], "allow");
+    assert_eq!(audit[0]["result_id"], "r-e1");
+    assert_eq!(audit[0]["target"], "http://example.com/e1");
+    assert_eq!(audit[0]["upstream_status"], 200);
+}
+
+#[tokio::test]
+async fn out_of_scope_replays_never_reach_taphttp() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    for scope in ["other.test", ""] {
+        let spall = start_spall_with(Some(api), &token, &["--scope", scope]).await;
+        eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+        let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
+        assert!(res.starts_with("HTTP/1.1 403"), "{scope:?}: {res}");
+        assert_eq!(body_json(&res)["decision"], "deny");
+    }
+    // A Host header edit to an out-of-scope virtual host is denied too.
+    let spall = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    let res = post_text(
+        spall,
+        "/api/replay",
+        r#"{"id":"e1","req_headers":[["host","admin.internal"]]}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 403"), "{res}");
+    assert!(body_json(&res)["error"]
+        .as_str()
+        .unwrap()
+        .contains("Host header"));
+
+    assert!(stub.replays().is_empty(), "{:?}", stub.replays());
+    let audit = audit_records(&token);
+    assert_eq!(audit.len(), 3, "{audit:?}");
+    assert!(audit.iter().all(|r| r["outcome"] == "denied"), "{audit:?}");
+}
+
+#[tokio::test]
+async fn unsafe_methods_need_a_single_use_confirmation_for_the_same_request() {
+    let (dir, stub, spall) = replay_setup(&[], &[]).await;
+    let first = post_text(
+        spall,
+        "/api/replay",
+        r#"{"id":"e1","method":"DELETE"}"#,
+        None,
+    )
+    .await;
+    assert!(first.starts_with("HTTP/1.1 428"), "{first}");
+    let token = body_json(&first)["confirm"].as_str().unwrap().to_string();
+    assert!(
+        stub.replays().is_empty(),
+        "nothing sent before confirmation"
+    );
+
+    // The token doesn't confirm a different request.
+    let other = post_text(
+        spall,
+        "/api/replay",
+        &format!(r#"{{"id":"e1","method":"PUT","confirm":"{token}"}}"#),
+        None,
+    )
+    .await;
+    assert!(other.starts_with("HTTP/1.1 409"), "{other}");
+
+    let again = post_text(
+        spall,
+        "/api/replay",
+        r#"{"id":"e1","method":"DELETE"}"#,
+        None,
+    )
+    .await;
+    let token = body_json(&again)["confirm"].as_str().unwrap().to_string();
+    let confirmed = format!(r#"{{"id":"e1","method":"DELETE","confirm":"{token}"}}"#);
+    let sent = post_text(spall, "/api/replay", &confirmed, None).await;
+    assert!(sent.starts_with("HTTP/1.1 200"), "{sent}");
+    let reused = post_text(spall, "/api/replay", &confirmed, None).await;
+    assert!(reused.starts_with("HTTP/1.1 409"), "{reused}");
+
+    assert_eq!(stub.replays().len(), 1, "sent exactly once");
+    assert_eq!(stub.replays()[0]["method"], "DELETE");
+    let outcomes: Vec<_> = audit_records(&dir.path().join("api-token"))
+        .iter()
+        .map(|r| {
+            (
+                r["outcome"].as_str().unwrap().to_string(),
+                r["confirmed"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    let want = [
+        ("needs_confirmation", false),
+        ("confirmation_refused", false),
+        ("needs_confirmation", false),
+        ("sent", true),
+        ("confirmation_refused", false),
+    ];
+    assert_eq!(
+        outcomes,
+        want.map(|(o, c)| (o.to_string(), c)).to_vec(),
+        "one record per attempt"
+    );
+}
+
+#[tokio::test]
+async fn failed_bad_and_missing_replays_are_reported_and_audited() {
+    let (dir, stub, spall) = replay_setup(&["fails", "bad"], &[]).await;
+    let failed = post_text(spall, "/api/replay", r#"{"id":"fails"}"#, None).await;
+    assert!(failed.starts_with("HTTP/1.1 502"), "{failed}");
+    let entry = body_json(&failed);
+    assert_eq!(entry["replay_of"], "fails", "the recorded failed attempt");
+    assert_eq!(entry["error"], "connect error: Connection refused");
+
+    let bad = post_text(spall, "/api/replay", r#"{"id":"bad"}"#, None).await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+    assert_eq!(body_json(&bad)["error"], "invalid header value");
+
+    let missing = post_text(spall, "/api/replay", r#"{"id":"nope"}"#, None).await;
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+    let invalid = post_text(spall, "/api/replay", r#"{"id":"../x"}"#, None).await;
+    assert!(invalid.starts_with("HTTP/1.1 400"), "{invalid}");
+    let junk = post_text(spall, "/api/replay", "not json", None).await;
+    assert!(junk.starts_with("HTTP/1.1 400"), "{junk}");
+
+    assert_eq!(stub.replays().len(), 2, "fails and bad reached taphttp");
+    let audit = audit_records(&dir.path().join("api-token"));
+    let outcomes: Vec<_> = audit
+        .iter()
+        .map(|r| r["outcome"].as_str().unwrap())
+        .collect();
+    assert_eq!(outcomes, ["failed", "error", "error"], "{audit:?}");
+    assert_eq!(audit[0]["result_id"], "r-fails");
+    assert_eq!(audit[2]["exchange_id"], "nope");
+}
+
+#[tokio::test]
+async fn cross_site_replays_are_refused_before_anything_else() {
+    let (dir, stub, spall) = replay_setup(&[], &[]).await;
+    let lookups = stub.exchange_queries().len();
+    for headers in [
+        "Content-Type: text/plain\r\nOrigin: http://evil.example\r\n",
+        "Content-Type: application/json\r\nSec-Fetch-Site: cross-site\r\n",
+        "Content-Type: application/x-www-form-urlencoded\r\n",
+    ] {
+        let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, Some(headers)).await;
+        assert!(res.starts_with("HTTP/1.1 403"), "{headers}: {res}");
+    }
+    assert!(stub.replays().is_empty());
+    assert_eq!(stub.exchange_queries().len(), lookups);
+    assert!(audit_records(&dir.path().join("api-token")).is_empty());
+}
+
+#[tokio::test]
+async fn replay_needs_the_lever_api_and_status_says_so() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    let spall = start_spall(None, &token).await;
+    let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 503"), "{res}");
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["replay"], false);
+
+    let (_dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["replay"], true);
+    assert_eq!(status["scope"], serde_json::json!(["example.com"]));
+}
+
+#[tokio::test]
+async fn an_unwritable_audit_log_stops_spall_in_api_mode() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (_stub, api) = start_stub().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let audit = dir.path().join("missing/audit.jsonl");
+    let config = spall::config::Config::try_parse_from([
+        "spall",
+        "--taphttp-api",
+        &format!("http://{api}"),
+        "--taphttp-token-file",
+        token.to_str().unwrap(),
+        "--audit-log",
+        audit.to_str().unwrap(),
+    ])
+    .unwrap();
+    let r = tokio::time::timeout(Duration::from_secs(5), spall::serve(config, listener))
+        .await
+        .expect("serve should fail fast");
+    let err = format!("{:#}", r.unwrap_err());
+    assert!(err.contains("audit log"), "{err}");
 }

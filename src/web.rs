@@ -1,15 +1,15 @@
 //! HTTP surface: the built SPA (ui/dist, embedded), the SSE feed, the
-//! history proxy, and a health check.
+//! history proxy, replay (through the action gate), and a health check.
 
 use crate::hub::{Hub, Published};
 use crate::lever::Lever;
 use axum::body::Body;
-use axum::extract::{Path, RawQuery, Request, State};
+use axum::extract::{DefaultBodyLimit, Path, RawQuery, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use futures_util::stream::{self, Stream, StreamExt};
 use std::borrow::Cow;
@@ -62,6 +62,8 @@ pub struct AppState {
     pub ui: Arc<dyn UiAssets>,
     /// Where clients reach taphttp's proxy (display only).
     pub proxy_address: Arc<str>,
+    /// Replay through the action gate; `None` without the lever API.
+    pub replayer: Option<Arc<crate::replay::Replayer>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -73,6 +75,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(api_status))
         .route("/api/exchanges", get(api_exchanges))
         .route("/api/exchanges/{id}", get(api_exchange))
+        .route(
+            "/api/replay",
+            post(api_replay).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
@@ -192,8 +198,15 @@ async fn proxy(lever: Option<&Arc<Lever>>, path_and_query: &str) -> Response {
 
 /// Where traffic comes from, for the UI's status bar. `connected` is
 /// whether spall is following taphttp's feed (null when tailing a file).
+/// `replay` is whether replay is available (lever API mode), and `scope`
+/// the engagement scope it's held to.
 async fn api_status(State(state): State<AppState>) -> Response {
-    let body = match &state.lever {
+    let scope = state
+        .replayer
+        .as_ref()
+        .map(|r| r.scope.entries())
+        .unwrap_or_default();
+    let mut body = match &state.lever {
         Some(lever) => {
             serde_json::json!({ "source": "lever", "connected": lever.connected(), "proxy": &*state.proxy_address })
         }
@@ -201,7 +214,19 @@ async fn api_status(State(state): State<AppState>) -> Response {
             serde_json::json!({ "source": "log", "connected": null, "proxy": &*state.proxy_address })
         }
     };
+    body["replay"] = state.replayer.is_some().into();
+    body["scope"] = scope.into();
     axum::Json(body).into_response()
+}
+
+async fn api_replay(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    match &state.replayer {
+        Some(r) => r.handle(&body).await,
+        None => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "replay needs taphttp's lever API (start spall with --taphttp-api)",
+        ),
+    }
 }
 
 async fn api_exchanges(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
@@ -360,6 +385,7 @@ mod tests {
             lever: None,
             ui,
             proxy_address: Arc::from("127.0.0.1:8080"),
+            replayer: None,
         })
     }
 
