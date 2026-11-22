@@ -109,7 +109,7 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
   (`scope add|remove`, `scope all on|off`, `SPALL_SCOPE=*`; `POST
   /api/scope`) are in memory, audited, and `policy` risk: never MCP.
 
-What exists: taphttp v0.6.0 (`taphttp-types` 0.5.0, schema v5;
+What exists: taphttp v0.6.1 (`taphttp-types` 0.5.0, schema v5; 0.6.1 adds `GET /ca.pem` and `/ca.der`, cschooley/taphttp#20;
 cschooley/taphttp#10 shipped). `POST /replay` takes `{id, method?,
 req_headers?, headers?, body?, body_encoding?, meta?}`:
 

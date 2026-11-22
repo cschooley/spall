@@ -9,10 +9,6 @@ here.
 
 [taphttp#21](https://github.com/cschooley/taphttp/issues/21): `GET /hosts`, the distinct hosts in history with counts and first/last seen. spall#39 builds scope from traffic, but spall only sees its backfill (the newest `--history` exchanges) and the live feed, so a host seen once early in a long engagement never reaches its list. spall keeps the scope state; taphttp only counts.
 
-### Serve the public CA certificate
-
-[taphttp#20](https://github.com/cschooley/taphttp/issues/20): serve the public CA certificate over the lever API (`GET /ca.pem`, `/ca.der`), matching `/info`'s `ca.sha256`. spall#32 needs it to offer the certificate as a download from the UI, so testers don't need Docker to get it. spall never mounts the CA volume (the key lives there).
-
 ### CA install hints use container paths
 
 [taphttp#19](https://github.com/cschooley/taphttp/issues/19): `taphttp ca info` prints install commands for `/ca/ca.crt`, which doesn't exist on the host. It should point at `ca print`, show the fingerprint, and recommend a dedicated browser profile over system-wide trust. The README's "A browser for testing" covers it meanwhile.
@@ -38,6 +34,14 @@ spall reads history from the lever API instead (spall#4).
   [taphttp#18](https://github.com/cschooley/taphttp/issues/18).
   `GET /info` reports the version, listeners, TLS and auth mode, and CA
   public details, with no secrets. It's for spall#16.
+
+## Resolved in v0.6.1
+
+- **Serve the public CA certificate:**
+  [taphttp#20](https://github.com/cschooley/taphttp/issues/20).
+  `GET /ca.pem` and `/ca.der` on the lever API (the certificate `/info`
+  reports as `ca.sha256`), and `http://taphttp/` through the proxy for
+  devices. spall#32 offers the download from its UI.
 
 ## Resolved in v0.5.0
 
