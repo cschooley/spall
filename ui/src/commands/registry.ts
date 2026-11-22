@@ -30,11 +30,68 @@ export interface Ctx {
    * out(). An unsafe method arms on the first call and sends on the second
    * (within a few seconds); `yes` does both at once.
    */
-  replay(id: string, opts: { yes: boolean }): Promise<void>;
+  replay(id: string, opts: { yes: boolean; edit?: ReplayEdit }): Promise<void>;
   /** The engagement scope; null when replay isn't available. */
   scope(): readonly string[] | null;
   /** The newest replay attempts from the audit log, or an error message. */
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
+}
+
+/** Console edits for `replay` (#19), applied to the captured request. */
+export interface ReplayEdit {
+  method?: string;
+  /** `--header 'Name: value'`: replaces every value for the name. */
+  sets: [string, string][];
+  /** `--drop-header Name`: removes every value for the name. */
+  drops: string[];
+  body?: string;
+}
+
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** Parse replay's arguments; a string is a usage error. */
+function parseReplayArgs(args: string[]): { id?: string; yes: boolean; edit?: ReplayEdit } | string {
+  let id: string | undefined;
+  let yes = false;
+  const edit: ReplayEdit = { sets: [], drops: [] };
+  let edited = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    const value = () => {
+      const v = args[++i];
+      if (v === undefined) throw new Error(`${a} needs a value`);
+      return v;
+    };
+    try {
+      if (a === "--yes") yes = true;
+      else if (a === "--method") {
+        const m = value();
+        if (!TOKEN.test(m)) return `replay: invalid method ${m}`;
+        edit.method = m;
+        edited = true;
+      } else if (a === "--header") {
+        const h = value();
+        const colon = h.indexOf(":");
+        const name = colon < 0 ? "" : h.slice(0, colon).trim();
+        if (!TOKEN.test(name)) return `replay: --header wants 'Name: value', got ${h}`;
+        edit.sets.push([name, h.slice(colon + 1).trim()]);
+        edited = true;
+      } else if (a === "--drop-header") {
+        const name = value();
+        if (!TOKEN.test(name)) return `replay: invalid header name ${name}`;
+        edit.drops.push(name);
+        edited = true;
+      } else if (a === "--body") {
+        edit.body = value();
+        edited = true;
+      } else if (a.startsWith("-")) return `replay: unknown option ${a}`;
+      else if (id === undefined) id = a;
+      else return "usage: replay <id> [--method M] [--header 'N: v'] [--drop-header N] [--body B] [--yes]";
+    } catch (e) {
+      return `replay: ${(e as Error).message}`;
+    }
+  }
+  return { id, yes, edit: edited ? edit : undefined };
 }
 
 /**
@@ -119,7 +176,7 @@ export const COMMANDS: readonly Command[] = [
   {
     name: "replay",
     usage: "replay <id> [--yes]",
-    desc: "resend an exchange as captured (unsafe methods: run twice, or --yes)",
+    desc: "resend an exchange (edits: --method M --header 'N: v' --drop-header N --body B; unsafe methods: run twice, or --yes)",
     group: "traffic",
     // Agents replay inside task constraints from M6; the gate holds them to
     // the same scope, method policy and audit as a human.
@@ -127,15 +184,12 @@ export const COMMANDS: readonly Command[] = [
     risk: "sends-traffic",
     palette: { label: "Replay exchange…", hint: "replay <id>", needsArgs: true },
     run: async (args, ctx) => {
-      const flags = args.filter((a) => a.startsWith("-"));
-      const ids = args.filter((a) => !a.startsWith("-"));
-      const unknown = flags.find((f) => f !== "--yes");
-      if (unknown) return ctx.out(`replay: unknown option ${unknown}`, "warn");
-      if (ids.length > 1) return ctx.out("usage: replay <id> [--yes]", "warn");
-      const id = ids[0] ?? ctx.selected()?.id;
+      const parsed = parseReplayArgs(args);
+      if (typeof parsed === "string") return ctx.out(parsed, "warn");
+      const id = parsed.id ?? ctx.selected()?.id;
       if (!id) return ctx.out("usage: replay <id> [--yes] (or select an exchange)", "warn");
       if (!ID.test(id)) return ctx.out(`replay: not an exchange id: ${id}`, "warn");
-      await ctx.replay(id, { yes: flags.includes("--yes") });
+      await ctx.replay(id, parsed.edit ? { yes: parsed.yes, edit: parsed.edit } : { yes: parsed.yes });
     },
   },
   {

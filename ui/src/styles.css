@@ -338,3 +338,21 @@ button.link:hover { color: var(--vg-text-primary); background: none; }
   height: 18px; padding: 0 5px; color: var(--vg-accent-rust); border-color: var(--vg-accent-rust);
   font: var(--vg-text-xs) var(--vg-font-mono);
 }
+
+/* Edit & replay (#19). Changed fields carry the verdigris accent. */
+.editor input, .editor textarea {
+  box-sizing: border-box; min-width: 0; padding: var(--vg-space-1) var(--vg-space-2);
+  background: var(--vg-bg-sunken); color: var(--vg-text-primary);
+  border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm);
+  font: var(--vg-text-sm) var(--vg-font-mono);
+}
+.editor input.method { width: 14ch; }
+.editor textarea { width: 100%; resize: vertical; line-height: 1.5; }
+.hedit { display: grid; gap: var(--vg-space-1); margin-bottom: var(--vg-space-3); }
+.hrow { display: grid; grid-template-columns: minmax(8ch, 1fr) minmax(0, 2fr) auto auto auto; gap: var(--vg-space-1); }
+.hrow button { width: 26px; padding: 0; }
+.hedit .add { justify-self: start; }
+.editor .changed, .hrow.changed input { border-color: var(--vg-accent-verdigris); }
+.hrow.changed { box-shadow: inset 2px 0 0 var(--vg-accent-verdigris); }
+.caution { margin: var(--vg-space-2) 0; color: var(--vg-accent-rust); font: var(--vg-text-xs) var(--vg-font-mono); word-break: break-all; }
+.editor .actions { padding: var(--vg-space-4) 0 0; border: 0; }

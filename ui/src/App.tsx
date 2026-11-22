@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { execute, paletteItems, type Ctx, type OutKind, type PaletteItem } from "./commands/registry.ts";
+import { execute, paletteItems, type Ctx, type OutKind, type PaletteItem, type ReplayEdit } from "./commands/registry.ts";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { Console } from "./components/Console.tsx";
 import { Icon } from "./components/Icon.tsx";
@@ -12,7 +12,8 @@ import { addLine, clearLog, emptyLog, markRead } from "./lib/consoleLog.ts";
 import { toCurl } from "./lib/curl.ts";
 import { durationText, shortId, statusLine } from "./lib/format.ts";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
-import { ARM_MS, armedFor, armLabel, postReplay, type Armed } from "./lib/replay.ts";
+import { applyHeaderEdits, draftOf, replayBodyFor, type Draft } from "./lib/edit.ts";
+import { ARM_MS, armedFor, armLabel, postReplay, type Armed, type ReplayBody } from "./lib/replay.ts";
 import { isEmptyQuery, matchesQuery, parseFilter } from "./lib/query.ts";
 import { litSegments, requestRate } from "./lib/rate.ts";
 import {
@@ -211,25 +212,30 @@ export function App() {
     [rows, selected],
   );
 
-  const openById = useCallback(
-    async (id: string): Promise<boolean> => {
-      if (!ID_PATTERN.test(id)) return false;
+  /** An exchange by id: loaded rows first, then taphttp's history. */
+  const findEntry = useCallback(
+    async (id: string): Promise<TrafficEntry | null> => {
+      if (!ID_PATTERN.test(id)) return null;
       const loaded = rows.find((r) => r.id === id) ?? store.items.find((r) => r.id === id);
-      if (loaded) {
-        setSelected(loaded);
-        return true;
-      }
-      if (status.source === "log") return false; // no history API to ask
+      if (loaded) return loaded;
+      if (status.source === "log") return null; // no history API to ask
       try {
         const res = await fetch(`/api/exchanges/${encodeURIComponent(id)}`);
-        if (!res.ok) return false;
-        setSelected((await res.json()) as TrafficEntry);
-        return true;
+        return res.ok ? ((await res.json()) as TrafficEntry) : null;
       } catch {
-        return false;
+        return null;
       }
     },
     [rows, store.items, status.source],
+  );
+
+  const openById = useCallback(
+    async (id: string): Promise<boolean> => {
+      const found = await findEntry(id);
+      if (found) setSelected(found);
+      return found !== null;
+    },
+    [findEntry],
   );
 
   // Arming lapses after ARM_MS, and on selecting anything else.
@@ -245,22 +251,45 @@ export function App() {
   }
 
   const replay = useCallback(
-    async (id: string, opts: { yes: boolean }) => {
+    async (id: string, opts: { yes: boolean; edit?: ReplayEdit; draft?: Draft }) => {
       const short = shortId(id);
-      if (!status.replay) {
-        const text = "replay needs taphttp's lever API (log-file mode)";
+      const refuse = (text: string) => {
         out(`replay ${short}: ${text}`, "warn");
         setReplayMsg({ id, text });
-        return;
+      };
+      if (!status.replay) return refuse("replay needs taphttp's lever API (log-file mode)");
+      let known: TrafficEntry | null = selected?.id === id ? selected : (rows.find((r) => r.id === id) ?? null);
+
+      // Edits (#19): the editor's draft, or the console's flags applied to
+      // the captured request. Only what changed is sent.
+      let request: ReplayBody = { id };
+      if (opts.draft || opts.edit) {
+        known ??= await findEntry(id);
+        if (!known) return refuse(`no exchange ${id}`);
+        let draft = opts.draft;
+        if (!draft) {
+          const e = opts.edit!;
+          draft = draftOf(known);
+          if (e.method) draft.method = e.method;
+          draft.headers = applyHeaderEdits(draft.headers, e.sets, e.drops);
+          if (e.body !== undefined) {
+            if (draft.body === null) return refuse("the captured body is binary; --body can't replace it");
+            draft.body = e.body;
+          }
+        }
+        const built = replayBodyFor(known, draft);
+        if (!built.ok) return refuse(built.error);
+        request = built.body;
+        if (built.contentLength !== null) out(`replay ${short}: Content-Length set to ${built.contentLength}`, "sys");
       }
+
       const arm = armedFor(armed, id, Date.now());
       setArmed(null);
       setReplayMsg(null);
       setReplayBusy(id);
-      let result = await postReplay({ id, confirm: arm?.token });
-      if (result.kind === "confirm" && opts.yes) result = await postReplay({ id, confirm: result.token });
+      let result = await postReplay({ ...request, confirm: arm?.token });
+      if (result.kind === "confirm" && opts.yes) result = await postReplay({ ...request, confirm: result.token });
       setReplayBusy(null);
-      const known = selected?.id === id ? selected : (rows.find((r) => r.id === id) ?? null);
       switch (result.kind) {
         case "sent": {
           const e = result.entry;
@@ -273,7 +302,7 @@ export function App() {
           setSelected(result.entry);
           break;
         case "confirm": {
-          const label = armLabel(known?.method ?? "it", known ? hostOf(known) : null);
+          const label = armLabel(request.method ?? known?.method ?? "it", known ? hostOf(known) : null);
           setArmed({ id, token: result.token, label, until: Date.now() + ARM_MS });
           out(`replay ${short}: ${result.reason}. ${label}, or replay ${id} --yes`, "sys");
           break;
@@ -283,7 +312,7 @@ export function App() {
           setReplayMsg({ id, text: result.reason });
       }
     },
-    [status.replay, armed, out, selected, rows],
+    [status.replay, armed, out, selected, rows, findEntry],
   );
 
   const focusFilter = useCallback(() => filterInput.current?.focus(), []);
@@ -401,6 +430,7 @@ export function App() {
       else if (e.key === "k") move(-1);
       else if (e.key === "t") toggleMode();
       else if (e.key === "x") document.querySelector<HTMLButtonElement>(".inspector [data-action='hex']")?.click();
+      else if (e.key === "e") document.querySelector<HTMLButtonElement>(".inspector [data-action='edit']")?.click();
       // 1-5 will switch views once a second view ships (see Rail.tsx).
     };
     window.addEventListener("keydown", onKey);
@@ -497,7 +527,8 @@ export function App() {
               // The expiry timer clears `armed`, so no clock read here.
               armedLabel: armed?.id === selected.id ? armed.label : null,
               message: replayMsg?.id === selected.id ? replayMsg.text : null,
-              onReplay: () => void replay(selected.id, { yes: false }),
+              onReplay: (draft) => void replay(selected.id, draft ? { yes: false, draft } : { yes: false }),
+              onDraftChange: () => setArmed(null),
             }}
           />
         ) : null}

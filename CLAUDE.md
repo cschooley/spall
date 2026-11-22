@@ -92,7 +92,8 @@ Issues (GitHub milestone "M2 replay"), roughly in order:
 - **#18** (done): replay as captured from the inspector (`⏎`) and
   console (`replay <id> [--yes]`, `scope`, `audit`); unsafe methods take
   two presses, the second sending the gate's token (`ui/src/lib/replay.ts`).
-- **#19**: edit before replay (method, headers, body).
+- **#19** (done): edit before replay (method, ordered headers, text body;
+  `ui/src/lib/edit.ts`, `RequestEditor.tsx`; console edit flags).
 - **#20**: compare a replay with its original; a reusable diff (M4
   evidence, M8 retests).
 - **#21**: the Replays tab and links between originals and replays.

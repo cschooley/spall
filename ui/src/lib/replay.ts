@@ -5,9 +5,14 @@
 
 import type { TrafficEntry } from "../types.ts";
 
-/** What spall's POST /api/replay accepts. #19 adds the edit fields. */
+/** What spall's POST /api/replay accepts; edits (#19) are optional. */
 export interface ReplayBody {
   id: string;
+  method?: string;
+  /** The whole ordered header list, replacing the captured one. */
+  req_headers?: [string, string][];
+  body?: string;
+  body_encoding?: "utf8" | "base64";
   confirm?: string;
 }
 

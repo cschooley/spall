@@ -19,7 +19,8 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     clearConsole: () => void calls.push("clear-console"),
     openKeys: () => void calls.push("keys"),
     setConsoleKey: (k) => (calls.push(`key:${k}`), k.length === 1),
-    replay: async (id, opts) => void calls.push(`replay:${id}${opts.yes ? ":yes" : ""}`),
+    replay: async (id, opts) =>
+      void calls.push(`replay:${id}${opts.yes ? ":yes" : ""}${opts.edit ? `:${JSON.stringify(opts.edit)}` : ""}`),
     scope: () => ["app.example.test", "*.api.example.test"],
     audit: async (last) => (calls.push(`audit:${last}`), []),
     ...over,
@@ -204,4 +205,33 @@ test("every command has a risk class; replay is the one that sends traffic", () 
   const item = paletteItems().find((i) => i.command === "replay")!;
   assert.equal(item.label, "Replay exchange…");
   assert.equal(item.prefill, "replay ");
+});
+
+test("replay edits from the console: --method, --header, --drop-header, --body", async () => {
+  const { ctx, calls } = fakeCtx();
+  await execute(`replay a1 --method PUT --header 'X-Role: admin' --header "Cookie:sid=2" --drop-header referer --body '{"qty": 2}' --yes`, ctx);
+  assert.equal(calls.length, 1);
+  const [, id, yes, edit] = calls[0]!.match(/^replay:([^:]+):(yes):(.*)$/)!;
+  assert.equal(id, "a1");
+  assert.equal(yes, "yes");
+  assert.deepEqual(JSON.parse(edit!), {
+    method: "PUT",
+    sets: [["X-Role", "admin"], ["Cookie", "sid=2"]],
+    drops: ["referer"],
+    body: '{"qty": 2}',
+  });
+
+  for (const bad of [
+    "replay a1 --method",
+    "replay a1 --header novalue",
+    "replay a1 --header 'bad name: v'",
+    "replay a1 --method 'G ET'",
+    "replay a1 --drop-header",
+    "replay a1 --body",
+  ]) {
+    const t = fakeCtx();
+    await execute(bad, t.ctx);
+    assert.equal(t.calls.length, 0, bad);
+    assert.equal(t.lines.at(-1)![1], "warn", bad);
+  }
 });

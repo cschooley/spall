@@ -5,6 +5,8 @@
 
 import { Fragment, useState } from "react";
 import { Body } from "./Body.tsx";
+import { RequestEditor } from "./RequestEditor.tsx";
+import { draftOf, type Draft } from "../lib/edit.ts";
 import {
   bodyBytes,
   displayUrl,
@@ -32,7 +34,10 @@ export interface ReplayControl {
   armedLabel: string | null;
   /** Why the last attempt didn't send (denied, refused, error). */
   message: string | null;
-  onReplay(): void;
+  /** Replay as captured, or with the editor's draft (#19). */
+  onReplay(draft?: Draft): void;
+  /** The draft changed or the editor opened: a confirmation no longer applies. */
+  onDraftChange(): void;
 }
 
 export function Inspector({
@@ -48,6 +53,15 @@ export function Inspector({
   onOpen(id: string): void;
 }) {
   const [tab, setTab] = useState<Tab>("request");
+  const [draft, setDraftState] = useState<Draft | null>(null);
+  const setDraft = (d: Draft | null) => {
+    setDraftState(d);
+    replay.onDraftChange();
+  };
+  const startEditing = () => {
+    setTab("request");
+    setDraft(draftOf(entry));
+  };
   const [copied, setCopied] = useState<"idle" | "ok" | "failed">("idle");
   const [idCopied, setIdCopied] = useState(false);
 
@@ -106,34 +120,35 @@ export function Inspector({
           ×
         </button>
       </header>
-      <div className="actions">
-        <button
-          type="button"
-          className={replay.armedLabel ? "replay armed" : "replay"}
-          data-action="replay"
-          disabled={!replay.available || replay.busy}
-          title={replay.available ? "Replay as captured (⏎)" : "Replay needs taphttp's lever API"}
-          onClick={replay.onReplay}
-        >
-          {replay.busy ? "Sending…" : (replay.armedLabel ?? "Replay")}
-          <kbd>⏎</kbd>
-        </button>
-        <button type="button" onClick={copyCurl}>
-          {copied === "ok" ? "copied" : copied === "failed" ? "copy failed" : "Copy as curl"}
-        </button>
-        <button
-          type="button"
-          disabled={!bytes}
-          onClick={save}
-        >
-          {`Save ${tab} body`}
-        </button>
-        {replay.message ? (
-          <p className="replay-msg" role="status">
-            {replay.message}
-          </p>
-        ) : null}
-      </div>
+      {draft ? null : (
+        <div className="actions">
+          <button
+            type="button"
+            className={replay.armedLabel ? "replay armed" : "replay"}
+            data-action="replay"
+            disabled={!replay.available || replay.busy}
+            title={replay.available ? "Replay as captured (⏎)" : "Replay needs taphttp's lever API"}
+            onClick={() => replay.onReplay()}
+          >
+            {replay.busy ? "Sending…" : (replay.armedLabel ?? "Replay")}
+            <kbd>⏎</kbd>
+          </button>
+          <button type="button" data-action="edit" disabled={!replay.available} title="Edit, then replay (e)" onClick={startEditing}>
+            Edit & replay <kbd>e</kbd>
+          </button>
+          <button type="button" onClick={copyCurl}>
+            {copied === "ok" ? "copied" : copied === "failed" ? "copy failed" : "Copy as curl"}
+          </button>
+          <button type="button" disabled={!bytes} onClick={save}>
+            {`Save ${tab} body`}
+          </button>
+          {replay.message ? (
+            <p className="replay-msg" role="status">
+              {replay.message}
+            </p>
+          ) : null}
+        </div>
+      )}
       <div className="tabs" role="tablist">
         {(["request", "response"] as const).map((t) => (
           <button key={t} type="button" role="tab" aria-selected={tab === t} className={tab === t ? "on" : undefined} onClick={() => setTab(t)}>
@@ -142,15 +157,21 @@ export function Inspector({
         ))}
       </div>
       <section className="pane" role="tabpanel" aria-label={tab}>
-        <h3>
-          Headers <span className="note">· wire order, repeats kept</span>
-        </h3>
-        <Headers headers={headers} />
-        <h3>
-          Body
-          {bytes ? <span className="note">{` · ${type ?? "no content-type"} · ${humanSize(bytes.length)}`}</span> : null}
-        </h3>
-        <Body body={body} encoding={encoding} headers={headers} onSave={save} />
+        {draft && isReq ? (
+          <RequestEditor original={entry} draft={draft} setDraft={setDraft} replay={replay} onCancel={() => setDraft(null)} />
+        ) : (
+          <>
+            <h3>
+              Headers <span className="note">· wire order, repeats kept</span>
+            </h3>
+            <Headers headers={headers} />
+            <h3>
+              Body
+              {bytes ? <span className="note">{` · ${type ?? "no content-type"} · ${humanSize(bytes.length)}`}</span> : null}
+            </h3>
+            <Body body={body} encoding={encoding} headers={headers} onSave={save} />
+          </>
+        )}
       </section>
     </aside>
   );
