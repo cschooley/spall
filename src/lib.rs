@@ -2,7 +2,9 @@
 //! taphttp's lever API when configured (`--taphttp-api`), otherwise from
 //! tailing its `--log-file`.
 
+pub mod audit;
 pub mod config;
+pub mod confirm;
 pub mod csrf;
 pub mod gate;
 pub mod hub;
