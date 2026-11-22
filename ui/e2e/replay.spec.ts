@@ -269,3 +269,43 @@ test("scope add and scope all on|off from the console; the status bar warns whil
     { op: "all", on: false },
   ]);
 });
+
+test("scope exclude and scope check from the console (#34); hostile hosts stay text", async ({ page }) => {
+  await page.route("**/api/status", (r) =>
+    r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.a.test"], scope_all: false } }),
+  );
+  const changes: unknown[] = [];
+  await page.route("**/api/scope", async (r) => {
+    changes.push(r.request().postDataJSON());
+    await r.fulfill({ json: { scope: ["*.a.test", "!sso.a.test"], all: false, changed: true } });
+  });
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  const checked: string[] = [];
+  await page.route("**/api/scope/check?*", async (r) => {
+    const target = new URL(r.request().url()).searchParams.get("target")!;
+    checked.push(target);
+    if (target.includes("sso")) await r.fulfill({ json: { host: "sso.a.test", state: "out", by: "!sso.a.test" } });
+    else await r.fulfill({ json: { host: p, state: "unknown", by: null } });
+  });
+  await page.goto("/");
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  const input = page.getByLabel("Console command");
+  const log = page.locator(".con-log");
+
+  await input.fill("scope exclude sso.a.test");
+  await page.keyboard.press("Enter");
+  await expect(log).toContainText("excluded: sso.a.test (wins over the scope)");
+  expect(changes).toEqual([{ op: "exclude", entry: "sso.a.test" }]);
+
+  await input.fill("scope check https://sso.a.test/login?x=1&y=2");
+  await page.keyboard.press("Enter");
+  await expect(log).toContainText("sso.a.test: out of scope (excluded by !sso.a.test)");
+  expect(checked).toEqual(["https://sso.a.test/login?x=1&y=2"]);
+
+  await input.fill("scope check hostile");
+  await page.keyboard.press("Enter");
+  await expect(log).toContainText(`${p}: not in scope`);
+  expect(await page.locator(".con-log img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});

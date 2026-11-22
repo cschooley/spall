@@ -37,9 +37,20 @@ export interface Ctx {
   changeScope(change: ScopeChange): Promise<{ scope: readonly string[]; all: boolean; changed: boolean } | string>;
   /** The newest replay attempts from the audit log, or an error message. */
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
+  /** Where a URL or host stands in scope (#34), or an error message. */
+  checkScope(target: string): Promise<ScopeVerdict | string>;
 }
 
-export type ScopeChange = { op: "add" | "remove"; entry: string } | { op: "all"; on: boolean };
+export type ScopeChange = { op: "add" | "exclude" | "remove"; entry: string } | { op: "all"; on: boolean };
+
+/** The server's `Scope::explain`: `by` is the deciding entry. */
+export interface ScopeVerdict {
+  host: string;
+  state: "in" | "out" | "unknown";
+  by: string | null;
+}
+
+const SCOPE_USAGE = "usage: scope [add|exclude|remove <entry> | check <url|host> | all on|off]";
 
 /** Console edits for `replay` (#19), applied to the captured request. */
 export interface ReplayEdit {
@@ -199,20 +210,23 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "scope",
-    usage: "scope [add|remove <entry> | all on|off]",
-    desc: "hosts replay may send to; changes last until restart",
+    usage: "scope [add|exclude|remove <entry> | check <url|host> | all on|off]",
+    desc: "hosts replay may send to; exclusions (!entry) win; changes last until restart",
     group: "traffic",
     // Changing the scope changes the rules of engagement: humans only.
+    // (Agents will read scope through a separate read-only tool, M6.)
     mcp: false,
     risk: "policy",
     palette: { label: "Show scope", hint: "scope" },
-    complete: (args) => (args.length <= 1 ? ["add", "remove", "all"] : args[0] === "all" ? ["on", "off"] : []),
+    complete: (args) => (args.length <= 1 ? ["add", "exclude", "remove", "check", "all"] : args[0] === "all" ? ["on", "off"] : []),
     run: async (args, ctx) => {
       const show = (entries: readonly string[], all: boolean) => {
+        const listed = entries.filter((e) => e !== "*" && !e.startsWith("!"));
+        const excluded = entries.filter((e) => e.startsWith("!")).map((e) => e.slice(1));
         if (all) ctx.out("scope: every host, third parties included (scope all off to go back)", "warn");
-        else if (entries.length === 0) ctx.out("scope: no scope set, so every replay is denied (scope add <host>, or SPALL_SCOPE)", "warn");
-        const listed = entries.filter((e) => e !== "*");
+        else if (listed.length === 0) ctx.out("scope: no scope set, so every replay is denied (scope add <host>, or SPALL_SCOPE)", "warn");
         if (listed.length) ctx.out(`scope: ${listed.join(", ")}`);
+        if (excluded.length) ctx.out(`excluded: ${excluded.join(", ")} (wins over the scope)`);
       };
       if (args.length === 0) {
         const scope = ctx.scope();
@@ -220,10 +234,18 @@ export const COMMANDS: readonly Command[] = [
         return show(scope.entries, scope.all);
       }
       const [sub, arg, ...extra] = args;
+      if (sub === "check") {
+        if (!arg || extra.length) return ctx.out("usage: scope check <url|host>", "warn");
+        const v = await ctx.checkScope(arg);
+        if (typeof v === "string") return ctx.out(`scope check: ${v}`, "warn");
+        if (v.state === "in") return ctx.out(`${v.host}: in scope (by ${v.by ?? "?"})`);
+        if (v.state === "out") return ctx.out(`${v.host}: out of scope (excluded by ${v.by ?? "?"})`, "warn");
+        return ctx.out(`${v.host}: not in scope (no entry matches; scope add ${v.host}, or scope exclude ${v.host})`, "warn");
+      }
       let change: ScopeChange;
-      if ((sub === "add" || sub === "remove") && arg && extra.length === 0) change = { op: sub, entry: arg };
+      if ((sub === "add" || sub === "exclude" || sub === "remove") && arg && extra.length === 0) change = { op: sub, entry: arg };
       else if (sub === "all" && (arg === "on" || arg === "off") && extra.length === 0) change = { op: "all", on: arg === "on" };
-      else return ctx.out("usage: scope [add|remove <entry> | all on|off]", "warn");
+      else return ctx.out(SCOPE_USAGE, "warn");
       const res = await ctx.changeScope(change);
       if (typeof res === "string") return ctx.out(`scope: ${res}`, "warn");
       if (!res.changed) ctx.out("scope: no change", "sys");

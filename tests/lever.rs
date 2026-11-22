@@ -932,3 +932,89 @@ async fn star_in_spall_scope_allows_every_host_from_the_start() {
     let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
     assert!(res.starts_with("HTTP/1.1 200"), "{res}");
 }
+
+#[tokio::test]
+async fn an_exclusion_blocks_the_next_replay_and_is_audited_before_and_after() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1"); // http://example.com/e1
+    let spall =
+        start_spall_with(Some(api), &token, &["--scope", "example.com,*.example.com"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let replay = || post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None);
+    assert!(replay().await.starts_with("HTTP/1.1 200"));
+
+    let ex = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"exclude","entry":"example.com"}"#,
+        None,
+    )
+    .await;
+    assert!(ex.starts_with("HTTP/1.1 200"), "{ex}");
+    assert_eq!(
+        body_json(&ex)["scope"],
+        serde_json::json!(["example.com", "*.example.com", "!example.com"])
+    );
+    let denied = replay().await;
+    assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+    let reason = body_json(&denied)["error"].as_str().unwrap().to_string();
+    assert!(
+        reason.contains("excluded from scope by !example.com"),
+        "{reason}"
+    );
+    // Every host allowed still doesn't lift an exclusion.
+    post_text(spall, "/api/scope", r#"{"op":"all","on":true}"#, None).await;
+    assert!(replay().await.starts_with("HTTP/1.1 403"));
+    assert_eq!(stub.replays().len(), 1, "nothing reached taphttp");
+
+    // scope check: read-only, explains the decision.
+    let check = |t: &str| {
+        let path = format!("/api/scope/check?target={t}");
+        async move { body_json(&get_text(spall, &path).await) }
+    };
+    let v = check("http%3A%2F%2Fexample.com%3A8080%2Fx").await;
+    assert_eq!(v["host"], "example.com");
+    assert_eq!(v["state"], "out");
+    assert_eq!(v["by"], "!example.com");
+    let v = check("api.EXAMPLE.com").await;
+    assert_eq!(
+        (v["state"].as_str(), v["by"].as_str()),
+        (Some("in"), Some("*.example.com"))
+    );
+    post_text(spall, "/api/scope", r#"{"op":"all","on":false}"#, None).await;
+    let v = check("other.test").await;
+    assert_eq!(
+        (v["state"].as_str(), v["by"].is_null()),
+        (Some("unknown"), true)
+    );
+    assert!(get_text(spall, "/api/scope/check")
+        .await
+        .starts_with("HTTP/1.1 400"));
+
+    post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"remove","entry":"!example.com"}"#,
+        None,
+    )
+    .await;
+    assert!(replay().await.starts_with("HTTP/1.1 200"));
+
+    let changes: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "scope")
+        .collect();
+    assert_eq!(changes[0]["reason"], "exclude example.com");
+    assert_eq!(
+        changes[0]["scope_before"],
+        serde_json::json!(["example.com", "*.example.com"])
+    );
+    assert_eq!(
+        changes[0]["scope_after"],
+        serde_json::json!(["example.com", "*.example.com", "!example.com"])
+    );
+    assert_eq!(changes.last().unwrap()["reason"], "remove !example.com");
+}

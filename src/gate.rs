@@ -4,121 +4,202 @@
 //! UI, so a human and an agent are held to the same ones. The UI's
 //! safeguards (two presses for an unsafe method) are how a human satisfies
 //! a rule, not the rule itself.
+//!
+//! The scope engine here is spall's only one (#34): the gate, `scope
+//! check`, and host states in traffic all ask [`Scope::explain`].
 
+use serde::Serialize;
 use std::net::IpAddr;
 
 /// Hosts the engagement allows traffic to. Empty means nothing is in
 /// scope; `*` means every host (opt-in: `SPALL_SCOPE=*`, or `scope all on`
-/// in the console for the running process).
+/// in the console for the running process). Exclusions (`!entry`) win over
+/// both.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Scope {
     rules: Vec<Rule>,
+    excludes: Vec<Rule>,
     all: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Rule {
-    /// A hostname, lowercased, no trailing dot.
+    /// A hostname: lowercased ASCII (IDN labels as punycode), no trailing dot.
     Host(String),
     /// `*.example.test`: any subdomain of `example.test`, not the apex.
     Subdomains(String),
-    /// An IP literal or a network.
+    /// An IP literal or a network (IPv4-mapped IPv6 stored as IPv4).
     Net(IpAddr, u8),
 }
 
+impl Rule {
+    fn matches(&self, host: &str, ip: Option<IpAddr>) -> bool {
+        match (self, ip) {
+            (Rule::Net(net, bits), Some(ip)) => in_network(ip, *net, *bits),
+            (Rule::Host(h), None) => h == host,
+            (Rule::Subdomains(apex), None) => host
+                .strip_suffix(apex.as_str())
+                .is_some_and(|rest| rest.len() > 1 && rest.ends_with('.')),
+            _ => false,
+        }
+    }
+
+    fn entry(&self) -> String {
+        match self {
+            Rule::Host(h) => h.clone(),
+            Rule::Subdomains(a) => format!("*.{a}"),
+            Rule::Net(ip, bits) if *bits == max_bits(*ip) => ip.to_string(),
+            Rule::Net(ip, bits) => format!("{ip}/{bits}"),
+        }
+    }
+}
+
+/// Where a host stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostState {
+    /// Matches an in-scope entry (or every host is allowed) and no exclusion.
+    In,
+    /// Matches an exclusion.
+    Out,
+    /// Matches nothing: not in scope, and nobody has decided.
+    Unknown,
+}
+
+/// [`Scope::explain`]'s answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Verdict {
+    /// The host as compared: lowercase ASCII, no port, brackets or trailing dot.
+    pub host: String,
+    pub state: HostState,
+    /// The entry that decided it (`!entry` for an exclusion, `*` for all).
+    pub by: Option<String>,
+}
+
+/// How to widen the scope, for denials.
+const WIDEN: &str = "add hosts to SPALL_SCOPE, or run `scope all on` in the console";
+
+const NO_STAR: &str = "use `scope all on` to allow every host";
+
 impl Scope {
     /// Parse comma-separated entries: `example.test`, `*.example.test`,
-    /// `10.0.0.5`, `10.0.0.0/8`, `fd00::/8`, `[::1]`. Whitespace and empty
-    /// entries are ignored.
+    /// `10.0.0.5`, `10.0.0.0/8`, `fd00::/8`, `[::1]`, `bücher.test`, and
+    /// exclusions as `!entry`. Whitespace and empty entries are ignored.
     pub fn parse(spec: &str) -> Result<Scope, String> {
-        let mut rules = Vec::new();
-        let mut all = false;
+        let mut scope = Scope::default();
         for raw in spec.split(',') {
             let entry = raw.trim();
             if entry.is_empty() {
                 continue;
             }
             if entry == "*" {
-                all = true;
-                continue;
+                scope.all = true;
+            } else if let Some(ex) = entry.strip_prefix('!') {
+                scope.exclude(ex)?;
+            } else {
+                scope.add(entry)?;
             }
-            rules.push(parse_rule(entry).map_err(|e| format!("scope entry {entry:?}: {e}"))?);
         }
-        Ok(Scope { rules, all })
+        Ok(scope)
     }
 
+    /// Nothing is in scope (exclusions alone allow nothing).
     pub fn is_empty(&self) -> bool {
         self.rules.is_empty() && !self.all
     }
 
-    /// Every host is in scope.
+    /// Every host not excluded is in scope.
     pub fn allows_all(&self) -> bool {
         self.all
     }
 
-    /// Add one entry (same syntax as `--scope`). `Ok(false)` if already there.
+    /// Add an in-scope entry (same syntax as `--scope`). `Ok(false)` if
+    /// already there.
     pub fn add(&mut self, entry: &str) -> Result<bool, String> {
         let entry = entry.trim();
         if entry == "*" {
-            return Err("use `scope all on` to allow every host".into());
+            return Err(NO_STAR.into());
         }
-        let rule = parse_rule(entry).map_err(|e| format!("scope entry {entry:?}: {e}"))?;
-        if self.rules.contains(&rule) {
-            return Ok(false);
+        if let Some(ex) = entry.strip_prefix('!') {
+            return Err(format!(
+                "use `scope exclude {}` to exclude a host",
+                ex.trim()
+            ));
         }
-        self.rules.push(rule);
-        Ok(true)
+        Ok(push_new(&mut self.rules, parse_rule(entry)?))
     }
 
-    /// Remove one entry; false if it wasn't there (or isn't an entry).
+    /// Exclude an entry: hosts it matches are out of scope even when an
+    /// in-scope entry or `*` matches them. `Ok(false)` if already excluded.
+    pub fn exclude(&mut self, entry: &str) -> Result<bool, String> {
+        let entry = entry.trim();
+        let entry = entry.strip_prefix('!').unwrap_or(entry).trim();
+        if entry == "*" {
+            return Err("excluding every host would block everything; use `scope all off`, or remove entries".into());
+        }
+        Ok(push_new(&mut self.excludes, parse_rule(entry)?))
+    }
+
+    /// Remove an entry: `!entry` removes that exclusion only; a plain entry
+    /// is removed from both lists. False if it wasn't there.
     pub fn remove(&mut self, entry: &str) -> bool {
-        let Ok(rule) = parse_rule(entry.trim()) else {
+        let entry = entry.trim();
+        let (only_excludes, bare) = match entry.strip_prefix('!') {
+            Some(rest) => (true, rest.trim()),
+            None => (false, entry),
+        };
+        let Ok(rule) = parse_rule(bare) else {
             return false;
         };
-        let before = self.rules.len();
-        self.rules.retain(|r| *r != rule);
-        self.rules.len() != before
+        let before = self.rules.len() + self.excludes.len();
+        if !only_excludes {
+            self.rules.retain(|r| *r != rule);
+        }
+        self.excludes.retain(|r| *r != rule);
+        self.rules.len() + self.excludes.len() != before
     }
 
-    /// The same rules with every host allowed, or not.
+    /// The same entries with every host allowed, or not.
     pub fn with_all(&self, all: bool) -> Scope {
         Scope {
-            rules: self.rules.clone(),
             all,
+            ..self.clone()
         }
     }
 
-    /// Whether a host (from a URL or a Host header, port allowed) is in scope.
-    pub fn contains(&self, host: &str) -> bool {
+    /// Where a host (from a URL or a Host header, port allowed) stands, and
+    /// which entry decided it. Exclusions first, then entries, then `*`.
+    pub fn explain(&self, host: &str) -> Verdict {
         let Some(host) = normalize_host(host) else {
-            return false;
+            return Verdict {
+                host: String::new(),
+                state: HostState::Unknown,
+                by: None,
+            };
         };
-        if self.all {
-            return true;
-        }
-        let ip: Option<IpAddr> = host.parse().ok();
-        self.rules.iter().any(|rule| match (rule, ip) {
-            (Rule::Net(net, bits), Some(ip)) => in_network(ip, *net, *bits),
-            (Rule::Host(h), None) => *h == host,
-            (Rule::Subdomains(apex), None) => host
-                .strip_suffix(apex.as_str())
-                .is_some_and(|rest| rest.len() > 1 && rest.ends_with('.')),
-            _ => false,
-        })
+        let ip = parse_ip(&host);
+        let (state, by) = if let Some(r) = self.excludes.iter().find(|r| r.matches(&host, ip)) {
+            (HostState::Out, Some(format!("!{}", r.entry())))
+        } else if let Some(r) = self.rules.iter().find(|r| r.matches(&host, ip)) {
+            (HostState::In, Some(r.entry()))
+        } else if self.all {
+            (HostState::In, Some("*".into()))
+        } else {
+            (HostState::Unknown, None)
+        };
+        Verdict { host, state, by }
     }
 
-    /// The entries, for display (`scope` in the console, audit records).
+    /// Whether a host is in scope.
+    pub fn contains(&self, host: &str) -> bool {
+        self.explain(host).state == HostState::In
+    }
+
+    /// The entries, for display and audit records: in-scope entries, then
+    /// `!exclusions`, then `*` if every host is allowed. `parse` reads it back.
     pub fn entries(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .rules
-            .iter()
-            .map(|r| match r {
-                Rule::Host(h) => h.clone(),
-                Rule::Subdomains(a) => format!("*.{a}"),
-                Rule::Net(ip, bits) if *bits == max_bits(*ip) => ip.to_string(),
-                Rule::Net(ip, bits) => format!("{ip}/{bits}"),
-            })
-            .collect();
+        let mut out: Vec<String> = self.rules.iter().map(Rule::entry).collect();
+        out.extend(self.excludes.iter().map(|r| format!("!{}", r.entry())));
         if self.all {
             out.push("*".into());
         }
@@ -126,24 +207,44 @@ impl Scope {
     }
 }
 
+fn push_new(list: &mut Vec<Rule>, rule: Rule) -> bool {
+    if list.contains(&rule) {
+        return false;
+    }
+    list.push(rule);
+    true
+}
+
 fn parse_rule(entry: &str) -> Result<Rule, String> {
+    parse_rule_inner(entry).map_err(|e| format!("scope entry {entry:?}: {e}"))
+}
+
+fn parse_rule_inner(entry: &str) -> Result<Rule, String> {
     if let Some((addr, bits)) = entry.split_once('/') {
-        let ip: IpAddr = addr.parse().map_err(|_| "not an IP network")?;
+        let ip = parse_ip(addr).ok_or("not an IP network")?;
         let bits: u8 = bits.parse().map_err(|_| "bad prefix length")?;
+        // A mapped network (::ffff:10.0.0.0/104) becomes its IPv4 form.
+        let bits = match addr.parse::<IpAddr>() {
+            Ok(IpAddr::V6(_)) if ip.is_ipv4() => bits
+                .checked_sub(96)
+                .ok_or("prefix length too short for a mapped IPv4 network")?,
+            _ => bits,
+        };
         if bits > max_bits(ip) {
             return Err("prefix length too long".into());
         }
         return Ok(Rule::Net(ip, bits));
     }
     let bare = entry.trim_start_matches('[').trim_end_matches(']');
-    if let Ok(ip) = bare.parse::<IpAddr>() {
+    if let Some(ip) = parse_ip(bare) {
         return Ok(Rule::Net(ip, max_bits(ip)));
     }
     let (wild, name) = match entry.strip_prefix("*.") {
         Some(rest) => (true, rest),
         None => (false, entry),
     };
-    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    let name = ascii_host(name.trim_end_matches(['.', '。', '．', '｡']))
+        .ok_or("not a hostname, *.wildcard, IP or CIDR")?;
     let label_ok = |l: &str| {
         !l.is_empty()
             && l.len() <= 63
@@ -158,6 +259,12 @@ fn parse_rule(entry: &str) -> Result<Rule, String> {
     } else {
         Rule::Host(name)
     })
+}
+
+/// An IP literal, zone id dropped, IPv4-mapped IPv6 as IPv4.
+fn parse_ip(s: &str) -> Option<IpAddr> {
+    let s = s.split_once('%').map_or(s, |(addr, _zone)| addr);
+    s.parse::<IpAddr>().ok().map(|ip| ip.to_canonical())
 }
 
 fn max_bits(ip: IpAddr) -> u8 {
@@ -181,7 +288,8 @@ fn in_network(ip: IpAddr, net: IpAddr, bits: u8) -> bool {
     (ip >> shift) == (net >> shift)
 }
 
-/// Lowercase, without port, brackets or a trailing dot. `None` if empty.
+/// Lowercase ASCII, without port, brackets, zone id or a trailing dot;
+/// IDN labels as punycode. `None` if empty or not encodable.
 fn normalize_host(host: &str) -> Option<String> {
     let h = host.trim();
     let h = if let Some(rest) = h.strip_prefix('[') {
@@ -196,8 +304,97 @@ fn normalize_host(host: &str) -> Option<String> {
             _ => h,
         }
     };
-    let h = h.trim_end_matches('.').to_ascii_lowercase();
+    if let Some(ip) = parse_ip(h) {
+        return Some(ip.to_string());
+    }
+    let h = ascii_host(h.trim_end_matches(['.', '。', '．', '｡']))?;
     (!h.is_empty()).then_some(h)
+}
+
+/// A hostname as lowercase ASCII: IDN dot variants as `.`, non-ASCII labels
+/// as `xn--` punycode. Not full UTS #46 (no NFC or mapping tables): enough
+/// that an entry and a host written either way compare equal.
+fn ascii_host(name: &str) -> Option<String> {
+    let lower = name.to_lowercase();
+    let labels: Option<Vec<String>> = lower
+        .split(['.', '。', '．', '｡'])
+        .map(|l| {
+            if l.is_ascii() {
+                Some(l.to_string())
+            } else {
+                punycode(l).map(|p| format!("xn--{p}"))
+            }
+        })
+        .collect();
+    Some(labels?.join("."))
+}
+
+/// RFC 3492 punycode encoding of one label. `None` on overflow.
+fn punycode(input: &str) -> Option<String> {
+    const BASE: u32 = 36;
+    const TMIN: u32 = 1;
+    const TMAX: u32 = 26;
+    let adapt = |delta: u32, points: u32, first: bool| {
+        let mut delta = if first { delta / 700 } else { delta / 2 };
+        delta += delta / points;
+        let mut k = 0;
+        while delta > ((BASE - TMIN) * TMAX) / 2 {
+            delta /= BASE - TMIN;
+            k += BASE;
+        }
+        k + (BASE - TMIN + 1) * delta / (delta + 38)
+    };
+    let digit = |d: u32| {
+        char::from(if d < 26 {
+            b'a' + d as u8
+        } else {
+            b'0' + (d - 26) as u8
+        })
+    };
+    let cps: Vec<u32> = input.chars().map(u32::from).collect();
+    let mut out: String = input.chars().filter(char::is_ascii).collect();
+    let basic = out.len() as u32;
+    let mut handled = basic;
+    if basic > 0 {
+        out.push('-');
+    }
+    let (mut n, mut delta, mut bias) = (128u32, 0u32, 72u32);
+    while (handled as usize) < cps.len() {
+        let m = cps.iter().copied().filter(|&c| c >= n).min()?;
+        delta = delta.checked_add((m - n).checked_mul(handled + 1)?)?;
+        n = m;
+        for &c in &cps {
+            if c < n {
+                delta = delta.checked_add(1)?;
+            }
+            if c == n {
+                let mut q = delta;
+                let mut k = BASE;
+                loop {
+                    let t = if k <= bias {
+                        TMIN
+                    } else if k >= bias + TMAX {
+                        TMAX
+                    } else {
+                        k - bias
+                    };
+                    if q < t {
+                        break;
+                    }
+                    out.push(digit(t + (q - t) % (BASE - t)));
+                    q = (q - t) / (BASE - t);
+                    k += BASE;
+                }
+                out.push(digit(q));
+                bias = adapt(delta, handled + 1, handled == basic);
+                delta = 0;
+                handled += 1;
+            }
+        }
+        delta = delta.checked_add(1)?;
+        n = n.checked_add(1)?;
+    }
+    Some(out)
 }
 
 /// Which methods go without confirmation. Everything else, unknown
@@ -273,30 +470,20 @@ pub fn url_host(url: &str) -> Option<String> {
 
 /// Scope first (a denial beats a confirmation), then the method policy.
 pub fn check(scope: &Scope, policy: &MethodPolicy, action: &Action) -> Decision {
-    const WIDEN: &str = "add hosts to SPALL_SCOPE, or run `scope all on` in the console";
     if scope.is_empty() {
         return Decision::Deny(format!(
             "no engagement scope is configured, so nothing may be sent ({WIDEN})"
         ));
     }
-    let in_scope = || scope.entries().join(", ");
     let Some(target) = url_host(action.url).filter(|h| !h.is_empty()) else {
         return Decision::Deny("the request has no target host".into());
     };
-    if !scope.contains(&target) {
-        return Decision::Deny(format!(
-            "{} is not in scope (scope: {}; {WIDEN})",
-            display_host(&target),
-            in_scope()
-        ));
+    if let Some(deny) = host_denial(scope, &target, "") {
+        return deny;
     }
     if let Some(host) = action.host_header {
-        if !scope.contains(host) {
-            return Decision::Deny(format!(
-                "the Host header {} is not in scope (scope: {}; {WIDEN})",
-                display_host(host),
-                in_scope()
-            ));
+        if let Some(deny) = host_denial(scope, host, "the Host header ") {
+            return deny;
         }
     }
     if !policy.is_safe(action.method) {
@@ -306,6 +493,25 @@ pub fn check(scope: &Scope, policy: &MethodPolicy, action: &Action) -> Decision 
         ));
     }
     Decision::Allow
+}
+
+/// Why a host may not be sent to, if it may not. `what` prefixes the host.
+fn host_denial(scope: &Scope, host: &str, what: &str) -> Option<Decision> {
+    let v = scope.explain(host);
+    let shown = display_host(host);
+    match v.state {
+        HostState::In => None,
+        HostState::Out => {
+            let by = v.by.unwrap_or_default();
+            Some(Decision::Deny(format!(
+                "{what}{shown} is excluded from scope by {by} (exclusions win over in-scope entries; `scope remove {by}` lifts it)"
+            )))
+        }
+        HostState::Unknown => Some(Decision::Deny(format!(
+            "{what}{shown} is not in scope (scope: {}; {WIDEN})",
+            scope.entries().join(", ")
+        ))),
+    }
 }
 
 /// A host for a message: normalized, and quoted so odd bytes stay visible.
@@ -579,6 +785,158 @@ mod tests {
             &action("DELETE", "http://b.test/", None),
         );
         assert!(matches!(d, Decision::Deny(_)), "{d:?}");
+    }
+
+    #[test]
+    fn punycode_matches_rfc_3492_vectors() {
+        assert_eq!(punycode("bücher").as_deref(), Some("bcher-kva"));
+        assert_eq!(punycode("münchen").as_deref(), Some("mnchen-3ya"));
+        // RFC 3492 7.1 (B) Chinese (simplified) and (L) Japanese.
+        assert_eq!(
+            punycode("他们为什么不说中文").as_deref(),
+            Some("ihqwcrb4cv8a8dqg056pqjye")
+        );
+        assert_eq!(
+            punycode("3年B組金八先生").as_deref(),
+            Some("3B-ww4c5e180e575a65lsy2b")
+        );
+    }
+
+    #[test]
+    fn idn_hosts_compare_as_punycode_both_ways() {
+        let unicode = scope("bücher.test, *.münchen.test");
+        for ok in [
+            "xn--bcher-kva.test",
+            "BÜCHER.test",
+            "XN--BCHER-KVA.TEST:443",
+            "a.xn--mnchen-3ya.test",
+            "a.münchen.test",
+        ] {
+            assert!(unicode.contains(ok), "{ok}");
+        }
+        let ascii = scope("xn--bcher-kva.test");
+        assert!(ascii.contains("bücher.test"));
+        assert!(
+            ascii.contains("bücher。test"),
+            "ideographic full stop is a dot"
+        );
+        assert!(!ascii.contains("bucher.test"));
+        assert_eq!(
+            unicode.entries(),
+            ["xn--bcher-kva.test", "*.xn--mnchen-3ya.test"]
+        );
+    }
+
+    #[test]
+    fn ipv6_zones_and_mapped_ipv4_are_normalized() {
+        let s = scope("10.0.0.0/8, fe80::/10");
+        for ok in [
+            "[::ffff:10.1.2.3]",
+            "::ffff:10.1.2.3",
+            "[fe80::1%25eth0]:8080",
+            "fe80::1%eth0",
+        ] {
+            assert!(s.contains(ok), "{ok}");
+        }
+        assert!(
+            scope("::ffff:10.0.0.0/104").contains("10.9.9.9"),
+            "mapped network"
+        );
+        assert!(Scope::parse("::ffff:10.0.0.0/64").is_err());
+        assert_eq!(scope("::ffff:10.0.0.1").entries(), ["10.0.0.1"]);
+    }
+
+    #[test]
+    fn exclusions_win_over_entries_and_over_all() {
+        let mut s = scope("*.example.test, !sso.example.test, !10.0.0.0/8");
+        assert!(s.contains("app.example.test"));
+        assert!(!s.contains("sso.example.test"));
+        assert!(!s.contains("SSO.Example.Test.:443"));
+        assert!(
+            s.contains("x.sso.example.test"),
+            "an exact exclusion covers that host only"
+        );
+        assert_eq!(
+            s.entries(),
+            ["*.example.test", "!sso.example.test", "!10.0.0.0/8"]
+        );
+        s = s.with_all(true);
+        assert!(s.contains("anything.test"));
+        assert!(
+            !s.contains("sso.example.test") && !s.contains("10.1.1.1"),
+            "exclusions beat *"
+        );
+        // Exclusions alone put nothing in scope.
+        assert!(scope("!a.test").is_empty());
+        assert!(Scope::parse("!*").is_err());
+        assert_eq!(
+            Scope::parse(&s.entries().join(", ")),
+            Ok(s),
+            "entries round-trip"
+        );
+    }
+
+    #[test]
+    fn exclusions_are_added_and_removed() {
+        let mut s = scope("*.a.test");
+        assert_eq!(s.exclude("pay.a.test"), Ok(true));
+        assert_eq!(s.exclude("!PAY.a.test"), Ok(false), "already excluded");
+        assert!(s.exclude("*").is_err());
+        assert!(s.add("!x.a.test").is_err(), "add points at exclude");
+        assert!(!s.contains("pay.a.test"));
+        assert!(s.remove("!pay.a.test"));
+        assert!(s.contains("pay.a.test"));
+        // A plain remove takes an entry out of both lists.
+        s.exclude("*.a.test").unwrap();
+        assert!(s.remove("*.a.test"));
+        assert!(s.entries().is_empty());
+        assert!(!s.remove("!nope.test"));
+    }
+
+    #[test]
+    fn explain_says_which_entry_decided() {
+        let s = scope("*.a.test, b.test, !x.a.test").with_all(true);
+        let v = |h| s.explain(h);
+        assert_eq!(
+            v("y.a.test:443"),
+            Verdict {
+                host: "y.a.test".into(),
+                state: HostState::In,
+                by: Some("*.a.test".into())
+            }
+        );
+        assert_eq!(v("x.a.test").state, HostState::Out);
+        assert_eq!(v("x.a.test").by.as_deref(), Some("!x.a.test"));
+        assert_eq!(v("c.test").by.as_deref(), Some("*"));
+        let none = scope("a.test").explain("c.test");
+        assert_eq!((none.state, none.by), (HostState::Unknown, None));
+        assert_eq!(scope("a.test").explain("").state, HostState::Unknown);
+        assert_eq!(serde_json::to_value(HostState::Unknown).unwrap(), "unknown");
+    }
+
+    #[test]
+    fn an_excluded_target_or_host_header_is_denied_by_name() {
+        let s = scope("*.a.test, !sso.a.test");
+        let p = MethodPolicy::default();
+        for a in [
+            action("GET", "https://sso.a.test/login", None),
+            action("GET", "https://app.a.test/", Some("sso.a.test")),
+        ] {
+            let d = check(&s, &p, &a);
+            let Decision::Deny(r) = d else {
+                panic!("{d:?}")
+            };
+            assert!(
+                r.contains("\"sso.a.test\" is excluded from scope by !sso.a.test"),
+                "{r}"
+            );
+            assert!(r.contains("scope remove !sso.a.test"), "{r}");
+        }
+        let all = s.with_all(true);
+        assert!(matches!(
+            check(&all, &p, &action("GET", "https://sso.a.test/", None)),
+            Decision::Deny(_)
+        ));
     }
 
     #[test]

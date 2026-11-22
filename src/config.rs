@@ -53,9 +53,10 @@ pub struct Config {
     pub history: usize,
 
     /// Engagement scope for replays (#22), comma-separated: exact hosts,
-    /// `*.example.test` (subdomains only), IPs and CIDRs. Both a replay's
-    /// URL host and its Host header must match. Empty (the default) means
-    /// nothing may be sent.
+    /// `*.example.test` (subdomains only), IPs and CIDRs, `*` for every
+    /// host, and `!entry` exclusions, which win over everything else. Both
+    /// a replay's URL host and its Host header must match. Empty (the
+    /// default) means nothing may be sent.
     #[arg(long, env = "SPALL_SCOPE", default_value = "", value_parser = Scope::parse)]
     pub scope: Scope,
 

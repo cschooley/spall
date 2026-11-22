@@ -77,6 +77,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/exchanges/{id}", get(api_exchange))
         .route("/api/audit", get(api_audit))
         .route("/api/scope", post(api_scope))
+        .route("/api/scope/check", get(api_scope_check))
         .route(
             "/api/replay",
             post(api_replay).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
@@ -250,7 +251,37 @@ async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Re
     }
 }
 
-/// Change the engagement scope for this run (`scope add|remove|all` in
+/// Where a target stands (`scope check <url|host>`): `?target=` is an
+/// absolute URL or a host (port allowed). Read-only.
+async fn api_scope_check(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let Some(replayer) = &state.replayer else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "scope needs taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(raw.as_deref().unwrap_or("")).unwrap_or_default();
+    let Some(target) = pairs
+        .iter()
+        .find(|(k, _)| k == "target")
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+    else {
+        return json_error(StatusCode::BAD_REQUEST, "want ?target=<url or host>");
+    };
+    let host = if target.contains("://") {
+        match crate::gate::url_host(target) {
+            Some(h) if !h.is_empty() => h,
+            _ => return json_error(StatusCode::BAD_REQUEST, "that URL has no host"),
+        }
+    } else {
+        target.to_string()
+    };
+    axum::Json(replayer.scope_now().explain(&host)).into_response()
+}
+
+/// Change the engagement scope for this run (`scope add|exclude|remove|all` in
 /// the console). Same-origin only, like every POST; audited. Not offered
 /// to agents.
 async fn api_scope(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
@@ -263,7 +294,7 @@ async fn api_scope(State(state): State<AppState>, body: axum::body::Bytes) -> Re
     let Ok(change) = serde_json::from_slice::<crate::replay::ScopeChange>(&body) else {
         return json_error(
             StatusCode::BAD_REQUEST,
-            r#"want {"op":"add"|"remove","entry":"..."} or {"op":"all","on":bool}"#,
+            r#"want {"op":"add"|"exclude"|"remove","entry":"..."} or {"op":"all","on":bool}"#,
         );
     };
     match replayer.change_scope(&change) {

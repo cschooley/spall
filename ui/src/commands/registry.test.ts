@@ -24,6 +24,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     scope: () => ({ entries: ["app.example.test", "*.api.example.test"], all: false }),
     changeScope: async (c) => (calls.push(`scope:${JSON.stringify(c)}`), { scope: ["x.test"], all: c.op === "all" && c.on, changed: true }),
     audit: async (last) => (calls.push(`audit:${last}`), []),
+    checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
     ...over,
   };
   return { ctx, lines, calls };
@@ -265,4 +266,46 @@ test("scope add, remove and all on|off change the scope; bad forms warn", async 
   const all = fakeCtx({ scope: () => ({ entries: ["a.test", "*"], all: true }) });
   await execute("scope", all.ctx);
   assert.ok(all.lines.some(([t, k]) => /every host/.test(t) && k === "warn"));
+});
+
+test("scope exclude and scope check; exclusions are listed apart", async () => {
+  const { ctx, lines, calls } = fakeCtx({
+    changeScope: async (c) => (calls.push(`scope:${JSON.stringify(c)}`), { scope: ["*.a.test", "!sso.a.test"], all: false, changed: true }),
+    checkScope: async (t) => (calls.push(`check:${t}`), { host: "sso.a.test", state: "out", by: "!sso.a.test" }),
+  });
+  await execute("scope exclude sso.a.test", ctx);
+  assert.deepEqual(calls, ['scope:{"op":"exclude","entry":"sso.a.test"}']);
+  assert.deepEqual(lines.slice(-2), [
+    ["scope: *.a.test", "out"],
+    ["excluded: sso.a.test (wins over the scope)", "out"],
+  ]);
+  await execute("scope remove !sso.a.test", ctx);
+  assert.equal(calls.at(-1), 'scope:{"op":"remove","entry":"!sso.a.test"}');
+
+  await execute("scope check https://SSO.a.test/login", ctx);
+  assert.equal(calls.at(-1), "check:https://SSO.a.test/login");
+  assert.deepEqual(lines.at(-1), ["sso.a.test: out of scope (excluded by !sso.a.test)", "warn"]);
+  const inn = fakeCtx({ checkScope: async () => ({ host: "x.a.test", state: "in", by: "*.a.test" }) });
+  await execute("scope check x.a.test", inn.ctx);
+  assert.deepEqual(inn.lines.at(-1), ["x.a.test: in scope (by *.a.test)", "out"]);
+  const unk = fakeCtx();
+  await execute("scope check c.test", unk.ctx);
+  assert.deepEqual(unk.lines.at(-1), ["c.test: not in scope (no entry matches; scope add c.test, or scope exclude c.test)", "warn"]);
+  const err = fakeCtx({ checkScope: async () => "that URL has no host" });
+  await execute("scope check http://", err.ctx);
+  assert.deepEqual(err.lines.at(-1), ["scope check: that URL has no host", "warn"]);
+  for (const bad of ["scope check", "scope check a b", "scope exclude"]) {
+    const t = fakeCtx();
+    await execute(bad, t.ctx);
+    assert.equal(t.calls.length, 0, bad);
+    assert.equal(t.lines.at(-1)![1], "warn", bad);
+  }
+  assert.deepEqual(complete("scope ").options, ["add", "exclude", "remove", "check", "all"]);
+});
+
+test("hostile hosts from scope check are printed as given, as text", async () => {
+  const p = `<img src=x onerror=alert(1)>`;
+  const { ctx, lines } = fakeCtx({ checkScope: async () => ({ host: p, state: "unknown", by: null }) });
+  await execute("scope check x", ctx);
+  assert.ok(lines.at(-1)![0].startsWith(`${p}: not in scope`));
 });

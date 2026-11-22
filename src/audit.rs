@@ -28,7 +28,7 @@ pub enum Outcome {
     ConfirmationRefused,
     /// Bad input, or taphttp unreachable or refusing; nothing was sent.
     Error,
-    /// The scope was changed at runtime (`scope add|remove|all`).
+    /// The scope was changed at runtime (`scope add|exclude|remove|all`).
     ScopeChanged,
 }
 
@@ -47,6 +47,11 @@ pub struct Record {
     pub confirmed: bool,
     /// The scope allowed every host when this was decided.
     pub scope_all: bool,
+    /// For a scope change: the entries before and after (`Scope::entries`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_before: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_after: Option<Vec<String>>,
     pub outcome: Outcome,
     /// taphttp's HTTP status for the forwarded call, if it was made.
     pub upstream_status: Option<u16>,
@@ -71,6 +76,8 @@ impl Record {
             reason: None,
             confirmed: false,
             scope_all: false,
+            scope_before: None,
+            scope_after: None,
             outcome,
             upstream_status: None,
             result_id: None,

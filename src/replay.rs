@@ -137,13 +137,24 @@ pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
     }
 }
 
-/// A runtime scope change (#21 follow-up): in memory until restart.
+/// A runtime scope change (#21 follow-up, exclusions #34): in memory
+/// until restart.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum ScopeChange {
-    Add { entry: String },
-    Remove { entry: String },
-    All { on: bool },
+    Add {
+        entry: String,
+    },
+    Exclude {
+        entry: String,
+    },
+    /// `!entry` removes an exclusion; a plain entry leaves both lists.
+    Remove {
+        entry: String,
+    },
+    All {
+        on: bool,
+    },
 }
 
 /// Everything the handler needs.
@@ -181,8 +192,13 @@ impl Replayer {
     /// anything changed; `Err` is a message safe to show.
     pub fn change_scope(&self, change: &ScopeChange) -> Result<(Scope, bool), String> {
         let mut scope = self.scope.write().unwrap_or_else(|p| p.into_inner());
+        let before = scope.entries();
         let (changed, what) = match change {
             ScopeChange::Add { entry } => (scope.add(entry)?, format!("add {}", entry.trim())),
+            ScopeChange::Exclude { entry } => (
+                scope.exclude(entry)?,
+                format!("exclude {}", entry.trim().trim_start_matches('!').trim()),
+            ),
             ScopeChange::Remove { entry } => {
                 (scope.remove(entry), format!("remove {}", entry.trim()))
             }
@@ -200,6 +216,8 @@ impl Replayer {
         let mut rec = Record::new("scope", "", Outcome::ScopeChanged);
         rec.reason = Some(what);
         rec.scope_all = now.allows_all();
+        rec.scope_before = Some(before);
+        rec.scope_after = Some(now.entries());
         rec.error = (!changed).then(|| "no change".to_string());
         self.audit(&rec);
         if changed && now.allows_all() {

@@ -402,6 +402,17 @@ export function App() {
           return "spall unreachable";
         }
       },
+      checkScope: async (target) => {
+        try {
+          const res = await fetch(`/api/scope/check?target=${encodeURIComponent(target)}`);
+          const body = (await res.json()) as { host?: unknown; state?: unknown; by?: unknown; error?: unknown };
+          if (!res.ok) return typeof body.error === "string" ? body.error : `HTTP ${res.status}`;
+          const state = body.state === "in" || body.state === "out" ? body.state : "unknown";
+          return { host: typeof body.host === "string" ? body.host : target, state, by: typeof body.by === "string" ? body.by : null };
+        } catch {
+          return "spall unreachable";
+        }
+      },
       audit: async (last) => {
         try {
           const res = await fetch(`/api/audit?last=${last}`);
