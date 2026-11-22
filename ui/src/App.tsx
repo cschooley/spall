@@ -36,6 +36,7 @@ import { useChain, useOriginal, useReplayHistory } from "./useReplays.ts";
 import { useSourceStatus } from "./useStatus.ts";
 import { useHosts } from "./useHosts.ts";
 import { asListing, stateLookup } from "./lib/hosts.ts";
+import { asCaInfo } from "./lib/ca.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
 const CONNECTION_LABEL: Record<Connection, string> = {
@@ -210,6 +211,13 @@ export function App() {
     const merged = mergeExchanges(history.items, store.items, (e) => matchesQuery(e, query, (h) => hostOfState(h)?.state ?? null));
     return clearedAt ? merged.filter((e) => tsKey(e.ts) > clearedAt) : merged;
   }, [history.items, store.items, query, clearedAt, hostOfState]);
+
+  // The newest live https exchange, for browser setup's check (#32).
+  const latestHttps = useMemo(() => {
+    let best: TrafficEntry | null = null;
+    for (const e of store.items) if (e.url.startsWith("https://") && (!best || e.ts > best.ts)) best = e;
+    return best;
+  }, [store.items]);
 
   const select = useCallback((e: TrafficEntry | null) => setSelected(e), []);
   const clearAll = useCallback(() => {
@@ -445,6 +453,13 @@ export function App() {
         const engagement = asEngagement(o.engagement);
         return engagement ? { engagement, changed: o.changed === true } : "unexpected answer";
       },
+      ca: async () => {
+        const body = await apiJson("/api/ca");
+        return typeof body === "string" ? body : (asCaInfo(body) ?? "unexpected answer");
+      },
+      openSetup: () => {
+        window.location.hash = "engagement/ca";
+      },
       hosts: async () => {
         const body = await apiJson("/api/hosts");
         return typeof body === "string" ? body : (asListing(body) ?? "unexpected answer");
@@ -596,7 +611,13 @@ export function App() {
 
       {view === "engagement" ? (
         <main className="eng-main">
-          <EngagementView available={status.replay} hosts={hosts.listing} onChanged={() => setStatusNonce((n) => n + 1)} />
+          <EngagementView
+            available={status.replay}
+            hosts={hosts.listing}
+            proxy={status.proxy}
+            latestHttps={latestHttps}
+            onChanged={() => setStatusNonce((n) => n + 1)}
+          />
         </main>
       ) : (
         <main className={selected ? "with-inspector" : undefined}>
@@ -638,7 +659,17 @@ export function App() {
             setFollow={setFollow}
             onNearTop={history.loadOlder}
             appliedFilter={debounced}
-            empty={isEmptyQuery(query) ? "No traffic. Point a client at 127.0.0.1:8080." : "No exchanges match this filter."}
+            empty={
+              isEmptyQuery(query) ? (
+                <>
+                  {`No traffic. Point a client at ${status.proxy ?? "127.0.0.1:8080"}, or `}
+                  <a href="#engagement/ca">set up a browser</a>
+                  {" (CA certificate and steps)."}
+                </>
+              ) : (
+                "No exchanges match this filter."
+              )
+            }
           />
           {selected ? (
             <Inspector

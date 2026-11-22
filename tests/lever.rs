@@ -208,6 +208,13 @@ async fn start_stub() -> (Stub, SocketAddr) {
         .route("/exchanges/{id}", get(exchange))
         .route("/feed", get(feed))
         .route("/replay", post(replay))
+        .route("/info", get(|| async { axum::Json(serde_json::json!({
+            "taphttp_version": "0.6.1",
+            "ca": { "subject": "CN=taphttp CA", "sha256": "EB:6F:71:3A", "not_before": "2026-11-20T00:00:00Z", "not_after": "2036-11-20T00:00:00Z" },
+            "api": { "listen": "0.0.0.0:8081", "tls": false }
+        })) }))
+        .route("/ca.pem", get(|| async { ([("content-type", "application/x-pem-file")], STUB_PEM) }))
+        .route("/ca.der", get(|| async { ([("content-type", "application/x-x509-ca-cert")], vec![0x30u8, 0x82, 0x01, 0x0a]) }))
         .layer(middleware::from_fn(auth))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -215,6 +222,8 @@ async fn start_stub() -> (Stub, SocketAddr) {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (state, addr)
 }
+
+const STUB_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIBstub\n-----END CERTIFICATE-----\n";
 
 fn write_token(path: &FsPath) {
     std::fs::write(path, format!("{TOKEN}\n")).unwrap();
@@ -290,6 +299,17 @@ async fn get_text(addr: SocketAddr, path: &str) -> String {
         .expect("timed out")
         .unwrap();
     out
+}
+
+/// Like `get_text`, for a binary body (non-UTF-8 bytes replaced).
+async fn get_lossy(addr: SocketAddr, path: &str) -> String {
+    let mut s = http_get(addr, path).await;
+    let mut out = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), s.read_to_end(&mut out))
+        .await
+        .expect("timed out")
+        .unwrap();
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Read the SSE stream until `needle` appears; returns everything read.
@@ -1587,4 +1607,50 @@ async fn an_openapi_file_is_previewed_then_applied_and_kept_on_the_engagement() 
         .rfind(|r| r["action"] == "engagement")
         .unwrap();
     assert_eq!(rec["reason"], "set api_specs");
+}
+
+#[tokio::test]
+async fn the_public_ca_certificate_is_offered_for_download_with_its_fingerprint() {
+    let (_dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let info = body_json(&get_text(spall, "/api/ca").await);
+    assert_eq!(info["sha256"], "EB:6F:71:3A");
+    assert_eq!(info["subject"], "CN=taphttp CA");
+    assert_eq!(info["not_after"], "2036-11-20T00:00:00Z");
+    assert_eq!(info["taphttp_version"], "0.6.1");
+    assert!(info.get("api").is_none(), "only the CA's public details");
+
+    let pem = get_text(spall, "/api/ca.pem").await;
+    assert!(pem.starts_with("HTTP/1.1 200"), "{pem}");
+    let lower = pem.to_ascii_lowercase();
+    assert!(
+        lower.contains("content-type: application/x-pem-file"),
+        "{pem}"
+    );
+    assert!(
+        lower.contains("content-disposition: attachment; filename=\"taphttp-ca.pem\""),
+        "{pem}"
+    );
+    assert!(lower.contains("x-content-type-options: nosniff"), "{pem}");
+    assert!(pem.ends_with(STUB_PEM), "{pem}");
+    assert!(
+        !pem.contains(TOKEN),
+        "the API token never reaches the browser"
+    );
+    let der = get_lossy(spall, "/api/ca.der").await;
+    assert!(
+        der.to_ascii_lowercase()
+            .contains("content-type: application/x-x509-ca-cert"),
+        "{der}"
+    );
+    assert!(
+        der.to_ascii_lowercase()
+            .contains("filename=\"taphttp-ca.der\""),
+        "{der}"
+    );
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let log_mode = start_spall(None, &dir.path().join("api-token")).await;
+    assert!(get_text(log_mode, "/api/ca.pem")
+        .await
+        .starts_with("HTTP/1.1 503"));
 }

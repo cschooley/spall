@@ -80,6 +80,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scope", post(api_scope))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
+        .route("/api/ca", get(api_ca))
+        .route("/api/ca.pem", get(api_ca_pem))
+        .route("/api/ca.der", get(api_ca_der))
         .route(
             "/api/openapi/parse",
             post(api_openapi_parse).layer(DefaultBodyLimit::max(2 * crate::openapi::MAX_BYTES)),
@@ -280,6 +283,110 @@ async fn api_audit(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Re
             )
         }
     }
+}
+
+/// The CA's public details for browser setup (#32): fingerprint, subject
+/// and validity from taphttp's `/info`, nothing else from it.
+async fn api_ca(State(state): State<AppState>) -> Response {
+    let Some(lever) = &state.lever else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the CA certificate comes from taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    match lever.get_bytes("/info").await {
+        Ok((StatusCode::OK, body)) => {
+            let info: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let ca = info.get("ca").cloned().unwrap_or_default();
+            let field = |k: &str| ca.get(k).and_then(|v| v.as_str()).map(String::from);
+            axum::Json(serde_json::json!({
+                "sha256": field("sha256"),
+                "subject": field("subject"),
+                "not_before": field("not_before"),
+                "not_after": field("not_after"),
+                "taphttp_version": info.get("taphttp_version").and_then(|v| v.as_str()),
+                "proxy": &*state.proxy_address,
+            }))
+            .into_response()
+        }
+        Ok((status, _)) => json_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("taphttp answered {status} for /info (taphttp 0.6.0 or later)"),
+        ),
+        Err(e) => {
+            tracing::warn!("ca info: {e:#}");
+            json_error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
+        }
+    }
+}
+
+/// The public CA certificate as a download (taphttp serves only the
+/// certificate, never the key). The token stays server-side.
+async fn ca_file(
+    state: &AppState,
+    path: &str,
+    content_type: &'static str,
+    name: &'static str,
+) -> Response {
+    let Some(lever) = &state.lever else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the CA certificate comes from taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    match lever.get_bytes(path).await {
+        Ok((StatusCode::OK, body)) => (
+            [
+                (header::CONTENT_TYPE, HeaderValue::from_static(content_type)),
+                (
+                    header::CONTENT_DISPOSITION,
+                    HeaderValue::from_static(match name {
+                        "taphttp-ca.der" => "attachment; filename=\"taphttp-ca.der\"",
+                        _ => "attachment; filename=\"taphttp-ca.pem\"",
+                    }),
+                ),
+                (
+                    header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                ),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+            body,
+        )
+            .into_response(),
+        Ok((StatusCode::NOT_FOUND, _)) => json_error(
+            StatusCode::BAD_GATEWAY,
+            "this taphttp doesn't serve its CA certificate (needs taphttp 0.6.1 or later)",
+        ),
+        Ok((status, _)) => json_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("taphttp answered {status}"),
+        ),
+        Err(e) => {
+            tracing::warn!("ca download: {e:#}");
+            json_error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
+        }
+    }
+}
+
+async fn api_ca_pem(State(state): State<AppState>) -> Response {
+    ca_file(
+        &state,
+        "/ca.pem",
+        "application/x-pem-file",
+        "taphttp-ca.pem",
+    )
+    .await
+}
+
+async fn api_ca_der(State(state): State<AppState>) -> Response {
+    ca_file(
+        &state,
+        "/ca.der",
+        "application/x-x509-ca-cert",
+        "taphttp-ca.der",
+    )
+    .await
 }
 
 /// Read an OpenAPI / Swagger file (#40): its servers as a scope preview

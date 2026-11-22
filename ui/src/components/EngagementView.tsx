@@ -3,9 +3,11 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ScopePaste } from "./ScopePaste.tsx";
 import { OpenApiImport } from "./OpenApiImport.tsx";
+import { BrowserSetup } from "./BrowserSetup.tsx";
+import type { TrafficEntry } from "../types.ts";
 import { parentWildcard, type HostListing, type HostState } from "../lib/hosts.ts";
 import { timeOf } from "../lib/format.ts";
 import type { EngagementInfo, ScopeVerdict } from "../commands/registry.ts";
@@ -21,7 +23,19 @@ async function send(path: string, method: string, body: unknown): Promise<Result
   return typeof res === "string" ? res : null;
 }
 
-export function EngagementView({ available, hosts, onChanged }: { available: boolean; hosts: HostListing | null; onChanged(): void }) {
+export function EngagementView({
+  available,
+  hosts,
+  proxy,
+  latestHttps,
+  onChanged,
+}: {
+  available: boolean;
+  hosts: HostListing | null;
+  proxy: string | null;
+  latestHttps: TrafficEntry | null;
+  onChanged(): void;
+}) {
   const st = useEngagement(available);
   const done = () => {
     st.refresh();
@@ -47,6 +61,7 @@ export function EngagementView({ available, hosts, onChanged }: { available: boo
         <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
         <Waiting />
+        <SetupSection proxy={proxy} latestHttps={latestHttps} />
       </div>
     </div>
   );
@@ -610,13 +625,32 @@ function HostsPanel({ listing, onChanged }: { listing: HostListing | null; onCha
   );
 }
 
+/** Browser setup (#32); `ca` in the console and the empty Traffic view link here. */
+function SetupSection({ proxy, latestHttps }: { proxy: string | null; latestHttps: TrafficEntry | null }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const go = () => {
+      if (window.location.hash === "#engagement/ca") ref.current?.scrollIntoView({ block: "start" });
+    };
+    go();
+    window.addEventListener("hashchange", go);
+    return () => window.removeEventListener("hashchange", go);
+  }, []);
+  return (
+    <div ref={ref} id="browser-setup">
+      <Section title="Set up a browser">
+        <BrowserSetup proxy={proxy} latestHttps={latestHttps} />
+      </Section>
+    </div>
+  );
+}
+
 /** Panels that grow later: dimmed and inert until they ship (docs/ux.md). */
 function Waiting() {
   const todo: [string, string][] = [
     ["Candidates to triage", "M4"],
     ["Tasks waiting on approval", "M6"],
     ["Coverage: endpoints seen vs. tested", "Surface"],
-    ["Set up a browser (CA certificate)", "#32"],
   ];
   return (
     <Section title="Waiting on you">

@@ -6,6 +6,7 @@
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
 import type { HostListing } from "../lib/hosts.ts";
+import type { CaInfo } from "../lib/ca.ts";
 import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
 
@@ -40,6 +41,10 @@ export interface Ctx {
   changeScope(change: ScopeChange): Promise<{ scope: readonly string[]; all: boolean; changed: boolean } | string>;
   /** The newest replay attempts from the audit log, or an error message. */
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
+  /** The CA's public details (#32), or an error message. */
+  ca(): Promise<CaInfo | string>;
+  /** Open the Engagement view's browser setup (#32). */
+  openSetup(): void;
   /** Hosts seen in traffic with their scope state (#39), or an error message. */
   hosts(): Promise<HostListing | string>;
   /** Open the Engagement view's paste-a-scope-list panel (#38), or the OpenAPI import (#40). */
@@ -486,6 +491,25 @@ export const COMMANDS: readonly Command[] = [
       }
       if (unknownOnly && l.counts.unknown) ctx.out("decide them in the Engagement view, or: scope add|exclude <host>", "sys");
       if (l.dropped) ctx.out(`${l.dropped} more hosts not tracked (table full)`, "sys");
+    },
+  },
+  {
+    name: "ca",
+    usage: "ca",
+    desc: "taphttp's CA certificate: fingerprint, download, and browser setup steps",
+    group: "traffic",
+    // Browser setup is a human's job.
+    mcp: false,
+    risk: "read",
+    palette: { label: "Set up a browser (CA certificate)", hint: "ca" },
+    run: async (_args, ctx) => {
+      const ca = await ctx.ca();
+      if (typeof ca === "string") return ctx.out(`ca: ${ca}`, "warn");
+      ctx.out(`ca: ${ca.subject ?? "taphttp CA"}${ca.notAfter ? `, valid until ${ca.notAfter}` : ""}`);
+      ctx.out(`sha256: ${ca.sha256 ?? "unknown"}`);
+      ctx.out("download: /api/ca.pem (or /api/ca.der); devices on the proxy: http://taphttp/");
+      ctx.openSetup();
+      ctx.out("browser setup steps are in the Engagement view", "sys");
     },
   },
   {

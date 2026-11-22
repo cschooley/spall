@@ -50,6 +50,8 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     openScopePaste: (what = "paste") => void calls.push(what),
+    ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" }),
+    openSetup: () => void calls.push("setup"),
     hosts: async () => ({
       hosts: [
         { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
@@ -318,6 +320,8 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     openScopePaste: (what = "paste") => void calls.push(what),
+    ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" }),
+    openSetup: () => void calls.push("setup"),
     hosts: async () => ({
       hosts: [
         { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
@@ -505,4 +509,20 @@ test("hosts lists what traffic has touched, with each host's scope state", async
   assert.equal(t.lines.at(-1)![1], "warn");
   const h = COMMANDS.find((c) => c.name === "hosts")!;
   assert.equal(h.risk, "read");
+});
+
+test("ca shows the CA's fingerprint and where to get it, and opens browser setup", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("ca", ctx);
+  assert.deepEqual(lines.slice(1).map(([t]) => t), [
+    "ca: CN=taphttp CA, valid until 2036-11-20T00:00:00Z",
+    "sha256: EB:6F:71",
+    "download: /api/ca.pem (or /api/ca.der); devices on the proxy: http://taphttp/",
+    "browser setup steps are in the Engagement view",
+  ]);
+  assert.deepEqual(calls, ["setup"]);
+  const off = fakeCtx({ ca: async () => "the CA certificate comes from taphttp's lever API" });
+  await execute("ca", off.ctx);
+  assert.equal(off.lines.at(-1)![1], "warn");
+  assert.equal(COMMANDS.find((c) => c.name === "ca")!.risk, "read");
 });

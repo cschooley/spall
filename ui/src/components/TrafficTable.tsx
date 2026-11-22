@@ -1,7 +1,7 @@
 // The exchange list: virtualized (thousands of rows stay fast), follows the
 // tail, and asks for older history when scrolled to the top.
 
-import { memo, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { durationText, methodClass, pathOf, statusClass, statusText, timeOf } from "../lib/format.ts";
 import type { TrafficEntry } from "../types.ts";
@@ -28,7 +28,7 @@ export function TrafficTable({
   follow: boolean;
   setFollow: (f: boolean) => void;
   onNearTop: () => void;
-  empty: string;
+  empty: ReactNode;
   /** The filter text the rows reflect (after debounce); for tests and a11y. */
   appliedFilter: string;
 }) {

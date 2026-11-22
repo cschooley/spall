@@ -57,6 +57,9 @@ function engagementApi(page: Page, over: Json = {}) {
     if (c.op === "apply") state.e.scope = [...state.e.scope, ...(c.add ?? []), ...(c.exclude ?? []).map((x) => `!${x}`)];
     await r.fulfill({ json: { scope: state.e.scope, all: false, changed: true } });
   });
+  void page.route("**/api/ca", (r) =>
+    r.fulfill({ json: { sha256: "AA:BB", subject: "CN=taphttp CA", not_before: null, not_after: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" } }),
+  );
   void page.route("**/api/scope/check?*", (r) => r.fulfill({ json: { host: "pay.acme.test", state: "out", by: "!pay.acme.test" } }));
   return state;
 }
@@ -177,7 +180,7 @@ test("switching and creating engagements; not testing now says why", async ({ pa
   await expect.poll(() => created).toEqual({ name: "Gamma" });
   // Unbuilt panels are dimmed and inert.
   const todo = page.locator(".todo-panels li");
-  await expect(todo).toHaveCount(4);
+  await expect(todo).toHaveCount(3);
   await expect(todo.first()).toHaveAttribute("aria-disabled", "true");
   expect(await todo.first().evaluate((e) => Number(getComputedStyle(e).opacity))).toBeLessThan(0.5);
 });
@@ -337,5 +340,37 @@ test("import an OpenAPI file: servers previewed, hosts applied, the spec kept (#
   await kept.getByRole("button", { name: `Forget ACME ${p}` }).click();
   await expect(page.getByRole("list", { name: "API descriptions" })).toHaveCount(0);
   expect(await page.locator(".eng img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});
+
+test("browser setup: the CA's fingerprint and downloads, steps with the proxy, and a live check (#32)", async ({ page }) => {
+  engagementApi(page);
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  await page.route("**/api/ca", (r) =>
+    r.fulfill({ json: { sha256: "EB:6F:71:3A", subject: `CN=taphttp CA ${p}`, not_before: "2026-11-20T00:00:00Z", not_after: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" } }),
+  );
+  await page.goto("/");
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  await page.getByLabel("Console command").fill("ca");
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/#engagement\/ca$/);
+  await expect(page.locator(".con-log")).toContainText("sha256: EB:6F:71:3A");
+  await page.keyboard.press("Escape");
+  const setup = page.getByRole("region", { name: "Set up a browser" });
+  await expect(setup).toContainText("EB:6F:71:3A");
+  await expect(setup).toContainText(`CN=taphttp CA ${p}`);
+  await expect(setup.getByRole("link", { name: "download taphttp-ca.pem" })).toHaveAttribute("href", "/api/ca.pem");
+  await expect(setup.getByRole("link", { name: ".der" })).toHaveAttribute("download", "taphttp-ca.der");
+  await expect(setup).toContainText("HTTP proxy 127.0.0.1, port 8080");
+  await expect(setup).toContainText("http://taphttp/");
+  expect(await page.locator(".eng img").count()).toBe(0);
+
+  await setup.getByRole("button", { name: "start the check" }).click();
+  await expect(setup.getByRole("status")).toContainText("Waiting for an https request");
+  const { append, entry, token } = await import("./fixtures.ts");
+  const t = token();
+  append(entry({ host: `${t}.example`, url: `https://${t}.example/`, ts: new Date(Date.now() + 1000).toISOString() }));
+  await expect(setup.getByRole("status")).toHaveText(`✓ spall saw GET https://${t}.example/ (200). The browser is set up.`);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
