@@ -1,6 +1,7 @@
 //! HTTP surface: the built SPA (ui/dist, embedded), the SSE feed, the
 //! history proxy, replay (through the action gate), and a health check.
 
+use crate::engagement::Error as EngagementError;
 use crate::hub::{Hub, Published};
 use crate::lever::Lever;
 use axum::body::Body;
@@ -78,6 +79,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/audit", get(api_audit))
         .route("/api/scope", post(api_scope))
         .route("/api/scope/check", get(api_scope_check))
+        .route(
+            "/api/engagement",
+            get(api_engagement).patch(api_engagement_patch),
+        )
+        .route(
+            "/api/engagements",
+            get(api_engagements).post(api_engagements_new),
+        )
+        .route("/api/engagements/active", post(api_engagements_active))
         .route(
             "/api/replay",
             post(api_replay).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
@@ -218,6 +228,13 @@ async fn api_status(State(state): State<AppState>) -> Response {
     body["replay"] = state.replayer.is_some().into();
     body["scope"] = scope.into();
     body["scope_all"] = scope_all.into();
+    body["engagement"] = match &state.replayer {
+        Some(r) => {
+            let e = r.engagements.active();
+            serde_json::json!({ "id": e.id, "name": e.name })
+        }
+        None => serde_json::Value::Null,
+    };
     axum::Json(body).into_response()
 }
 
@@ -304,7 +321,106 @@ async fn api_scope(State(state): State<AppState>, body: axum::body::Bytes) -> Re
             "changed": changed,
         }))
         .into_response(),
-        Err(msg) => json_error(StatusCode::BAD_REQUEST, &msg),
+        Err(e) => engagement_error(&e),
+    }
+}
+
+fn engagement_error(e: &EngagementError) -> Response {
+    match e {
+        EngagementError::Invalid(m) => json_error(StatusCode::BAD_REQUEST, m),
+        EngagementError::NotFound(m) => json_error(StatusCode::NOT_FOUND, m),
+        EngagementError::Io(m) => {
+            tracing::error!("{m}");
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, m)
+        }
+    }
+}
+
+fn no_engagements() -> Response {
+    json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "engagements need taphttp's lever API (start spall with --taphttp-api)",
+    )
+}
+
+/// The active engagement (#35), with `scope_all` for this process.
+async fn api_engagement(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_engagements();
+    };
+    let mut body = serde_json::to_value(r.engagements.active()).unwrap_or_default();
+    body["scope_all"] = r.scope_now().allows_all().into();
+    axum::Json(body).into_response()
+}
+
+/// Change the active engagement's details (not its scope: `/api/scope`).
+/// Same-origin JSON only; audited with before/after.
+async fn api_engagement_patch(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_engagements();
+    };
+    let patch = match serde_json::from_slice::<crate::engagement::Patch>(&body) {
+        Ok(p) => p,
+        Err(e) => {
+            let hint = if e.to_string().contains("`scope`") {
+                "change scope with POST /api/scope (`scope` in the console)".to_string()
+            } else {
+                format!("bad engagement change: {e}")
+            };
+            return json_error(StatusCode::BAD_REQUEST, &hint);
+        }
+    };
+    match r.update_engagement(patch) {
+        Ok((e, changed)) => {
+            axum::Json(serde_json::json!({ "engagement": e, "changed": changed })).into_response()
+        }
+        Err(e) => engagement_error(&e),
+    }
+}
+
+async fn api_engagements(State(state): State<AppState>) -> Response {
+    match &state.replayer {
+        Some(r) => axum::Json(r.engagements.list()).into_response(),
+        None => no_engagements(),
+    }
+}
+
+/// Create an engagement and make it active. Same-origin JSON; audited.
+async fn api_engagements_new(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_engagements();
+    };
+    let Ok(new) = serde_json::from_slice::<crate::engagement::New>(&body) else {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            r#"want {"name", "client"?, "scope"?: [...]}"#,
+        );
+    };
+    match r.create_engagement(new) {
+        Ok(e) => (StatusCode::CREATED, axum::Json(e)).into_response(),
+        Err(e) => engagement_error(&e),
+    }
+}
+
+/// Switch the active engagement: `{"id": id or name}`. Audited.
+async fn api_engagements_active(
+    State(state): State<AppState>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_engagements();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Which {
+        id: String,
+    }
+    let Ok(which) = serde_json::from_slice::<Which>(&body) else {
+        return json_error(StatusCode::BAD_REQUEST, r#"want {"id": "<id or name>"}"#);
+    };
+    match r.activate_engagement(&which.id) {
+        Ok(e) => axum::Json(e).into_response(),
+        Err(e) => engagement_error(&e),
     }
 }
 

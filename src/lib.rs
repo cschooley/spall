@@ -6,6 +6,7 @@ pub mod audit;
 pub mod config;
 pub mod confirm;
 pub mod csrf;
+pub mod engagement;
 pub mod gate;
 pub mod hub;
 pub mod lever;
@@ -157,21 +158,44 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                     config.audit_log.display()
                 )
             })?;
-            if config.scope.is_empty() {
+            let (engagements, opened) = engagement::Store::open(&config.engagements, &config.scope)
+                .with_context(|| {
+                    format!(
+                        "loading engagements from {} (set --engagements / SPALL_ENGAGEMENTS)",
+                        config.engagements.display()
+                    )
+                })?;
+            for skipped in &opened.skipped {
+                tracing::warn!("engagement file skipped: {skipped}");
+            }
+            let active = engagements.active();
+            if opened.bootstrapped {
+                tracing::info!("created engagement {} from --scope", active.id);
+            }
+            if opened.config_ignored {
                 tracing::warn!(
-                    "no engagement scope (--scope / SPALL_SCOPE): every replay will be denied"
+                    "--scope / SPALL_SCOPE differs from engagement {}'s saved scope; using the engagement's (change it with `scope` in the console)",
+                    active.id
                 );
-            } else if config.scope.allows_all() {
+            }
+            let scope = engagements.scope().with_all(config.scope.allows_all());
+            tracing::info!("engagement: {} ({})", active.name, active.id);
+            if scope.allows_all() {
                 tracing::warn!(
                     "scope is * (SPALL_SCOPE): replays may go to every host, third parties included"
                 );
+            } else if scope.is_empty() {
+                tracing::warn!(
+                    "the engagement has no scope: every replay will be denied (`scope add` in the console, or --scope for a new store)"
+                );
             } else {
-                tracing::info!("replay scope: {}", config.scope.entries().join(", "));
+                tracing::info!("replay scope: {}", scope.entries().join(", "));
             }
             tracing::info!("audit log: {}", config.audit_log.display());
             Some(Arc::new(replay::Replayer {
                 lever: lever.clone(),
-                scope: std::sync::RwLock::new(config.scope.clone()),
+                engagements,
+                all_hosts: std::sync::atomic::AtomicBool::new(config.scope.allows_all()),
                 policy: config.safe_methods.clone(),
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,

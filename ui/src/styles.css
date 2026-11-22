@@ -374,6 +374,7 @@ button.link:hover { color: var(--vg-text-primary); background: none; }
 
 /* scope all on: every host is in scope, so say so where it's always seen. */
 .statusbar .scope-all { color: var(--vg-accent-rust); font-weight: 600; }
+.statusbar .engagement-name { color: var(--vg-text-secondary); max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Compare (#20). Added: verdigris; removed: rust; volatile: muted. */
 .replays .cmp { justify-self: start; width: auto; height: 22px; padding: 0 var(--vg-space-3); border: 1px solid var(--vg-border-subtle); font-size: var(--vg-text-xs); }

@@ -39,7 +39,38 @@ export interface Ctx {
   audit(last: number): Promise<readonly Record<string, unknown>[] | string>;
   /** Where a URL or host stands in scope (#34), or an error message. */
   checkScope(target: string): Promise<ScopeVerdict | string>;
+  /** The active engagement (#35), or an error message. */
+  engagement(): Promise<EngagementInfo | string>;
+  listEngagements(): Promise<readonly EngagementSummary[] | string>;
+  /** Create an engagement and make it active. */
+  newEngagement(name: string): Promise<EngagementInfo | string>;
+  /** Make an engagement active, by id or name. */
+  useEngagement(which: string): Promise<EngagementInfo | string>;
+  /** Set one detail on the active engagement; "" clears a date. */
+  setEngagement(field: EngagementField, value: string): Promise<{ engagement: EngagementInfo; changed: boolean } | string>;
 }
+
+export interface EngagementInfo {
+  id: string;
+  name: string;
+  client: string;
+  starts: string | null;
+  ends: string | null;
+  expires: string | null;
+  scope: readonly string[];
+  notes: string;
+}
+
+export interface EngagementSummary {
+  id: string;
+  name: string;
+  client: string;
+  active: boolean;
+}
+
+export const ENGAGEMENT_FIELDS = ["name", "client", "starts", "ends", "expires", "notes"] as const;
+export type EngagementField = (typeof ENGAGEMENT_FIELDS)[number];
+const ENGAGEMENT_USAGE = "usage: engagement [list | new <name> | use <id|name> | set <field> <value>]";
 
 export type ScopeChange = { op: "add" | "exclude" | "remove"; entry: string } | { op: "all"; on: boolean };
 
@@ -250,6 +281,63 @@ export const COMMANDS: readonly Command[] = [
       if (typeof res === "string") return ctx.out(`scope: ${res}`, "warn");
       if (!res.changed) ctx.out("scope: no change", "sys");
       show(res.scope, res.all);
+    },
+  },
+  {
+    name: "engagement",
+    usage: "engagement [list | new <name> | use <id|name> | set <field> <value>]",
+    desc: "the engagement you're testing under: details, and switching between engagements",
+    group: "traffic",
+    // Creating, switching and editing engagements set the rules: humans only.
+    mcp: false,
+    risk: "policy",
+    palette: { label: "Show engagement", hint: "engagement" },
+    complete: (args) =>
+      args.length <= 1 ? ["list", "new", "use", "set"] : args[0] === "set" && args.length === 2 ? [...ENGAGEMENT_FIELDS] : [],
+    run: async (args, ctx) => {
+      const [sub, ...rest] = args;
+      const warn = (msg: string) => ctx.out(`engagement: ${msg}`, "warn");
+      if (sub === undefined) {
+        const e = await ctx.engagement();
+        if (typeof e === "string") return warn(e);
+        ctx.out(`engagement: ${e.name} (${e.id})${e.client ? ` · client ${e.client}` : ""}`);
+        const dates = e.starts || e.ends ? `${e.starts ?? "?"} → ${e.ends ?? "?"}` : "not set";
+        ctx.out(`dates: ${dates} · authorization ${e.expires ? `expires ${e.expires}` : "expiry not set"}`);
+        const excluded = e.scope.filter((x) => x.startsWith("!")).length;
+        const n = e.scope.length - excluded;
+        ctx.out(`scope: ${n} entr${n === 1 ? "y" : "ies"}${excluded ? `, ${excluded} excluded` : ""} (scope lists them)`);
+        return;
+      }
+      if (sub === "list" && rest.length === 0) {
+        const list = await ctx.listEngagements();
+        if (typeof list === "string") return warn(list);
+        for (const e of list) ctx.out(`${e.active ? "*" : " "} ${e.name} (${e.id})${e.client ? ` · ${e.client}` : ""}`);
+        return;
+      }
+      if (sub === "new" && rest.length > 0) {
+        const e = await ctx.newEngagement(rest.join(" "));
+        if (typeof e === "string") return warn(e);
+        ctx.out(`engagement: created ${e.name} (${e.id}), now active${e.scope.length ? "" : "; its scope is empty: scope add <host>"}`);
+        return;
+      }
+      if (sub === "use" && rest.length > 0) {
+        const e = await ctx.useEngagement(rest.join(" "));
+        if (typeof e === "string") return warn(e);
+        ctx.out(`engagement: now ${e.name} (${e.id})`);
+        return;
+      }
+      if (sub === "set" && rest.length >= 2) {
+        const [field, ...value] = rest;
+        if (!(ENGAGEMENT_FIELDS as readonly string[]).includes(field!)) return warn(`fields: ${ENGAGEMENT_FIELDS.join(", ")}`);
+        const f = field as EngagementField;
+        const res = await ctx.setEngagement(f, value.join(" "));
+        if (typeof res === "string") return warn(res);
+        const now = res.engagement[f];
+        if (!res.changed) ctx.out("engagement: no change", "sys");
+        else ctx.out(`engagement: ${f} ${now ? `is now ${now}` : "cleared"}`);
+        return;
+      }
+      ctx.out(ENGAGEMENT_USAGE, "warn");
     },
   },
   {

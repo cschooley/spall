@@ -71,6 +71,12 @@ pub struct Config {
     #[arg(long, env = "SPALL_AUDIT_LOG", default_value = "/data/audit.jsonl")]
     pub audit_log: PathBuf,
 
+    /// Directory for engagements (#35): one JSON file each (mode 0600) and
+    /// an `active` file. Created if missing. With none there yet, --scope
+    /// seeds the first; after that the engagement's scope is used.
+    #[arg(long, env = "SPALL_ENGAGEMENTS", default_value = "/data/engagements")]
+    pub engagements: PathBuf,
+
     /// How often to check the log file for new data, in milliseconds
     #[arg(long, env = "SPALL_POLL_MS", default_value_t = 250, value_parser = clap::value_parser!(u64).range(10..))]
     pub poll_ms: u64,
@@ -186,6 +192,7 @@ mod tests {
         let c = Config::try_parse_from(["spall"]).unwrap();
         assert!(c.scope.is_empty(), "empty scope: no replay may be sent");
         assert_eq!(c.audit_log, PathBuf::from("/data/audit.jsonl"));
+        assert_eq!(c.engagements, PathBuf::from("/data/engagements"));
         assert_eq!(c.safe_methods, MethodPolicy::default());
     }
 

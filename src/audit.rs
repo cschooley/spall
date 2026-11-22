@@ -30,12 +30,17 @@ pub enum Outcome {
     Error,
     /// The scope was changed at runtime (`scope add|exclude|remove|all`).
     ScopeChanged,
+    /// The engagement's details changed, or another one became active.
+    EngagementChanged,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Record {
     pub ts: String,
     pub actor: String,
+    /// The active engagement's id when this happened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engagement: Option<String>,
     pub action: &'static str,
     /// The exchange acted on (the original, for a replay).
     pub exchange_id: String,
@@ -52,6 +57,9 @@ pub struct Record {
     pub scope_before: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope_after: Option<Vec<String>>,
+    /// For an engagement change: `{field: {before, after}}`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<serde_json::Value>,
     pub outcome: Outcome,
     /// taphttp's HTTP status for the forwarded call, if it was made.
     pub upstream_status: Option<u16>,
@@ -67,6 +75,7 @@ impl Record {
         Record {
             ts: taphttp_types::Timestamp::now().to_string(),
             actor: "human".into(),
+            engagement: None,
             action,
             exchange_id: exchange_id.into(),
             method: None,
@@ -78,6 +87,7 @@ impl Record {
             scope_all: false,
             scope_before: None,
             scope_after: None,
+            changes: None,
             outcome,
             upstream_status: None,
             result_id: None,

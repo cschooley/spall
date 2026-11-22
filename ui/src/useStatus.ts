@@ -13,9 +13,11 @@ export interface SourceStatus {
   scope: string[];
   /** Every host is in scope (SPALL_SCOPE=* or `scope all on`). */
   scopeAll: boolean;
+  /** The active engagement (#35); null without the lever API. */
+  engagement: { id: string; name: string } | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -32,7 +34,9 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           replay?: boolean;
           scope?: unknown;
           scope_all?: boolean;
+          engagement?: { id?: unknown; name?: unknown } | null;
         };
+        const e = body.engagement;
         if (!live) return;
         setStatus({
           source: body.source === "lever" || body.source === "log" ? body.source : "unknown",
@@ -41,6 +45,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           replay: body.replay === true,
           scope: Array.isArray(body.scope) ? body.scope.filter((s): s is string => typeof s === "string") : [],
           scopeAll: body.scope_all === true,
+          engagement: e && typeof e.id === "string" && typeof e.name === "string" ? { id: e.id, name: e.name } : null,
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });

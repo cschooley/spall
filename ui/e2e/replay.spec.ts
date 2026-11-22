@@ -309,3 +309,41 @@ test("scope exclude and scope check from the console (#34); hostile hosts stay t
   expect(await page.locator(".con-log img").count()).toBe(0);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
+
+test("engagement commands from the console (#35); the status bar names the engagement, as text", async ({ page }) => {
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  let name = `ACME ${p}`;
+  await page.route("**/api/status", (r) =>
+    r.fulfill({
+      json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["acme.test"], scope_all: false, engagement: { id: "acme-1a2b", name } },
+    }),
+  );
+  const eng = () => ({ id: "acme-1a2b", name, client: "", starts: null, ends: null, expires: null, scope: ["acme.test"], notes: "" });
+  const sent: unknown[] = [];
+  await page.route("**/api/engagement", async (r) => {
+    if (r.request().method() === "PATCH") {
+      expect(r.request().headers()["content-type"]).toBe("application/json");
+      const body = r.request().postDataJSON() as { name?: string };
+      sent.push(body);
+      if (body.name) name = body.name;
+      return r.fulfill({ json: { engagement: eng(), changed: true } });
+    }
+    return r.fulfill({ json: eng() });
+  });
+  await page.goto("/");
+  await expect(page.locator(".statusbar .engagement-name")).toHaveText(name);
+  expect(await page.locator(".statusbar img").count()).toBe(0);
+
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  const input = page.getByLabel("Console command");
+  await input.fill("engagement");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText(`engagement: ${name} (acme-1a2b)`);
+  await input.fill("engagement set name ACME Q4");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText("engagement: name is now ACME Q4");
+  expect(sent).toEqual([{ name: "ACME Q4" }]);
+  await expect(page.locator(".statusbar .engagement-name")).toHaveText("ACME Q4");
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});

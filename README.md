@@ -92,7 +92,7 @@ firefox --no-remote --profile ~/.spall-firefox &
 
 Then, in that window: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import `taphttp-ca.pem`, tick "Trust this CA to identify websites", and check the fingerprint. Use your `TAPHTTP_PORT` if you changed it. Firefox doesn't proxy localhost, so spall's UI still loads directly. With `libnss3-tools` installed, `certutil -A -d sql:$HOME/.spall-firefox -n taphttp -t C,, -i taphttp-ca.pem` does the import from the command line.
 
-Set `SPALL_SCOPE` to the hosts you're testing (see [Replay and scope](#replay-and-scope)), or every replay is denied.
+Set `SPALL_SCOPE` to the hosts you're testing before the first start (see [Replay and scope](#replay-and-scope)), or every replay is denied. It seeds the first engagement; after that, change scope from the console.
 
 For a quick demo only, you can skip verification:
 
@@ -152,9 +152,10 @@ cargo run -- --log-file ./traffic.jsonl
 | `--allowed-host` | `SPALL_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` |
 | `--history` | `SPALL_HISTORY` | `1000` (entries replayed to a newly opened page) |
 | `--poll-ms` | `SPALL_POLL_MS` | `250` (log tailing only) |
-| `--scope` | `SPALL_SCOPE` | empty: every replay is denied. `*` allows every host. See [Replay and scope](#replay-and-scope) |
+| `--scope` | `SPALL_SCOPE` | empty: every replay is denied. `*` allows every host. Seeds the first engagement only; see [Engagements](#engagements) |
 | `--safe-methods` | `SPALL_SAFE_METHODS` | `GET,HEAD,OPTIONS` (replay without confirmation) |
 | `--audit-log` | `SPALL_AUDIT_LOG` | `/data/audit.jsonl` (lever API mode; spall won't start if it can't write it) |
+| `--engagements` | `SPALL_ENGAGEMENTS` | `/data/engagements` (lever API mode; created if missing) |
 
 `--allowed-host` is checked against the request's `Host` header to block DNS-rebinding attacks on the local console. Requests for any other host get a 403.
 
@@ -165,11 +166,20 @@ Every request other than GET and HEAD must come from spall's own page: `Content-
 Replay resends a captured request through taphttp. Every attempt goes through one server-side gate, which a human and (later) an agent share:
 
 - **Scope.** Both the request's URL host and its `Host` header must match `--scope`: comma-separated exact hosts (`app.example.test`), wildcards (`*.example.test`, subdomains only), IPs and CIDRs (`10.0.0.0/8`), and exclusions (`!sso.example.test`), which win over every other entry and over `*`: use them for the production database, the third-party SSO or the payment provider inside a wildcard. Internationalized names match in either form (`bücher.test` is `xn--bcher-kva.test`); ports, case, trailing dots, IPv6 zone ids and IPv4-mapped IPv6 addresses don't change a match. Hostnames are never resolved to match a CIDR. With no scope set, nothing is sent: traffic you captured in passing (CDNs, the OAuth provider) stays out of reach. A denial names the current scope and how to widen it.
-- **Changing scope while you work.** In the console: `scope` shows it, `scope add *.whatever.com`, `scope exclude pay.whatever.com` and `scope remove <entry>` (`scope remove !<entry>` lifts an exclusion) edit it, `scope check <url|host>` says whether a target is in, excluded or unknown and which entry decided, and `scope all on` / `scope all off` allow every host (third parties included) or go back. Changes last until spall restarts, are written to the audit log, and can't be made by an agent. `SPALL_SCOPE=*` starts with every host allowed. While every host is in scope, the status bar says so. Unsafe methods still take two presses.
+- **Changing scope while you work.** In the console: `scope` shows it, `scope add *.whatever.com`, `scope exclude pay.whatever.com` and `scope remove <entry>` (`scope remove !<entry>` lifts an exclusion) edit it, `scope check <url|host>` says whether a target is in, excluded or unknown and which entry decided, and `scope all on` / `scope all off` allow every host (third parties included) or go back. Entry changes are saved on the active engagement; every-host lasts until spall restarts or you switch engagements. All of it is written to the audit log and can't be done by an agent. `SPALL_SCOPE=*` starts with every host allowed. While every host is in scope, the status bar says so. Unsafe methods still take two presses.
 - **Unsafe methods.** Anything not in `--safe-methods` needs confirmation. The first request returns 428 with a single-use `confirm` token, valid for 2 minutes and bound to that exact request; sending the same request with it goes through.
 - **Audit.** Every attempt is a line in `--audit-log`, including denials, unconfirmed attempts and failures: time, actor, exchange, method, target, Host header, decision and reason, whether it was confirmed, the outcome, taphttp's status and the resulting exchange. The file is append-only and mode 0600 (URLs can carry tokens).
 
-In compose, set the scope in `.env` (`SPALL_SCOPE=app.example.test`); the audit log is on the `spall-data` volume.
+In compose, set the first scope in `.env` (`SPALL_SCOPE=app.example.test`); the audit log and engagements are on the `spall-data` volume.
+
+### Engagements
+
+The engagement is what you're testing under: a name, the client, start and end dates, when the authorization expires, contacts, notes, and its scope. One is active at a time, and the status bar names it. Engagements are saved as JSON files in `--engagements` (mode 0600; one file each, plus `active`), so scope survives a restart.
+
+- **The first start** creates an engagement from `--scope` / `SPALL_SCOPE`. After that, the saved scope is used. If `SPALL_SCOPE` says something different, spall logs a warning and keeps the engagement's scope. Change it with `scope` in the console, or start a new engagement.
+- **Console:** `engagement` shows the active one, and `engagement list` lists them all. `engagement new "ACME Q4"` creates one and makes it active, with an empty scope. `engagement use <id|name>` switches. `engagement set <name|client|starts|ends|expires|notes> <value>` edits; dates are `YYYY-MM-DD`, and `""` clears one. Switching turns every-host scope off.
+- **Audit:** every change is in the audit log with before and after, and every record names the engagement it was made under. Agents can't create, switch or edit engagements.
+- **A damaged file stops spall.** An engagement file that doesn't parse, or comes from a newer spall, stops startup rather than letting spall start with a different scope. Fix the file or move it aside.
 
 ## Endpoints
 
@@ -177,10 +187,12 @@ In compose, set the scope in `.env` (`SPALL_SCOPE=app.example.test`); the audit 
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`, `replay_of`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
-- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool}` for the status bar
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null}` for the status bar
 - `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope; 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
-- `POST /api/scope`: `{"op": "add" | "exclude" | "remove", "entry": "..."}` or `{"op": "all", "on": bool}`. Same-origin JSON only; audited with the entries before and after; in memory until restart. Returns `{"scope": [...], "all": bool, "changed": bool}`; exclusions are listed as `!entry`
+- `POST /api/scope`: `{"op": "add" | "exclude" | "remove", "entry": "..."}` or `{"op": "all", "on": bool}`. Same-origin JSON only; audited with the entries before and after; entries are saved on the active engagement, `all` lasts until restart. Returns `{"scope": [...], "all": bool, "changed": bool}`; exclusions are listed as `!entry`
 - `GET /api/scope/check?target=<url or host>`: `{"host", "state": "in" | "out" | "unknown", "by": entry | null}`
+- `GET /api/engagement`: the active engagement. `PATCH /api/engagement`: change any of `name`, `client`, `starts`, `ends`, `expires`, `contacts`, `notes`, `target_notes` (not `scope`: use `/api/scope`); returns `{"engagement", "changed"}`
+- `GET /api/engagements`: `[{"id", "name", "client", "active"}]`. `POST /api/engagements`: `{"name", "client"?, "scope"?: [...]}` creates one and makes it active (201). `POST /api/engagements/active`: `{"id": id or name}` switches. All same-origin JSON, audited; 400 bad input, 404 no such engagement, 503 without `--taphttp-api`
 - `GET /api/audit?last=N`: the newest replay attempts from the audit log, oldest first (default 20, at most 500). 503 without `--taphttp-api`
 - `GET /healthz`: `ok`
 

@@ -9,12 +9,14 @@
 
 use crate::audit::{AuditLog, Outcome, Record};
 use crate::confirm::{fingerprint, Confirmations};
+use crate::engagement::{Engagement, Error as EngagementError, New, Patch, Store};
 use crate::gate::{self, Action, Decision, MethodPolicy, Scope};
 use crate::lever::Lever;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use taphttp_types::TrafficEntry;
 
@@ -137,8 +139,8 @@ pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
     }
 }
 
-/// A runtime scope change (#21 follow-up, exclusions #34): in memory
-/// until restart.
+/// A scope change (#21 follow-up, exclusions #34). Entries are saved on
+/// the active engagement (#35); `all` is for the running process only.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub enum ScopeChange {
@@ -160,8 +162,11 @@ pub enum ScopeChange {
 /// Everything the handler needs.
 pub struct Replayer {
     pub lever: Arc<Lever>,
-    /// Starts as --scope / SPALL_SCOPE; changed at runtime by the tester only.
-    pub scope: RwLock<Scope>,
+    /// The engagements; the active one's scope is what the gate enforces.
+    /// Changed by the tester only.
+    pub engagements: Store,
+    /// Every host allowed (`scope all on`, `SPALL_SCOPE=*`): this process only.
+    pub all_hosts: AtomicBool,
     pub policy: MethodPolicy,
     pub confirmations: Confirmations,
     pub audit: AuditLog,
@@ -185,34 +190,40 @@ fn upstream_json(body: &[u8]) -> serde_json::Value {
 impl Replayer {
     /// The scope as it is now (each replay decides on one snapshot).
     pub fn scope_now(&self) -> Scope {
-        self.scope.read().unwrap_or_else(|p| p.into_inner()).clone()
+        self.engagements
+            .scope()
+            .with_all(self.all_hosts.load(Ordering::SeqCst))
     }
 
-    /// Apply a change and audit it. Returns the new scope and whether
-    /// anything changed; `Err` is a message safe to show.
-    pub fn change_scope(&self, change: &ScopeChange) -> Result<(Scope, bool), String> {
-        let mut scope = self.scope.write().unwrap_or_else(|p| p.into_inner());
-        let before = scope.entries();
+    /// Apply a change, save it on the engagement and audit it. Returns the
+    /// new scope and whether anything changed; on error nothing changed.
+    pub fn change_scope(&self, change: &ScopeChange) -> Result<(Scope, bool), EngagementError> {
+        let before = self.scope_now().entries();
         let (changed, what) = match change {
-            ScopeChange::Add { entry } => (scope.add(entry)?, format!("add {}", entry.trim())),
-            ScopeChange::Exclude { entry } => (
-                scope.exclude(entry)?,
-                format!("exclude {}", entry.trim().trim_start_matches('!').trim()),
-            ),
+            ScopeChange::Add { entry } => {
+                let (_, _, c) = self.engagements.change_scope(|s| s.add(entry))?;
+                (c, format!("add {}", entry.trim()))
+            }
+            ScopeChange::Exclude { entry } => {
+                let (_, _, c) = self.engagements.change_scope(|s| s.exclude(entry))?;
+                (
+                    c,
+                    format!("exclude {}", entry.trim().trim_start_matches('!').trim()),
+                )
+            }
             ScopeChange::Remove { entry } => {
-                (scope.remove(entry), format!("remove {}", entry.trim()))
+                let (_, _, c) = self.engagements.change_scope(|s| Ok(s.remove(entry)))?;
+                (c, format!("remove {}", entry.trim()))
             }
             ScopeChange::All { on } => {
-                let changed = scope.allows_all() != *on;
-                *scope = scope.with_all(*on);
+                let was = self.all_hosts.swap(*on, Ordering::SeqCst);
                 (
-                    changed,
+                    was != *on,
                     format!("all hosts {}", if *on { "on" } else { "off" }),
                 )
             }
         };
-        let now = scope.clone();
-        drop(scope);
+        let now = self.scope_now();
         let mut rec = Record::new("scope", "", Outcome::ScopeChanged);
         rec.reason = Some(what);
         rec.scope_all = now.allows_all();
@@ -226,8 +237,61 @@ impl Replayer {
         Ok((now, changed))
     }
 
+    /// Change the active engagement's details; audited with before/after.
+    pub fn update_engagement(&self, patch: Patch) -> Result<(Engagement, bool), EngagementError> {
+        let (e, changes) = self.engagements.update(patch)?;
+        let changed = !changes.is_empty();
+        let mut rec = Record::new("engagement", "", Outcome::EngagementChanged);
+        rec.reason = Some(format!(
+            "set {}",
+            if changed {
+                changes.keys().cloned().collect::<Vec<_>>().join(", ")
+            } else {
+                "nothing".into()
+            }
+        ));
+        rec.changes = changed.then(|| serde_json::to_value(&changes).unwrap_or_default());
+        rec.scope_all = self.scope_now().allows_all();
+        rec.error = (!changed).then(|| "no change".to_string());
+        self.audit(&rec);
+        Ok((e, changed))
+    }
+
+    /// Create an engagement and make it active; audited. Every-host scope
+    /// is switched off: it was a decision about the previous engagement.
+    pub fn create_engagement(&self, new: New) -> Result<Engagement, EngagementError> {
+        let before = self.engagements.active().id;
+        let e = self.engagements.create(new)?;
+        self.switched("new", &before, &e);
+        Ok(e)
+    }
+
+    /// Switch the active engagement (by id or name); audited.
+    pub fn activate_engagement(&self, which: &str) -> Result<Engagement, EngagementError> {
+        let (before, e) = self.engagements.activate(which)?;
+        self.switched("use", &before.id, &e);
+        Ok(e)
+    }
+
+    fn switched(&self, how: &str, before: &str, e: &Engagement) {
+        let was_all = self.all_hosts.swap(false, Ordering::SeqCst);
+        let mut rec = Record::new("engagement", "", Outcome::EngagementChanged);
+        rec.engagement = Some(before.to_string());
+        rec.reason = Some(format!("{how} {}", e.id));
+        rec.changes = Some(serde_json::json!({
+            "active": { "before": before, "after": e.id },
+            "scope_all": { "before": was_all, "after": false },
+        }));
+        rec.scope_after = Some(e.scope.clone());
+        self.audit(&rec);
+    }
+
     fn audit(&self, rec: &Record) {
-        if let Err(e) = self.audit.record(rec) {
+        let mut rec = rec.clone();
+        if rec.engagement.is_none() {
+            rec.engagement = Some(self.engagements.active().id);
+        }
+        if let Err(e) = self.audit.record(&rec) {
             tracing::error!(
                 "audit log {} write failed: {e}",
                 self.audit.path().display()

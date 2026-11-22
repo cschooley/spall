@@ -11,6 +11,7 @@ import { TrafficTable } from "./components/TrafficTable.tsx";
 import { addLine, clearLog, emptyLog, markRead } from "./lib/consoleLog.ts";
 import { toCurl } from "./lib/curl.ts";
 import { durationText, shortId, statusLine } from "./lib/format.ts";
+import { apiJson, asEngagement, asSummaries } from "./lib/engagement.ts";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
 import { applyHeaderEdits, draftOf, replayBodyFor, type Draft } from "./lib/edit.ts";
 import { ARM_MS, armedFor, armLabel, postReplay, type Armed, type ReplayBody } from "./lib/replay.ts";
@@ -402,6 +403,34 @@ export function App() {
           return "spall unreachable";
         }
       },
+      engagement: async () => {
+        const body = await apiJson("/api/engagement");
+        return typeof body === "string" ? body : (asEngagement(body) ?? "unexpected answer");
+      },
+      listEngagements: async () => {
+        const body = await apiJson("/api/engagements");
+        return typeof body === "string" ? body : (asSummaries(body) ?? "unexpected answer");
+      },
+      newEngagement: async (name) => {
+        const body = await apiJson("/api/engagements", { method: "POST", body: { name } });
+        if (typeof body === "string") return body;
+        setStatusNonce((n) => n + 1);
+        return asEngagement(body) ?? "unexpected answer";
+      },
+      useEngagement: async (which) => {
+        const body = await apiJson("/api/engagements/active", { method: "POST", body: { id: which } });
+        if (typeof body === "string") return body;
+        setStatusNonce((n) => n + 1);
+        return asEngagement(body) ?? "unexpected answer";
+      },
+      setEngagement: async (field, value) => {
+        const body = await apiJson("/api/engagement", { method: "PATCH", body: { [field]: value } });
+        if (typeof body === "string") return body;
+        setStatusNonce((n) => n + 1);
+        const o = body as { engagement?: unknown; changed?: unknown };
+        const engagement = asEngagement(o.engagement);
+        return engagement ? { engagement, changed: o.changed === true } : "unexpected answer";
+      },
       checkScope: async (target) => {
         try {
           const res = await fetch(`/api/scope/check?target=${encodeURIComponent(target)}`);
@@ -606,6 +635,11 @@ export function App() {
           )}
           {status.proxy ? <span className="addr">{` ${status.proxy}`}</span> : null}
         </span>
+        {status.engagement ? (
+          <span className="engagement-name" title={`Engagement ${status.engagement.id} (engagement in the console)`}>
+            {status.engagement.name}
+          </span>
+        ) : null}
         {status.scopeAll ? (
           <span className="scope-all" title="Replays may go to any host you captured, third parties included. scope all off in the console.">
             ● scope: all hosts

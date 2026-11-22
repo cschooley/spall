@@ -2,6 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { COMMANDS, complete, execute, paletteItems, tokenize, type Ctx, type OutKind } from "./registry.ts";
 
+const ENG = {
+  id: "acme-q4-1a2b",
+  name: "ACME Q4",
+  client: "ACME",
+  starts: "2026-11-23",
+  ends: "2026-12-04",
+  expires: null,
+  scope: ["*.acme.test", "acme.test", "!pay.acme.test"],
+  notes: "",
+};
+
 function fakeCtx(over: Partial<Ctx> = {}) {
   const lines: [string, OutKind][] = [];
   const calls: string[] = [];
@@ -24,6 +35,14 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     scope: () => ({ entries: ["app.example.test", "*.api.example.test"], all: false }),
     changeScope: async (c) => (calls.push(`scope:${JSON.stringify(c)}`), { scope: ["x.test"], all: c.op === "all" && c.on, changed: true }),
     audit: async (last) => (calls.push(`audit:${last}`), []),
+    engagement: async () => ({ ...ENG }),
+    listEngagements: async () => [
+      { id: "acme-q4-1a2b", name: "ACME Q4", client: "ACME", active: true },
+      { id: "beta-9f00", name: "Beta", client: "", active: false },
+    ],
+    newEngagement: async (name) => (calls.push(`new:${name}`), { ...ENG, id: "n-1", name, scope: [] }),
+    useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
+    setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
     ...over,
   };
@@ -202,6 +221,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
     [
       ["replay", "sends-traffic"],
       ["scope", "policy"],
+      ["engagement", "policy"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");
@@ -271,6 +291,14 @@ test("scope add, remove and all on|off change the scope; bad forms warn", async 
 test("scope exclude and scope check; exclusions are listed apart", async () => {
   const { ctx, lines, calls } = fakeCtx({
     changeScope: async (c) => (calls.push(`scope:${JSON.stringify(c)}`), { scope: ["*.a.test", "!sso.a.test"], all: false, changed: true }),
+    engagement: async () => ({ ...ENG }),
+    listEngagements: async () => [
+      { id: "acme-q4-1a2b", name: "ACME Q4", client: "ACME", active: true },
+      { id: "beta-9f00", name: "Beta", client: "", active: false },
+    ],
+    newEngagement: async (name) => (calls.push(`new:${name}`), { ...ENG, id: "n-1", name, scope: [] }),
+    useEngagement: async (w) => (calls.push(`use:${w}`), { ...ENG, id: "beta-9f00", name: "Beta" }),
+    setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: "sso.a.test", state: "out", by: "!sso.a.test" }),
   });
   await execute("scope exclude sso.a.test", ctx);
@@ -308,4 +336,45 @@ test("hostile hosts from scope check are printed as given, as text", async () =>
   const { ctx, lines } = fakeCtx({ checkScope: async () => ({ host: p, state: "unknown", by: null }) });
   await execute("scope check x", ctx);
   assert.ok(lines.at(-1)![0].startsWith(`${p}: not in scope`));
+});
+
+test("engagement shows the active engagement; list, new, use and set change it", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("engagement", ctx);
+  assert.deepEqual(lines.slice(1), [
+    ["engagement: ACME Q4 (acme-q4-1a2b) · client ACME", "out"],
+    ["dates: 2026-11-23 → 2026-12-04 · authorization expiry not set", "out"],
+    ["scope: 2 entries, 1 excluded (scope lists them)", "out"],
+  ]);
+  lines.length = 0;
+  await execute("engagement list", ctx);
+  assert.deepEqual(lines.slice(1), [
+    ["* ACME Q4 (acme-q4-1a2b) · ACME", "out"],
+    ["  Beta (beta-9f00)", "out"],
+  ]);
+  await execute(`engagement new "Gamma web"`, ctx);
+  assert.match(lines.at(-1)![0], /created Gamma web \(n-1\), now active.*scope add/);
+  await execute("engagement use Beta", ctx);
+  assert.equal(lines.at(-1)![0], "engagement: now Beta (beta-9f00)");
+  await execute("engagement set client ACME Corp", ctx);
+  await execute(`engagement set expires ""`, ctx);
+  assert.deepEqual(calls, ["new:Gamma web", "use:Beta", 'set:client="ACME Corp"', 'set:expires=""']);
+  assert.equal(lines.at(-1)![0], "engagement: expires cleared");
+
+  for (const bad of ["engagement set", "engagement set colour red", "engagement new", "engagement use", "engagement frob"]) {
+    const t = fakeCtx();
+    await execute(bad, t.ctx);
+    assert.equal(t.calls.length, 0, bad);
+    assert.equal(t.lines.at(-1)![1], "warn", bad);
+  }
+  const err = fakeCtx({ setEngagement: async () => "ends: before starts" });
+  await execute("engagement set ends 2026-01-01", err.ctx);
+  assert.deepEqual(err.lines.at(-1), ["engagement: ends: before starts", "warn"]);
+  const off = fakeCtx({ engagement: async () => "engagements need taphttp's lever API" });
+  await execute("engagement", off.ctx);
+  assert.equal(off.lines.at(-1)![1], "warn");
+  const eng = COMMANDS.find((c) => c.name === "engagement")!;
+  assert.equal(eng.risk, "policy");
+  assert.equal(eng.mcp, false, "agents may read the engagement later, never change it");
+  assert.deepEqual(complete("engagement set ").options, ["name", "client", "starts", "ends", "expires", "notes"]);
 });

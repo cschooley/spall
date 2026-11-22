@@ -258,6 +258,16 @@ async fn start_spall_with(
                 .into(),
         );
     }
+    if !extra.contains(&"--engagements") {
+        args.push("--engagements".into());
+        args.push(
+            token_file
+                .with_file_name("engagements")
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+    }
     args.extend(extra.iter().map(|s| s.to_string()));
     let config = spall::config::Config::try_parse_from(args).unwrap();
     tokio::spawn(spall::serve(config, listener));
@@ -508,12 +518,22 @@ async fn history_proxy_is_unavailable_without_api() {
 /// POST `body` to spall as its own page would (JSON, same origin), or with
 /// the given headers instead.
 async fn post_text(addr: SocketAddr, path: &str, body: &str, headers: Option<&str>) -> String {
+    send_text(addr, "POST", path, body, headers).await
+}
+
+async fn send_text(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    body: &str,
+    headers: Option<&str>,
+) -> String {
     let headers = headers.unwrap_or(
         "Content-Type: application/json\r\nOrigin: http://127.0.0.1\r\nSec-Fetch-Site: same-origin\r\n",
     );
     let mut s = TcpStream::connect(addr).await.unwrap();
     let req = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     s.write_all(req.as_bytes()).await.unwrap();
@@ -591,15 +611,25 @@ async fn out_of_scope_replays_never_reach_taphttp() {
     write_token(&token);
     let (stub, api) = start_stub().await;
     stub.push("e1");
-    for scope in ["other.test", ""] {
-        let spall = start_spall_with(Some(api), &token, &["--scope", scope]).await;
+    for (i, scope) in ["other.test", ""].into_iter().enumerate() {
+        // Each run gets its own engagement store: --scope only seeds a new one.
+        let store = dir.path().join(format!("engagements-{i}"));
+        let flags = ["--scope", scope, "--engagements", store.to_str().unwrap()];
+        let spall = start_spall_with(Some(api), &token, &flags).await;
         eventually("backfill", || !stub.exchange_queries().is_empty()).await;
         let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
         assert!(res.starts_with("HTTP/1.1 403"), "{scope:?}: {res}");
         assert_eq!(body_json(&res)["decision"], "deny");
     }
     // A Host header edit to an out-of-scope virtual host is denied too.
-    let spall = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    let store = dir.path().join("engagements-host");
+    let flags = [
+        "--scope",
+        "example.com",
+        "--engagements",
+        store.to_str().unwrap(),
+    ];
+    let spall = start_spall_with(Some(api), &token, &flags).await;
     let res = post_text(
         spall,
         "/api/replay",
@@ -765,6 +795,8 @@ async fn an_unwritable_audit_log_stops_spall_in_api_mode() {
         token.to_str().unwrap(),
         "--audit-log",
         audit.to_str().unwrap(),
+        "--engagements",
+        dir.path().join("engagements").to_str().unwrap(),
     ])
     .unwrap();
     let r = tokio::time::timeout(Duration::from_secs(5), spall::serve(config, listener))
@@ -1017,4 +1049,215 @@ async fn an_exclusion_blocks_the_next_replay_and_is_audited_before_and_after() {
         serde_json::json!(["example.com", "*.example.com", "!example.com"])
     );
     assert_eq!(changes.last().unwrap()["reason"], "remove !example.com");
+}
+
+#[tokio::test]
+async fn scope_lives_on_the_engagement_and_survives_a_restart() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1"); // http://example.com/e1
+    let spall = start_spall_with(Some(api), &token, &["--scope", "other.test,*"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(
+        status["engagement"]["name"], "Engagement",
+        "bootstrapped from --scope"
+    );
+    post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"add","entry":"example.com"}"#,
+        None,
+    )
+    .await;
+    post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"exclude","entry":"pay.example.com"}"#,
+        None,
+    )
+    .await;
+
+    // A second spall on the same data: the engagement's scope wins over a
+    // different --scope, and `*` was never saved.
+    let again = start_spall_with(Some(api), &token, &["--scope", "nothing.test"]).await;
+    eventually("second backfill", || stub.exchange_queries().len() >= 2).await;
+    let status = body_json(&get_text(again, "/api/status").await);
+    assert_eq!(
+        status["scope"],
+        serde_json::json!(["other.test", "example.com", "!pay.example.com"])
+    );
+    assert_eq!(status["scope_all"], false);
+    let res = post_text(again, "/api/replay", r#"{"id":"e1"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let rec = audit_records(&token)
+        .into_iter()
+        .rfind(|r| r["action"] == "replay")
+        .unwrap();
+    assert_eq!(
+        rec["engagement"], status["engagement"]["id"],
+        "every record names the engagement"
+    );
+}
+
+#[tokio::test]
+async fn engagements_are_edited_created_and_switched_through_the_api_and_audited() {
+    let (dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let token = dir.path().join("api-token");
+    let e = body_json(&get_text(spall, "/api/engagement").await);
+    let first = e["id"].as_str().unwrap().to_string();
+    assert_eq!(e["scope"], serde_json::json!(["example.com"]));
+
+    let patch = |body: &'static str| send_text(spall, "PATCH", "/api/engagement", body, None);
+    let res =
+        patch(r#"{"name":"ACME Q4","client":"ACME","starts":"2026-11-23","ends":"2026-12-04"}"#)
+            .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert_eq!(body_json(&res)["engagement"]["name"], "ACME Q4");
+    for (bad, want) in [
+        (r#"{"ends":"2026-11-01"}"#, "ends: before starts"),
+        (r#"{"scope":["x.test"]}"#, "POST /api/scope"),
+        (r#"{"starts":"tomorrow"}"#, "YYYY-MM-DD"),
+    ] {
+        let res = patch(bad).await;
+        assert!(res.starts_with("HTTP/1.1 400"), "{bad}: {res}");
+        assert!(
+            body_json(&res)["error"].as_str().unwrap().contains(want),
+            "{bad}: {res}"
+        );
+    }
+    let forged = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"name":"pwned"}"#,
+        Some("Content-Type: application/json\r\nOrigin: http://evil.example\r\n"),
+    )
+    .await;
+    assert!(forged.starts_with("HTTP/1.1 403"), "{forged}");
+
+    post_text(spall, "/api/scope", r#"{"op":"all","on":true}"#, None).await;
+    patch(r#"{"notes":"every host on"}"#).await;
+    let created = post_text(
+        spall,
+        "/api/engagements",
+        r#"{"name":"Beta retest","scope":["beta.test","!sso.beta.test"]}"#,
+        None,
+    )
+    .await;
+    assert!(created.starts_with("HTTP/1.1 201"), "{created}");
+    let beta = body_json(&created)["id"].as_str().unwrap().to_string();
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["engagement"]["id"], beta.as_str());
+    assert_eq!(
+        status["scope"],
+        serde_json::json!(["beta.test", "!sso.beta.test"])
+    );
+    assert_eq!(
+        status["scope_all"], false,
+        "switching engagements turns every-host off"
+    );
+    let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
+    assert!(
+        res.starts_with("HTTP/1.1 403"),
+        "example.com isn't in the new engagement: {res}"
+    );
+
+    let list = body_json(&get_text(spall, "/api/engagements").await);
+    let names: Vec<_> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| (x["name"].as_str().unwrap(), x["active"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(names, [("Beta retest", true), ("ACME Q4", false)]);
+    let back = post_text(
+        spall,
+        "/api/engagements/active",
+        r#"{"id":"acme q4"}"#,
+        None,
+    )
+    .await;
+    assert!(back.starts_with("HTTP/1.1 200"), "{back}");
+    assert!(post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let missing = post_text(spall, "/api/engagements/active", r#"{"id":"nope"}"#, None).await;
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+    let recs: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "engagement")
+        .collect();
+    let reasons: Vec<_> = recs
+        .iter()
+        .map(|r| r["reason"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "set client, ends, name, starts".to_string(),
+            "set notes".into(),
+            format!("new {beta}"),
+            format!("use {first}")
+        ]
+    );
+    assert_eq!(
+        recs[0]["changes"]["name"],
+        serde_json::json!({ "before": "Engagement", "after": "ACME Q4" })
+    );
+    assert_eq!(
+        (
+            recs[0]["scope_all"].as_bool(),
+            recs[1]["scope_all"].as_bool()
+        ),
+        (Some(false), Some(true))
+    );
+    assert_eq!(
+        recs[2]["scope_all"], false,
+        "recorded after the switch turned it off"
+    );
+    assert_eq!(recs[2]["changes"]["scope_all"]["before"], true);
+    assert_eq!(
+        recs[2]["engagement"],
+        first.as_str(),
+        "recorded under the engagement it was made from"
+    );
+}
+
+#[tokio::test]
+async fn a_corrupt_engagement_stops_spall_instead_of_resetting_scope() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let store = dir.path().join("engagements");
+    std::fs::create_dir(&store).unwrap();
+    std::fs::write(store.join("active"), "x").unwrap();
+    std::fs::write(store.join("x.json"), "{ torn").unwrap();
+    let (_stub, api) = start_stub().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let config = spall::config::Config::try_parse_from([
+        "spall",
+        "--taphttp-api",
+        &format!("http://{api}"),
+        "--taphttp-token-file",
+        token.to_str().unwrap(),
+        "--audit-log",
+        dir.path().join("audit.jsonl").to_str().unwrap(),
+        "--engagements",
+        store.to_str().unwrap(),
+        "--scope",
+        "*",
+    ])
+    .unwrap();
+    let r = tokio::time::timeout(Duration::from_secs(5), spall::serve(config, listener))
+        .await
+        .expect("serve should fail fast");
+    let err = format!("{:#}", r.unwrap_err());
+    assert!(
+        err.contains("engagements") && err.contains("not JSON"),
+        "{err}"
+    );
 }
