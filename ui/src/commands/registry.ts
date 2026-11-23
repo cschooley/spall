@@ -7,6 +7,7 @@ import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
 import type { HostListing } from "../lib/hosts.ts";
 import { ruleLine, searchRules, type Catalog } from "../lib/rules.ts";
+import { parseFlagArgs, stateOf, where, type FlagInput, type FlagResult } from "../lib/candidates.ts";
 import type { CaInfo } from "../lib/ca.ts";
 import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
@@ -48,6 +49,8 @@ export interface Ctx {
   openSetup(): void;
   /** Hosts seen in traffic with their scope state (#39), or an error message. */
   hosts(): Promise<HostListing | string>;
+  /** Flag an exchange as a candidate (#43). */
+  flag(i: FlagInput): Promise<FlagResult>;
   /** The rule catalog (#41), or why not. */
   rules(): Promise<Catalog | string>;
   /** Open the Engagement view's paste-a-scope-list panel (#38), or the OpenAPI import (#40). */
@@ -199,11 +202,12 @@ function parseReplayArgs(args: string[]): { id?: string; yes: boolean; edit?: Re
 
 /**
  * What running a command can do (#22), for MCP grants and approvals (M6):
- * read (the UI or spall's state), sends-traffic (to a target, through the
- * gate), unsafe-method (could change state there), destructive, policy
+ * read (the UI or spall's state), record (changes spall's own records,
+ * such as candidates; sends nothing), sends-traffic (to a target, through
+ * the gate), unsafe-method (could change state there), destructive, policy
  * (changes the rules of engagement: never offered to an agent).
  */
-export type Risk = "read" | "sends-traffic" | "unsafe-method" | "destructive" | "policy";
+export type Risk = "read" | "record" | "sends-traffic" | "unsafe-method" | "destructive" | "policy";
 
 export interface Command {
   /** Stable identifier, shared with MCP (M5). Never a UI label. */
@@ -494,6 +498,31 @@ export const COMMANDS: readonly Command[] = [
       }
       if (unknownOnly && l.counts.unknown) ctx.out("decide them in the Engagement view, or: scope add|exclude <host>", "sys");
       if (l.dropped) ctx.out(`${l.dropped} more hosts not tracked (table full)`, "sys");
+    },
+  },
+  {
+    name: "flag",
+    usage: "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N]",
+    desc: "flag an exchange as a candidate finding (rules lists rule ids); it waits in Findings for triage",
+    group: "traffic",
+    // Agents propose through propose_finding (M6), never flag.
+    mcp: false,
+    risk: "record",
+    palette: { label: "Flag exchange as candidate…", hint: "flag", needsArgs: true },
+    complete: (args) => (args.length >= 2 ? ["--rule", "--param", "--level", "--rank", "--message", "--replay", "--cwe"] : []),
+    run: async (args, ctx) => {
+      const i = parseFlagArgs(args);
+      if (typeof i === "string") return ctx.out(i, "warn");
+      const r = await ctx.flag(i);
+      if (r.kind === "error") return ctx.out(`flag: ${r.message}`, "warn");
+      const c = r.candidate;
+      if (r.kind === "created") {
+        ctx.out(`flagged ${c.id}: ${c.ruleId} · ${where(c)}`);
+        ctx.out("waiting for triage in Findings (5)", "sys");
+        return;
+      }
+      ctx.out(`flag: already flagged as ${c.id} (${c.ruleId}, ${stateOf(c)})${c.suppressed ? `: ${c.suppressed.justification}` : ""}`, "warn");
+      ctx.out(c.suppressed ? "reopen it in Findings if that decision no longer holds" : "add this exchange to its evidence from the inspector (f)", "sys");
     },
   },
   {

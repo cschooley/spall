@@ -19,6 +19,7 @@ export function ShortcutSheet({ consoleKey, onClose }: { consoleKey: string; onC
     [["j", "k"], "Next / previous row"],
     [["⏎"], "Replay (unsafe methods: press twice)"],
     [["e"], "Edit & replay"],
+    [["f"], "Flag as candidate"],
     [["Esc"], "Close the inspector"],
     [["x"], "Hex view (binary body)"],
   ];

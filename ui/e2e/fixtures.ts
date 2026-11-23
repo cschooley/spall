@@ -60,10 +60,20 @@ export const test = base.extend<{ guard: void }>({
         const refusedChange =
           /^Failed to load resource: the server responded with a status of 400\b/.test(m.text()) &&
           m.location().url.endsWith("/api/engagement");
-        if (gateAnswer || refusedChange) return;
+        // Flagging a candidate that exists answers 409 with it (#43, #46);
+        // a refused triage step (no justification) is a 400.
+        const candidateAnswer =
+          /^Failed to load resource: the server responded with a status of (400|409)\b/.test(m.text()) &&
+          /\/api\/candidates(\/[^/?]+)?$/.test(m.location().url);
+        if (gateAnswer || refusedChange || candidateAnswer) return;
         if (m.type() === "error" || m.type() === "warning") problems.push(`console ${m.type()}: ${m.text()}`);
       });
       page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));
+      // Tests that mock a lever-connected spall (replay: true) make the
+      // inspector ask for the exchange's candidates; spall in log mode has
+      // none. Tests that need candidates mock them (candidates-api.ts),
+      // which takes precedence over this.
+      await page.route(/\/api\/candidates\?exchange=/, (r) => r.fulfill({ json: { candidates: [] } }));
       page.on("dialog", async (d) => {
         problems.push(`dialog: ${d.type()} ${d.message()}`);
         await d.dismiss();

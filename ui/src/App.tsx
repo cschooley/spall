@@ -37,6 +37,7 @@ import { useSourceStatus } from "./useStatus.ts";
 import { useHosts } from "./useHosts.ts";
 import { asListing, stateLookup } from "./lib/hosts.ts";
 import { loadCatalog } from "./lib/rules.ts";
+import { flag as flagCandidate } from "./lib/candidates.ts";
 import { asCaInfo } from "./lib/ca.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
@@ -462,6 +463,11 @@ export function App() {
         window.location.hash = "engagement/ca";
       },
       rules: loadCatalog,
+      flag: async (i) => {
+        const r = await flagCandidate(i);
+        if (r.kind === "created") setStatusNonce((n) => n + 1);
+        return r;
+      },
       hosts: async () => {
         const body = await apiJson("/api/hosts");
         return typeof body === "string" ? body : (asListing(body) ?? "unexpected answer");
@@ -568,6 +574,7 @@ export function App() {
       else if (e.key === "k") move(-1);
       else if (e.key === "x") document.querySelector<HTMLButtonElement>(".inspector [data-action='hex']")?.click();
       else if (e.key === "e") document.querySelector<HTMLButtonElement>(".inspector [data-action='edit']")?.click();
+      else if (e.key === "f") document.querySelector<HTMLButtonElement>(".inspector [data-action='flag']")?.click();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -686,6 +693,7 @@ export function App() {
               initialTab={openTab?.id === selected.id ? openTab.tab : "request"}
               replays={replayList}
               chain={chain}
+              candidates={{ available: status.replay, onChanged: () => setStatusNonce((n) => n + 1) }}
               replay={{
                 available: status.replay,
                 busy: replayBusy === selected.id,
@@ -718,6 +726,11 @@ export function App() {
           <span className="engagement-name" title={`Engagement ${status.engagement.id} (engagement in the console)`}>
             {status.engagement.name}
           </span>
+        ) : null}
+        {status.toTriage ? (
+          <a className="to-triage" href="#findings" title="Candidates waiting for your decision (Findings, 5)">
+            {`${status.toTriage} to triage`}
+          </a>
         ) : null}
         {status.testing && !status.testing.allowed ? (
           <span className="testing-closed" title={status.testing.reason ?? "The rules of engagement don't allow testing now (roe in the console)."}>

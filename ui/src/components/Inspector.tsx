@@ -1,9 +1,11 @@
 // The shared right-hand inspector (docs/ux.md: "One inspector"): one
 // exchange, request/response tabs, headers, bodies, replay (M2), copy as
-// curl, save body. Flag candidate (M4) lands here later, not as a row
-// action. Every value is attacker-controlled and rendered as text.
+// curl, save body, flag as candidate (M4, here and never on a row). Every
+// value is attacker-controlled and rendered as text.
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import { FlagForm } from "./FlagForm.tsx";
+import { listCandidates, stateOf, type Candidate } from "../lib/candidates.ts";
 import { Body } from "./Body.tsx";
 import { Compare } from "./Compare.tsx";
 import { RequestEditor } from "./RequestEditor.tsx";
@@ -36,6 +38,13 @@ export interface ReplayList {
   error: string | null;
 }
 
+/** Candidates for this exchange (#43): spall keeps them in lever API mode. */
+export interface CandidateControl {
+  available: boolean;
+  /** A candidate was created or changed (status bar counts). */
+  onChanged(): void;
+}
+
 /** The replay control's state, owned by the app (the console shares it). */
 export interface ReplayControl {
   /** spall can replay (lever API mode). */
@@ -60,8 +69,10 @@ export function Inspector({
   chain,
   original,
   initialTab = "request",
+  candidates,
 }: {
   entry: TrafficEntry;
+  candidates: CandidateControl;
   onClose: () => void;
   replay: ReplayControl;
   replays: ReplayList;
@@ -83,6 +94,17 @@ export function Inspector({
     setTab("request");
     setDraft(draftOf(entry));
   };
+  const [flagging, setFlagging] = useState(false);
+  const [mine, setMine] = useState<Candidate[]>([]);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    if (!candidates.available) return;
+    let live = true;
+    void listCandidates(entry.id).then((l) => live && setMine(typeof l === "string" ? [] : l));
+    return () => {
+      live = false;
+    };
+  }, [entry.id, candidates.available, nonce]);
   const [copied, setCopied] = useState<"idle" | "ok" | "failed">("idle");
   const [idCopied, setIdCopied] = useState(false);
 
@@ -161,7 +183,7 @@ export function Inspector({
           ×
         </button>
       </header>
-      {draft ? null : (
+      {draft || flagging ? null : (
         <div className="actions">
           <button
             type="button"
@@ -177,6 +199,18 @@ export function Inspector({
           <button type="button" data-action="edit" disabled={!replay.available} title="Edit, then replay (e)" onClick={startEditing}>
             Edit & replay <kbd>e</kbd>
           </button>
+          <button
+            type="button"
+            data-action="flag"
+            disabled={!candidates.available}
+            title={candidates.available ? "Flag as candidate (f)" : "Candidates need taphttp's lever API"}
+            onClick={() => {
+              setDraftState(null);
+              setFlagging(true);
+            }}
+          >
+            Flag <kbd>f</kbd>
+          </button>
           <button type="button" onClick={copyCurl}>
             {copied === "ok" ? "copied" : copied === "failed" ? "copy failed" : "Copy as curl"}
           </button>
@@ -190,6 +224,18 @@ export function Inspector({
           ) : null}
         </div>
       )}
+      {mine.length ? (
+        <ul className="cands" aria-label="Candidates for this exchange">
+          {mine.map((c) => (
+            <li key={c.id}>
+              <a href={`#findings/${encodeURIComponent(c.id)}`} title={c.message}>
+                {`${c.id} · ${c.ruleId}`}
+              </a>
+              <span className={`state st-${stateOf(c).replace(/ /g, "-")}`}>{stateOf(c)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="tabs" role="tablist">
         {(entry.replay_of ? (["request", "response", "replays", "compare"] as const) : (["request", "response", "replays"] as const)).map((t) => (
           <button key={t} type="button" role="tab" aria-selected={tab === t} className={tab === t ? "on" : undefined} onClick={() => setTab(t)}>
@@ -199,7 +245,17 @@ export function Inspector({
         ))}
       </div>
       <section className="pane" role="tabpanel" aria-label={tab}>
-        {tab === "replays" ? (
+        {flagging ? (
+          <FlagForm
+            entry={entry}
+            replays={replays.items}
+            onCancel={() => setFlagging(false)}
+            onChanged={() => {
+              setNonce((n) => n + 1);
+              candidates.onChanged();
+            }}
+          />
+        ) : tab === "replays" ? (
           <Replays entry={entry} list={replays} onOpen={onOpen} />
         ) : tab === "compare" ? (
           original ? (

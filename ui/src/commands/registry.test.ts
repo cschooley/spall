@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_RULES } from "../lib/roe.ts";
+import { asCandidate } from "../lib/candidates.ts";
+import { RAW } from "../lib/candidates.fixture.ts";
 import { COMMANDS, complete, execute, paletteItems, tokenize, type Ctx, type OutKind } from "./registry.ts";
 
 const ENG = {
@@ -52,6 +54,10 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     openScopePaste: (what = "paste") => void calls.push(what),
     ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" }),
     openSetup: () => void calls.push("setup"),
+    flag: async (i) => {
+      calls.push(`flag:${JSON.stringify(i)}`);
+      return { kind: "created", candidate: asCandidate(RAW)! };
+    },
     rules: async () => ({
       wstg: "4.2",
       attribution: "OWASP WSTG v4.2 (CC BY-SA 4.0)",
@@ -241,7 +247,7 @@ test("audit prints the newest attempts, one line each", async () => {
 });
 
 test("every command has a risk class; replay sends traffic and scope changes policy", () => {
-  const RISKS = ["read", "sends-traffic", "unsafe-method", "destructive", "policy"];
+  const RISKS = ["read", "record", "sends-traffic", "unsafe-method", "destructive", "policy"];
   for (const c of COMMANDS) assert.ok(RISKS.includes(c.risk), c.name);
   assert.deepEqual(
     COMMANDS.filter((c) => c.risk !== "read").map((c) => [c.name, c.risk]),
@@ -250,6 +256,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["scope", "policy"],
       ["engagement", "policy"],
       ["roe", "policy"],
+      ["flag", "record"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");
@@ -552,4 +559,21 @@ test("rules lists the catalog, or what matches", async () => {
   const r = COMMANDS.find((c) => c.name === "rules")!;
   assert.equal(r.mcp, true);
   assert.equal(r.risk, "read");
+});
+
+test("flag files a candidate; a match says where it stands; never MCP", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("flag e1 --rule WSTG-INPV-05 --param sort --level error", ctx);
+  assert.deepEqual(calls, ['flag:{"exchange":"e1","rule":"WSTG-INPV-05","parameter":"sort","level":"error"}']);
+  assert.deepEqual(lines.slice(1).map(([t]) => t), ["flagged c-0a1b2c3d: WSTG-INPV-05 · GET https://shop.test/api/p/17 · parameter sort", "waiting for triage in Findings (5)"]);
+  const rejected = asCandidate({ ...RAW, finding: { ...RAW.finding, suppressions: [{ kind: "external", status: "accepted", justification: "output is encoded", properties: { "flux/disposition": "falsePositive" } }] } })!;
+  const dup = fakeCtx({ flag: async () => ({ kind: "exists", candidate: rejected, message: "already" }) });
+  await execute("flag e1 --rule WSTG-INPV-05", dup.ctx);
+  assert.deepEqual(dup.lines[1], ["flag: already flagged as c-0a1b2c3d (WSTG-INPV-05, rejected): output is encoded", "warn"]);
+  const bad = fakeCtx();
+  await execute("flag e1", bad.ctx);
+  assert.equal(bad.lines[1]![1], "warn");
+  assert.deepEqual(bad.calls, []);
+  const f = COMMANDS.find((c) => c.name === "flag")!;
+  assert.equal(f.mcp, false);
 });

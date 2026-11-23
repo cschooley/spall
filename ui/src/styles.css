@@ -374,6 +374,7 @@ button.link:hover { color: var(--vg-text-primary); background: none; }
 
 /* scope all on: every host is in scope, so say so where it's always seen. */
 .statusbar .scope-all, .statusbar .testing-closed { color: var(--vg-accent-rust); font-weight: 600; }
+.statusbar a.to-triage { color: var(--vg-accent-rust); font-weight: 600; text-decoration: none; }
 .statusbar .engagement-name { color: var(--vg-text-secondary); max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Compare (#20). Added: verdigris; removed: rust; volatile: muted. */
@@ -474,7 +475,7 @@ td.host .sc { display: inline-block; width: 1.2em; font-size: 9px; vertical-alig
 .eng .setup h4:first-child { margin-top: 0; }
 .eng .setup dd.fp { font-size: var(--vg-text-xs); letter-spacing: .02em; }
 .eng .setup .actions { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); margin: var(--vg-space-3) 0; }
-.eng .setup a.button { display: inline-flex; align-items: center; height: 26px; padding: 0 var(--vg-space-3); border: 1px solid var(--vg-border-strong); border-radius: var(--vg-radius-sm); color: var(--vg-text-primary); text-decoration: none; font: var(--vg-text-sm) var(--vg-font-mono); }
+.eng .setup a.button, .flag a.button, .findings a.button { display: inline-flex; align-items: center; height: 26px; padding: 0 var(--vg-space-3); border: 1px solid var(--vg-border-strong); border-radius: var(--vg-radius-sm); color: var(--vg-text-primary); text-decoration: none; font: var(--vg-text-sm) var(--vg-font-mono); }
 .eng .setup a.button:hover { background: var(--vg-bg-raised); }
 .eng .setup details { margin: var(--vg-space-2) 0; font: var(--vg-text-sm)/1.5 var(--vg-font-sans); color: var(--vg-text-secondary); }
 .eng .setup summary { cursor: pointer; color: var(--vg-text-primary); }
@@ -482,3 +483,31 @@ td.host .sc { display: inline-block; width: 1.2em; font-size: 9px; vertical-alig
 .eng .setup .warn-box { margin: var(--vg-space-3) 0; padding: var(--vg-space-2) var(--vg-space-3); border-left: 2px solid var(--vg-accent-rust); color: var(--vg-text-secondary); font: var(--vg-text-sm)/1.5 var(--vg-font-sans); }
 .eng .setup .ok { color: var(--vg-accent-verdigris); font: var(--vg-text-sm) var(--vg-font-mono); overflow-wrap: anywhere; }
 .empty a { color: var(--vg-accent-verdigris); }
+
+/* Flag as candidate (#43), in the inspector. */
+.flag { display: grid; gap: var(--vg-space-3); }
+.flag h3 { margin: 0; }
+.flag label { display: grid; gap: var(--vg-space-1); color: var(--vg-text-secondary); font: var(--vg-text-xs) var(--vg-font-sans); }
+.flag label.check { display: flex; align-items: center; gap: var(--vg-space-2); font-family: var(--vg-font-mono); }
+.flag input:not([type="checkbox"]), .flag textarea, .flag select {
+  box-sizing: border-box; width: 100%; min-width: 0; padding: var(--vg-space-1) var(--vg-space-2);
+  background: var(--vg-bg-sunken); color: var(--vg-text-primary);
+  border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm);
+  font: var(--vg-text-sm) var(--vg-font-mono);
+}
+.flag textarea { resize: vertical; }
+.flag fieldset { margin: 0; padding: var(--vg-space-2) var(--vg-space-3); border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm); }
+.flag legend { color: var(--vg-text-tertiary); font: var(--vg-text-xs) var(--vg-font-sans); }
+.flag .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(14ch, 1fr)); gap: var(--vg-space-2); }
+.flag .note.wrap { margin: 0; white-space: normal; overflow-wrap: anywhere; color: var(--vg-text-tertiary); font: var(--vg-text-xs) var(--vg-font-mono); }
+.flag .row-actions { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); }
+.flag .ok { color: var(--vg-accent-verdigris); }
+.flag .badge-prev { margin: 0; color: var(--vg-accent-rust); font: 500 var(--vg-text-sm) var(--vg-font-mono); }
+.flag .why { margin: 0; padding: var(--vg-space-2) var(--vg-space-3); background: var(--vg-bg-sunken); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--vg-text-sm) var(--vg-font-mono); }
+.flag .error { color: var(--vg-status-4xx); }
+/* This exchange's candidates, under the inspector's actions. */
+.cands { display: flex; flex-wrap: wrap; gap: var(--vg-space-2) var(--vg-space-4); margin: 0; padding: var(--vg-space-2) var(--vg-space-5); list-style: none; border-bottom: 1px solid var(--vg-border-subtle); font: var(--vg-text-xs) var(--vg-font-mono); }
+.cands a { color: var(--vg-text-primary); }
+.state { margin-left: var(--vg-space-2); color: var(--vg-text-tertiary); }
+.state.st-to-triage { color: var(--vg-accent-rust); }
+.state.st-confirmed { color: var(--vg-accent-verdigris); }

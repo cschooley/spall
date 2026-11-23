@@ -18,9 +18,11 @@ export interface SourceStatus {
   engagement: { id: string; name: string } | null;
   /** Whether the rules of engagement allow testing now (#36), and why not. */
   testing: { allowed: boolean; reason: string | null } | null;
+  /** Candidates waiting for a decision (#47); null without the lever API. */
+  toTriage: number | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -39,6 +41,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           scope_all?: boolean;
           engagement?: { id?: unknown; name?: unknown } | null;
           testing?: unknown;
+          to_triage?: unknown;
         };
         const e = body.engagement;
         if (!live) return;
@@ -51,6 +54,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           scopeAll: body.scope_all === true,
           engagement: e && typeof e.id === "string" && typeof e.name === "string" ? { id: e.id, name: e.name } : null,
           testing: testingOf(body.testing),
+          toTriage: typeof body.to_triage === "number" && Number.isInteger(body.to_triage) && body.to_triage >= 0 ? body.to_triage : null,
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });
