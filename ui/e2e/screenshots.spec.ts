@@ -6,6 +6,7 @@
 // (engagement-api.ts) to look like a lever-connected spall mid-engagement.
 import { append, entry, expect, test } from "./fixtures.ts";
 import { days, engagementApi } from "./engagement-api.ts";
+import { candidatesApi, findingFor, type Stored } from "./candidates-api.ts";
 import type { Page } from "@playwright/test";
 import type { TrafficEntry } from "../src/types.ts";
 
@@ -69,7 +70,7 @@ const HOSTS = [
 
 // A lever-connected spall with an engagement under way. `traffic` is what
 // taphttp's history holds (the same entries are appended to the log).
-async function midEngagement(page: Page, traffic: TrafficEntry[] = []) {
+async function midEngagement(page: Page, traffic: TrafficEntry[] = [], toTriage = 0) {
   const api = engagementApi(page, {
     name: "Example Shop Q4",
     client: "Example Corp",
@@ -128,6 +129,8 @@ async function midEngagement(page: Page, traffic: TrafficEntry[] = []) {
         scope_all: false,
         engagement: { id: api.e.id, name: api.e.name },
         testing: { allowed: true, reason: null },
+        to_triage: toTriage,
+        flux: { crate: "v0.1.0", spec: "draft v0.4", rules: "OWASP WSTG v4.2" },
       },
     }),
   );
@@ -223,4 +226,40 @@ test("paste a scope list", async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
   await page.mouse.move(0, 0);
   await page.screenshot({ path: `${OUT}engagement-paste.png` });
+});
+
+test("findings: the triage queue", async ({ page }) => {
+  const rows = mockupTraffic();
+  const at = (i: number) => rows[i]!;
+  const c = (n: number, rule: string, i: number, param: string | undefined, message: string, extra: Record<string, unknown> = {}): Stored => ({
+    id: `c-${(0x3a91c200 + n).toString(16)}`,
+    created: at(i).ts,
+    updated: at(i).ts,
+    flagged_by: "human",
+    finding: { ...findingFor(rule, at(i), param), message: { text: message }, ...extra },
+  });
+  const seed = [
+    c(1, "WSTG-ATHN-03", 2, "username", "No lockout: 40 failed logins for admin in a minute, all 401, never 429."),
+    c(2, "WSTG-ERRH-01", 12, undefined, "A malformed query returns a stack trace naming the resolver and ORM.", { level: "warning" }),
+    c(3, "WSTG-ATHZ-04", 5, "cart id", "Another user's cart (8841) can be updated by changing the id.", { level: "error", rank: 90 }),
+    c(4, "WSTG-INPV-05", 3, "page", "page=2' returns a database error; boolean conditions change the result count.", { level: "error", rank: 70 }),
+    c(5, "WSTG-ATHZ-03", 8, undefined, "PATCH /v1/users/me accepts role=owner (403 only for the UI's own request).", {
+      suppressions: [{ kind: "external", status: "accepted", justification: "403 is enforced server-side; the role field is ignored. Retested with the owner's token.", properties: { "flux/disposition": "falsePositive" } }],
+    }),
+  ];
+  seed[2]!.finding.properties["flux/status"] = "confirmed";
+  seed[2]!.finding.correlationGuid = "3b0c8f0e-6a52-4c1e-9d0a-2f6a1b7c9e41";
+  seed[3]!.finding.properties["flux/replayIds"] = [at(3).id];
+  candidatesApi(page, { entries: rows, seed });
+  await midEngagement(page, rows, 3);
+  append(...rows);
+  await page.setViewportSize({ width: 1440, height: 820 });
+  await page.goto(`/#findings/${seed[3]!.id}`);
+  await expect(page.getByRole("complementary", { name: "Candidate" }).locator("h2")).toContainText("WSTG-INPV-05");
+  await page.getByRole("tab", { name: /to triage/ }).click();
+  await page.getByRole("list", { name: "Candidates" }).locator("li", { hasText: "WSTG-INPV-05" }).getByRole("button").click();
+  await expect(page.getByRole("group", { name: "Evidence" }).locator("li")).toHaveCount(1);
+  await page.evaluate(() => document.fonts.ready);
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: `${OUT}findings.png` });
 });

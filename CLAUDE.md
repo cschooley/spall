@@ -107,36 +107,31 @@ the recorded replay, never sent upstream (spall sends `{"actor":
 `/ca.der` give the public CA. Recorded `req_headers` are what went on
 the wire: hyper groups a repeated header name at its first position.
 
-## Current milestone: M4 "candidates"
+**M4 "candidates": done** (tag `v0.5.0`, #48: #41-#47, #16). Rule
+catalog (`src/rules.rs`: 74 WSTG v4.2 tests mapped to CWE, plus
+`spall/other`); candidates as `flux::Finding`s per engagement
+(`src/candidates.rs`, `<engagements>/candidates/<id>.json`; flag, 409 on
+a matching fingerprint, triage ops, audited as `CandidateChanged`);
+flag from the inspector (`f`, `FlagForm.tsx`) and console (`flag`,
+risk `record`, never MCP); the Findings view (`FindingsView.tsx`,
+`lib/findings.ts`: keyboard triage `c`/`r`/`a`/`d`/`o`); evidence
+(`Evidence.tsx`, compare via `lib/diff.ts`); "waiting on you"; the
+launcher's taphttp and flux details. Browser tests mock candidates with
+`ui/e2e/candidates-api.ts`.
 
-Goal (docs/architecture.md): candidates and triage on flux types.
-Lights up the **Findings** rail icon. Tracker #48; issues roughly in
-order:
+## Current milestone: M5 "export"
 
-- **#41** rule catalog: WSTG v4.2 test ids as `ruleId`s, each mapped to
-  a CWE, built as `flux::Rule` values; `spall/other` as the escape
-  hatch; WSTG attribution (CC BY-SA 4.0) shown.
-- **#42** candidate store: `flux::Finding`s per engagement, API, audit.
-  Adopt the `flux` crate (git tag `v0.1.0`) and re-vendor
-  `docs/flux/SPEC.md` here.
-- **#43** flag as candidate: inspector `f`, console `flag`; `mcp: false`.
-- **#44** Findings view: keyboard triage (`c`, `r`, `a`, `d`; reject,
-  accept and duplicate need a justification), via flux `Suppression`.
-- **#45** evidence pane (appended, never replaced; diff from `diff.ts`).
-- **#46** suppressions stick (fingerprint match → badge, not re-raised).
-- **#47** "waiting on you" lights up for candidates.
-- **#16** decide what the taphttp and flux launcher tiles show.
+Goal (docs/architecture.md): flux export of promoted findings, with
+redaction and fingerprints, and a redaction preview in Findings. No
+issues filed yet. Needs redaction in the flux crate first (flux v0.2:
+headers, bodies, URLs; JWT, bearer and API-key patterns; `flux/redacted`),
+so start there, in cschooley/flux, and re-vendor `docs/flux/SPEC.md`.
+Then spall: promotion (a human action, never MCP), export of a flux
+`Report` (driver rules from `rules::flux_rules`), the preview, and the
+credential highlighting in the inspector taken from flux's list.
 
-The flux crate (cschooley/flux v0.1.0): `Finding` (a SARIF result),
-`Report` (a SARIF log), `fingerprint::dast_v1` / `sast_v1`,
-`validate::validate`. Redaction is not in it yet (flux v0.2, needed
-before M5 export). If spall needs something flux lacks, add it to flux
-(and its SPEC.md) rather than working around it here.
-
-Explicitly not in M4: promotion and export, redaction preview (M5);
-MCP, `propose_finding`, agent tasks (M6); flux in from the Kudzu
-platform (M8). Unbuilt views and tools stay dimmed, inert placeholders
-(docs/ux.md) until they ship.
+Open questions to raise, not decide alone: making Engagement the home
+view now that "waiting on you" has content (docs/ux.md).
 
 ## Testing
 

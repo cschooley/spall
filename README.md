@@ -5,13 +5,13 @@
 
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
-**Status:** pre-alpha, v0.4.0. Done: M1 (traffic workbench), M2 (replay) and M3 (engagement). Next: M4 (candidates and triage, on flux types). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
+**Status:** pre-alpha, v0.5.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement) and M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types). Next: M5 (flux export with redaction). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
 ## Screenshots
 
-### Today: Engagement and Traffic (M1-M3)
+### Today: Engagement, Traffic and Findings (M1-M4)
 
 Screenshots use fixture traffic and a sample engagement; regenerate them with `npm --prefix ui run screenshots`.
 
@@ -27,6 +27,10 @@ Screenshots use fixture traffic and a sample engagement; regenerate them with `n
 
 ![spall Engagement view](docs/screenshots/engagement.png)
 
+**Findings.** Candidates flagged from the inspector (`f`) wait here for triage: confirm, reject, accept the risk or mark a duplicate from the keyboard, each decision with its justification. Every candidate is a flux finding with its evidence.
+
+![spall Findings view](docs/screenshots/findings.png)
+
 **Paste a scope list.** Straight from a statement of work: every line previewed before anything changes.
 
 ![Pasting a scope list](docs/screenshots/engagement-paste.png)
@@ -39,7 +43,7 @@ Screenshots use fixture traffic and a sample engagement; regenerate them with `n
 
 Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
 
-**Traffic.** Still to come: attribution on every exchange (you or the agent) and Flag as candidate in the inspector (M4).
+**Traffic.** Still to come: attribution on every exchange (you or the agent, M6).
 
 ![Mockup: Traffic view](docs/screenshots/mockup-traffic.png)
 
@@ -47,7 +51,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 
 ![Mockup: Tasks view](docs/screenshots/mockup-tasks.png)
 
-**Findings.** A triage inbox. The agent proposes, a human confirms, rejects or marks duplicate, with evidence and a redacted export preview.
+**Findings.** The agent proposes (M6), a human confirms, rejects or marks duplicate, with evidence and a redacted export preview (M5).
 
 ![Mockup: Findings view](docs/screenshots/mockup-findings.png)
 
@@ -296,8 +300,8 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 | M1 traffic workbench | Traffic view: history and search from taphttp's API, filters, shared inspector, command palette and console, verdigris styling | done, `v0.2.0` |
 | M2 replay | Replay from the inspector and console via taphttp, edit before sending, compare with the original, Replays tab; server-side action gate (scope, method policy, confirmation, audit) | done, `v0.3.0` |
 | M3 engagement | The engagement as root object: scope with exclusions, rules of engagement the gate enforces (windows, rate, methods), paste a scope list, hosts from traffic, OpenAPI import, browser setup with the CA; Engagement view | done, `v0.4.0` |
-| M4 candidates | Flag candidates, keyboard triage, evidence, suppressions, on [flux](https://github.com/cschooley/flux) crate types; WSTG v4.2 rule ids (#48) | current |
-| M5 export | flux export with redaction and fingerprints | |
+| M4 candidates | Flag candidates, keyboard triage, evidence, suppressions, on [flux](https://github.com/cschooley/flux) crate types; WSTG v4.2 rule ids (#48) | done, `v0.5.0` |
+| M5 export | flux export with redaction and fingerprints; redaction preview | next |
 | M6 agent | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop, quad; execution sandbox and OOB listener | |
 | M7 intercept | Pause and modify requests via taphttp | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses; route maps (Surface) | |

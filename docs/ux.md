@@ -32,7 +32,7 @@ Not a stats dashboard. A **"what needs me now"** page.
 - **Coverage at a glance:** endpoints seen vs. endpoints actually tested
 - **Activity timeline:** yours and the agent's, interleaved
 
-Built thin first in M3 (#37): the engagement's details, scope (with exclusions, target notes and a check box), rules of engagement, a "testing now" chip and an expiry countdown, engagement switching, and dimmed placeholders for the panels above that later milestones fill. Traffic stays the default view until "waiting on you" has content (M4); `1` and `2` switch, and the location hash (`#engagement`) remembers the view. verdigris has no Engagement mockup yet; the view borrows the tasks and findings mockups' sections, `dl` grids and chips.
+Built thin first in M3 (#37): the engagement's details, scope (with exclusions, target notes and a check box), rules of engagement, a "testing now" chip and an expiry countdown, engagement switching, and dimmed placeholders for the panels above that later milestones fill. Traffic stays the default view for now, though "waiting on you" has content since M4 (making Engagement the home is open); `1` and `2` switch, and the location hash (`#engagement`) remembers the view. verdigris has no Engagement mockup yet; the view borrows the tasks and findings mockups' sections, `dl` grids and chips.
 
 ### 2. Traffic
 
@@ -196,7 +196,7 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 |---|---|
 | Traffic (history, filters, inspector) | M1 (done) |
 | Replay in inspector | M2 (done) |
-| Findings (manual flagging, triage, suppressions) | M4 (next, #48) |
+| Findings (manual flagging, triage, suppressions) | M4 (done) |
 | Flux export with redaction preview | M5 |
 | Tasks + MCP, e-stop, approval gates | M6 |
 | Intake chat, orchestrator plans, roles | M6 |

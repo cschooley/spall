@@ -526,8 +526,9 @@ td.host .sc { display: inline-block; width: 1.2em; font-size: 9px; vertical-alig
 main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .findings { display: grid; grid-template-columns: minmax(0, 1fr) min(520px, 50%); height: 100%; min-height: 0; }
 .findings > .empty { grid-column: 1 / -1; }
-.findings .queue { display: grid; grid-template-rows: 40px auto auto minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
-.findings .toolbar { grid-column: auto; }
+.findings .queue { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.findings .toolbar { grid-column: auto; flex: 0 0 40px; }
+.findings .qlist { flex: 1 1 auto; }
 .findings .inspector { grid-column: 2; grid-row: 1; }
 .qtabs { display: flex; padding: 0 var(--vg-space-5); border-bottom: 1px solid var(--vg-border-subtle); }
 .qtabs button {
@@ -540,7 +541,7 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .qlist li { border-bottom: 1px solid var(--vg-bg-surface); }
 .qlist li.sel { background: var(--vg-bg-raised); box-shadow: inset 2px 0 0 var(--vg-accent-rust); }
 .qlist button {
-  display: grid; grid-template-columns: 8ch 13ch minmax(0, 1fr) auto; gap: var(--vg-space-3); align-items: baseline;
+  display: grid; grid-template-columns: 8ch max-content minmax(0, 1fr) auto; gap: var(--vg-space-3); align-items: baseline;
   width: 100%; height: auto; padding: var(--vg-space-2) var(--vg-space-5); border: 0; border-radius: 0; background: none;
   text-align: left; color: var(--vg-text-primary); font: var(--vg-text-sm) var(--vg-font-mono);
 }
@@ -555,6 +556,8 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .cand h2 { word-break: break-all; }
 .cand .msg { margin: 0 0 var(--vg-space-3); white-space: pre-wrap; overflow-wrap: anywhere; font: var(--vg-text-sm) var(--vg-font-mono); }
 .cand .why { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cand .kv dd { word-break: normal; overflow-wrap: anywhere; }
+.qlist .rule { white-space: nowrap; }
 .cand .ok-msg { flex-basis: 100%; margin: 0; color: var(--vg-accent-verdigris); font: var(--vg-text-xs) var(--vg-font-mono); }
 .cand .note.wrap { white-space: normal; color: var(--vg-text-tertiary); font: var(--vg-text-xs) var(--vg-font-mono); }
 .ask { display: grid; gap: var(--vg-space-2); margin-bottom: var(--vg-space-4); padding: var(--vg-space-3); border: 1px solid var(--vg-accent-rust); border-radius: var(--vg-radius-sm); }
