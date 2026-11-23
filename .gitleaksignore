@@ -1,0 +1,4 @@
+# Fake credentials in tests, there to be redacted; reviewed, not secrets.
+# Format: <commit>:<file>:<rule>:<line>
+# src/candidates.rs export test fixture (token=abcdef123456), before it was marked gitleaks:allow in 45719d1.
+e1d114471d8117eae2cbfbc24dff0a15631aee03:src/candidates.rs:generic-api-key:1186
