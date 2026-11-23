@@ -34,7 +34,7 @@ test("tabs split the queue by where each stands", () => {
   assert.deepEqual(ids("confirmed"), ["c-2"]);
   assert.deepEqual(ids("decided"), ["c-3", "c-4"]);
   assert.equal(ids("all").length, 5);
-  assert.deepEqual(tabCounts(LIST), { "to triage": 2, confirmed: 1, decided: 2, all: 5 });
+  assert.deepEqual(tabCounts(LIST), { "to triage": 2, confirmed: 1, promoted: 0, decided: 2, all: 5 });
 });
 
 test("the queue's filter terms", () => {

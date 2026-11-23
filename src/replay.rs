@@ -183,6 +183,9 @@ pub struct Replayer {
     pub audit: AuditLog,
     /// Candidates flagged in each engagement (#42).
     pub candidates: crate::candidates::Store,
+    /// `--allow-unredacted-export`: the opt-in an unredacted export needs
+    /// on top of asking for one (#51).
+    pub allow_unredacted_export: bool,
 }
 
 fn json(status: StatusCode, body: serde_json::Value) -> Response {
@@ -407,6 +410,7 @@ impl Replayer {
             created: now.clone(),
             updated: now,
             flagged_by: "human".into(),
+            promoted: None,
             finding,
         };
         let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
@@ -425,6 +429,98 @@ impl Replayer {
                 error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
             }
         }
+    }
+
+    /// Candidate `id` as it would be exported, and what redaction changes
+    /// (#49). Nothing is stored or sent.
+    pub fn redaction(&self, id: &str) -> Response {
+        let eng = self.engagements.active().id;
+        let Some(c) = self.candidates.get(&eng, id) else {
+            return error(StatusCode::NOT_FOUND, &format!("no candidate {id}"));
+        };
+        let (finding, changes) = flux::redact::preview(&c.finding);
+        json(
+            StatusCode::OK,
+            serde_json::json!({ "id": c.id, "finding": finding, "changes": changes }),
+        )
+    }
+
+    /// Export the promoted candidates as a flux report (#51): redacted,
+    /// or unredacted only with `--allow-unredacted-export` and an explicit
+    /// ask. Audited either way.
+    pub fn export(&self, unredacted: bool) -> Response {
+        let eng = self.engagements.active().id;
+        let mut rec = Record::new("export", "", Outcome::Exported);
+        if unredacted && !self.allow_unredacted_export {
+            rec.decision = Some("deny");
+            rec.error = Some("unredacted export without --allow-unredacted-export".into());
+            self.audit(&rec);
+            return error(
+                StatusCode::FORBIDDEN,
+                "an unredacted export needs spall started with --allow-unredacted-export",
+            );
+        }
+        let list: Vec<_> = self.candidates.list(&eng).into_iter().rev().collect();
+        let ex = match crate::candidates::export(&list, !unredacted, env!("CARGO_PKG_VERSION")) {
+            Ok(ex) => ex,
+            Err(problems) => {
+                rec.error = Some(format!("not valid flux: {}", problems.join("; ")));
+                self.audit(&rec);
+                return json(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    serde_json::json!({ "error": "the export isn't valid flux", "problems": problems }),
+                );
+            }
+        };
+        if ex.findings == 0 {
+            rec.error = Some("nothing promoted".into());
+            self.audit(&rec);
+            return error(
+                StatusCode::CONFLICT,
+                "nothing promoted to export (promote confirmed candidates first)",
+            );
+        }
+        rec.reason = Some(format!(
+            "exported {} finding{} ({})",
+            ex.findings,
+            if ex.findings == 1 { "" } else { "s" },
+            if unredacted {
+                "UNREDACTED".to_string()
+            } else {
+                format!("redacted, {} secrets replaced", ex.redactions)
+            }
+        ));
+        let body = match serde_json::to_vec_pretty(&ex.report) {
+            Ok(b) => b,
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        };
+        self.audit(&rec);
+        let date: String = taphttp_types::Timestamp::now()
+            .to_string()
+            .chars()
+            .take(10)
+            .filter(|c| *c != '-')
+            .collect();
+        let name = format!(
+            "spall-{eng}-{date}{}.sarif",
+            if unredacted { "-UNREDACTED" } else { "" }
+        );
+        (
+            StatusCode::OK,
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/sarif+json".to_string(),
+                ),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{name}\""),
+                ),
+                (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+            ],
+            body,
+        )
+            .into_response()
     }
 
     /// Triage or edit candidate `id` (#42, #44). Audited with before/after.

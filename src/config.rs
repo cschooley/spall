@@ -78,6 +78,13 @@ pub struct Config {
     #[arg(long, env = "SPALL_ENGAGEMENTS", default_value = "/data/engagements")]
     pub engagements: PathBuf,
 
+    /// Allow exporting findings unredacted (#51), when an export also asks
+    /// for it. Off by default: exports are redacted (flux), and an
+    /// unredacted one is marked `flux/redacted: false` so consumers can
+    /// refuse it. Captured credentials end up in that file.
+    #[arg(long, env = "SPALL_ALLOW_UNREDACTED_EXPORT")]
+    pub allow_unredacted_export: bool,
+
     /// How often to check the log file for new data, in milliseconds
     #[arg(long, env = "SPALL_POLL_MS", default_value_t = 250, value_parser = clap::value_parser!(u64).range(10..))]
     pub poll_ms: u64,

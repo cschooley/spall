@@ -63,8 +63,8 @@ export const test = base.extend<{ guard: void }>({
         // Flagging a candidate that exists answers 409 with it (#43, #46);
         // a refused triage step (no justification) is a 400.
         const candidateAnswer =
-          /^Failed to load resource: the server responded with a status of (400|409)\b/.test(m.text()) &&
-          /\/api\/candidates(\/[^/?]+)?$/.test(m.location().url);
+          /^Failed to load resource: the server responded with a status of (400|403|409)\b/.test(m.text()) &&
+          /\/api\/(candidates(\/[^/?]+)?|export)$/.test(m.location().url);
         // Evidence that taphttp no longer has is a 404 on purpose (#45).
         const goneEvidence =
           /^Failed to load resource: the server responded with a status of 404\b/.test(m.text()) && /\/api\/exchanges\/[^/?]+$/.test(m.location().url);

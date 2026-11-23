@@ -1,12 +1,28 @@
 // The Findings view (#44, docs/ux.md §5): a triage inbox you can clear from
 // the keyboard. A queue of candidates on the left; the selected one on the
 // right, in the inspector's place. c confirms; r rejects, a accepts the
-// risk and d marks a duplicate, each with a justification; o reopens.
-// Promotion and export are M5. Every string shown came from captured
-// traffic or a tester: text only.
+// risk and d marks a duplicate, each with a justification; o reopens; p
+// promotes a confirmed one for export (#50), which is a human's call. The
+// Export button writes the promoted ones as a redacted flux report (#51);
+// each candidate shows what redaction will strip (#49). Every string shown
+// came from captured traffic or a tester: text only.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { change, listCandidates, LEVELS, stateOf, where, type Candidate, type Level, type Op } from "../lib/candidates.ts";
+import {
+  change,
+  exportFindings,
+  listCandidates,
+  LEVELS,
+  promotable,
+  redactionPreview,
+  stateOf,
+  where,
+  type Candidate,
+  type Level,
+  type Op,
+  type RedactionPreview,
+} from "../lib/candidates.ts";
+import { saveBytes } from "../lib/download.ts";
 import { candidateFromHash, duplicateTargets, nextAfter, queue, tabCounts, TABS, type Tab } from "../lib/findings.ts";
 import { loadCatalog, type Rule } from "../lib/rules.ts";
 import { timeOf } from "../lib/format.ts";
@@ -20,8 +36,11 @@ export function FindingsView({
   available,
   onChanged,
   onOpenExchange,
+  exportInfo,
 }: {
   available: boolean;
+  /** Promoted count and the unredacted opt-in, from /api/status. */
+  exportInfo: { promoted: number; unredactedAllowed: boolean } | null;
   /** A candidate changed (status bar counts). */
   onChanged(): void;
   /** Open an exchange in Traffic's inspector. */
@@ -35,6 +54,21 @@ export function FindingsView({
   const [msg, setMsg] = useState<{ text: string; bad: boolean } | null>(null);
   const [rules, setRules] = useState<Rule[]>([]);
   const filterRef = useRef<HTMLInputElement>(null);
+  const [armedRaw, setArmedRaw] = useState(false);
+
+  const doExport = async (unredacted: boolean) => {
+    if (unredacted && !armedRaw) {
+      setArmedRaw(true);
+      setTimeout(() => setArmedRaw(false), 5000);
+      return;
+    }
+    setArmedRaw(false);
+    const r = await exportFindings(unredacted);
+    if (r.kind === "error") return setMsg({ text: `export: ${r.message}`, bad: true });
+    saveBytes(r.bytes, r.name);
+    setMsg({ text: `exported ${r.name}${unredacted ? " (UNREDACTED: contains captured credentials)" : " (redacted)"}`, bad: unredacted });
+    onChanged();
+  };
 
   const reload = useCallback(async () => {
     const l = await listCandidates();
@@ -122,6 +156,8 @@ export function FindingsView({
         e.preventDefault();
         setAsking({ kind: k === "r" ? "reject" : k === "a" ? "accept" : "duplicate" });
       } else if (k === "o" && current.suppressed) void act({ op: "reopen" });
+      else if (k === "p" && current.promoted) void act({ op: "unpromote" });
+      else if (k === "p" && promotable(current)) void act({ op: "promote" });
       else if (k === "Escape" && asking) setAsking(null);
       else return;
     };
@@ -151,6 +187,26 @@ export function FindingsView({
             onChange={(ev) => setQuery(ev.target.value)}
             onKeyDown={(ev) => ev.key === "Escape" && ev.currentTarget.blur()}
           />
+          <button
+            type="button"
+            className="export"
+            disabled={!counts.promoted}
+            title="Promoted findings as a flux (SARIF 2.1.0) report, redacted"
+            onClick={() => void doExport(false)}
+          >
+            {`Export ${counts.promoted} promoted`}
+          </button>
+          {exportInfo?.unredactedAllowed ? (
+            <button
+              type="button"
+              className={armedRaw ? "export raw armed" : "export raw"}
+              disabled={!counts.promoted}
+              title="spall was started with --allow-unredacted-export. The file will contain captured credentials."
+              onClick={() => void doExport(true)}
+            >
+              {armedRaw ? "press again: export UNREDACTED" : "unredacted…"}
+            </button>
+          ) : null}
         </div>
         <div className="qtabs" role="tablist" aria-label="Queue">
           {TABS.map((t) => (
@@ -187,7 +243,7 @@ export function FindingsView({
             </li>
           ))}
         </ol>
-        <p className="note keys">j/k move · c confirm · r reject · a accept risk · d duplicate · o reopen · / filter</p>
+        <p className="note keys">j/k move · c confirm · r reject · a accept risk · d duplicate · o reopen · p promote · / filter</p>
       </div>
 
       {current ? (
@@ -222,6 +278,15 @@ export function FindingsView({
                 Reopen <kbd>o</kbd>
               </button>
             ) : null}
+            {current.promoted ? (
+              <button type="button" onClick={() => void act({ op: "unpromote" })}>
+                Unpromote <kbd>p</kbd>
+              </button>
+            ) : (
+              <button type="button" disabled={!promotable(current)} title="Mark a confirmed finding for export" onClick={() => void act({ op: "promote" })}>
+                Promote <kbd>p</kbd>
+              </button>
+            )}
             <button type="button" onClick={() => setAsking({ kind: "edit" })}>
               Edit
             </button>
@@ -268,9 +333,16 @@ export function FindingsView({
               ) : null}
               <dt>updated</dt>
               <dd>{timeOf(current.updated)}</dd>
+              {current.promoted ? (
+                <>
+                  <dt>promoted</dt>
+                  <dd>{`${timeOf(current.promoted)} · in the next export`}</dd>
+                </>
+              ) : null}
             </dl>
             <Evidence key={current.id} candidate={current} onOpenExchange={onOpenExchange} onAdd={(ids) => void act({ op: "evidence", exchanges: ids })} />
-            <p className="note wrap">Export as flux, redacted, comes in M5. Promotion is always a human's call.</p>
+            <Redaction key={`${current.id}-${current.updated}`} id={current.id} />
+            <p className="note wrap">Promotion is always a human's call. Exports are redacted unless spall was started with --allow-unredacted-export and you ask twice.</p>
           </section>
         </aside>
       ) : null}
@@ -391,5 +463,43 @@ function Ask({
         </button>
       </div>
     </form>
+  );
+}
+
+/** What an export would strip from this candidate (#49). */
+function Redaction({ id }: { id: string }) {
+  const [p, setP] = useState<RedactionPreview | string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void redactionPreview(id).then((r) => live && setP(r));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  return (
+    <div className="redaction" role="group" aria-label="Redaction preview">
+      <h3>
+        Redaction preview <span className="note">· what an export replaces with [REDACTED:kind]</span>
+      </h3>
+      {p === null ? <p className="none">…</p> : null}
+      {typeof p === "string" ? <p className="error">{p}</p> : null}
+      {p && typeof p !== "string" ? (
+        p.changes.length ? (
+          <>
+            <ul className="red-list" aria-label="Redactions">
+              {p.changes.map((c, i) => (
+                <li key={i}>
+                  <span className="at">{c.at}</span>
+                  <span className="kind">{`[REDACTED:${c.kind}]`}</span>
+                </li>
+              ))}
+            </ul>
+            {p.target ? <p className="note wrap">{`exported target: ${p.target}`}</p> : null}
+          </>
+        ) : (
+          <p className="none">Nothing to redact.</p>
+        )
+      ) : null}
+    </div>
   );
 }

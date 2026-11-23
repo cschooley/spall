@@ -582,3 +582,12 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .eng .waiting h4 a { color: var(--vg-accent-rust); text-decoration: none; }
 .eng .waiting .entries li { display: flex; flex-wrap: wrap; gap: var(--vg-space-1) var(--vg-space-3); }
 .eng .waiting a { color: var(--vg-text-primary); }
+/* Export (#51) and the redaction preview (#49). */
+.findings .toolbar .export { white-space: nowrap; }
+.findings .toolbar .export.raw { color: var(--vg-text-tertiary); }
+.findings .toolbar .export.raw.armed { border-color: var(--vg-accent-rust); color: var(--vg-accent-rust); }
+.redaction { margin-top: var(--vg-space-4); }
+.red-list { margin: 0 0 var(--vg-space-2); padding: 0; list-style: none; font: var(--vg-text-xs) var(--vg-font-mono); }
+.red-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--vg-space-1) var(--vg-space-3); padding: 2px 0; border-bottom: 1px solid var(--vg-bg-surface); }
+.red-list .at { color: var(--vg-text-secondary); overflow-wrap: anywhere; }
+.red-list .kind { color: var(--vg-accent-rust); }

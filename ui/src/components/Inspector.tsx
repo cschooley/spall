@@ -26,6 +26,7 @@ import {
 } from "../lib/format.ts";
 import { toCurl } from "../lib/curl.ts";
 import { isSecretHeader } from "../lib/secrets.ts";
+import { saveBytes } from "../lib/download.ts";
 import type { Header, TrafficEntry } from "../types.ts";
 
 export type Tab = "request" | "response" | "replays" | "compare";
@@ -360,14 +361,4 @@ function Headers({ headers }: { headers: Header[] }) {
 
 function safeName(id: string): string {
   return id.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 40) || "exchange";
-}
-
-/** Download bytes as a file. Typed as octet-stream so nothing renders it. */
-function saveBytes(bytes: Uint8Array<ArrayBuffer>, filename: string) {
-  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

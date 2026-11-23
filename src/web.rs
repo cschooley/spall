@@ -89,6 +89,12 @@ pub fn router(state: AppState) -> Router {
             "/api/candidates/{id}",
             axum::routing::patch(api_candidate_patch),
         )
+        .route(
+            "/api/candidates/{id}/redaction",
+            get(api_candidate_redaction),
+        )
+        .route("/api/export", post(api_export))
+        .route("/api/redaction", get(api_redaction))
         .route("/api/ca", get(api_ca))
         .route("/api/ca.pem", get(api_ca_pem))
         .route("/api/ca.der", get(api_ca_der))
@@ -268,6 +274,13 @@ async fn api_status(State(state): State<AppState>) -> Response {
     });
     // Candidates waiting for a decision (#47): not yet confirmed, not
     // suppressed.
+    body["export"] = match &state.replayer {
+        Some(r) => serde_json::json!({
+            "promoted": r.candidates(None).iter().filter(|c| c.promoted.is_some() && c.promotable()).count(),
+            "unredacted_allowed": r.allow_unredacted_export,
+        }),
+        None => serde_json::Value::Null,
+    };
     body["to_triage"] = match &state.replayer {
         Some(r) => r
             .candidates(None)
@@ -500,6 +513,46 @@ async fn api_candidate_patch(
             &format!("not a candidate change: {e}"),
         ),
     }
+}
+
+/// A candidate as it would be exported, and what redaction changes (#49).
+async fn api_candidate_redaction(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_candidates();
+    };
+    r.redaction(&id)
+}
+
+/// Export the promoted candidates as a flux report (#51):
+/// `{"unredacted"?: bool}`. Same-origin JSON; audited.
+async fn api_export(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_candidates();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Ask {
+        #[serde(default)]
+        unredacted: bool,
+    }
+    match serde_json::from_slice::<Ask>(&body) {
+        Ok(ask) => r.export(ask.unredacted),
+        Err(_) => json_error(StatusCode::BAD_REQUEST, r#"want {"unredacted"?: bool}"#),
+    }
+}
+
+/// What flux redacts (#49), for the inspector's credential highlighting:
+/// the secret header names and the sensitive parameter names.
+async fn api_redaction() -> Response {
+    let headers: Vec<&str> = flux::redact::SECRET_HEADERS
+        .iter()
+        .map(|(h, _)| *h)
+        .collect();
+    let names: Vec<&str> = flux::redact::SECRET_NAMES.iter().map(|(n, _)| *n).collect();
+    axum::Json(serde_json::json!({ "headers": headers, "names": names })).into_response()
 }
 
 /// The rule catalog (#41): WSTG v4.2 ids, titles, CWE and help links.

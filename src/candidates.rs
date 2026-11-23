@@ -40,10 +40,22 @@ pub struct Candidate {
     pub updated: String,
     /// `human` now; agents (M6) will be `agent:<task>`.
     pub flagged_by: String,
+    /// When a human promoted it for export (#50); never an agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted: Option<String>,
     pub finding: Finding,
 }
 
 impl Candidate {
+    /// Can be promoted: confirmed (or suspected) and not suppressed (flux
+    /// SPEC.md, "Flows": promotion).
+    pub fn promotable(&self) -> bool {
+        matches!(
+            self.finding.status(),
+            Some(Status::Confirmed) | Some(Status::Suspected)
+        ) && !self.finding.is_suppressed()
+    }
+
     pub fn parameter(&self) -> Option<&str> {
         self.finding.properties.extra.get(PARAMETER_KEY)?.as_str()
     }
@@ -132,11 +144,18 @@ pub enum Op {
     /// Real: `flux/status: confirmed`, and a `correlationGuid` if it has none.
     Confirm,
     /// Not real (false positive).
-    Reject { justification: String },
+    Reject {
+        justification: String,
+    },
     /// Real, and the risk is accepted.
-    Accept { justification: String },
+    Accept {
+        justification: String,
+    },
     /// The same issue as candidate `of`.
-    Duplicate { of: String, justification: String },
+    Duplicate {
+        of: String,
+        justification: String,
+    },
     /// Undo a reject, accept or duplicate: its suppressions are removed.
     Reopen,
     Edit {
@@ -148,7 +167,12 @@ pub enum Op {
         message: Option<String>,
     },
     /// More exchanges backing it: appended, never replacing.
-    Evidence { exchanges: Vec<String> },
+    Evidence {
+        exchanges: Vec<String>,
+    },
+    /// Mark it for export (#50). A human's call, never an agent's.
+    Promote,
+    Unpromote,
 }
 
 impl Op {
@@ -161,6 +185,8 @@ impl Op {
             Op::Reopen => "reopen",
             Op::Edit { .. } => "edit",
             Op::Evidence { .. } => "evidence",
+            Op::Promote => "promote",
+            Op::Unpromote => "unpromote",
         }
     }
 }
@@ -328,6 +354,31 @@ fn step(
     now: &str,
     guid: &mut dyn FnMut() -> String,
 ) -> Result<(), Error> {
+    match op {
+        Op::Promote => {
+            if !c.promotable() {
+                return Err(Error::Invalid(
+                    "only a confirmed candidate that isn't rejected, accepted or a duplicate can be promoted".into(),
+                ));
+            }
+            c.promoted = Some(now.into());
+            return Ok(());
+        }
+        Op::Unpromote => {
+            if c.promoted.take().is_none() {
+                return Err(Error::Invalid("not promoted".into()));
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+    // A decision against it takes it out of the export.
+    if matches!(
+        op,
+        Op::Reject { .. } | Op::Accept { .. } | Op::Duplicate { .. }
+    ) {
+        c.promoted = None;
+    }
     let f = &mut c.finding;
     let suppress = |f: &mut Finding, s: Suppression| {
         // One decision in effect at a time: a new one replaces the last.
@@ -406,8 +457,51 @@ fn step(
             let p = f.provenance.get_or_insert_with(Provenance::default);
             p.last_detection_time_utc = Some(now.into());
         }
+        Op::Promote | Op::Unpromote => {}
     }
     Ok(())
+}
+
+/// An export (#51): the promoted findings as a flux report.
+pub struct Export {
+    pub report: flux::Report,
+    pub findings: usize,
+    /// Secrets replaced (0 for an unredacted export).
+    pub redactions: usize,
+}
+
+/// The promoted, still-promotable candidates of `list` (stored order,
+/// oldest first) as a flux report from spall `version`: redacted, or, only
+/// when the caller has checked the opt-in, marked `flux/redacted: false`.
+/// The report is validated; problems are returned instead of a report.
+pub fn export(list: &[Candidate], redacted: bool, version: &str) -> Result<Export, Vec<String>> {
+    let mut findings: Vec<Finding> = list
+        .iter()
+        .filter(|c| c.promoted.is_some() && c.promotable())
+        .map(|c| c.finding.clone())
+        .collect();
+    let mut redactions = 0;
+    for f in &mut findings {
+        if redacted {
+            redactions += flux::redact::redact_finding(f).len();
+        } else {
+            flux::redact::mark_unredacted(f);
+        }
+    }
+    let mut driver = flux::ToolComponent::tool("spall", version);
+    driver.information_uri = Some("https://github.com/cschooley/spall".into());
+    driver.rules = crate::rules::flux_rules(findings.iter().map(|f| f.rule_id.as_str()));
+    let n = findings.len();
+    let report = flux::Report::new(driver, findings);
+    let problems = flux::validate::validate(&report);
+    if !problems.is_empty() {
+        return Err(problems.iter().map(ToString::to_string).collect());
+    }
+    Ok(Export {
+        report,
+        findings: n,
+        redactions,
+    })
 }
 
 /// `(host, path)` of a URL as the fingerprint wants them: host lowercased
@@ -653,6 +747,7 @@ mod tests {
             created: NOW.into(),
             updated: NOW.into(),
             flagged_by: "human".into(),
+            promoted: None,
             finding: finding_for(rule, &flag(rule.id, param), &entry("ex-1", url), NOW),
         }
     }
@@ -1029,6 +1124,105 @@ mod tests {
             fs::write(path.join("eng-1.json"), &bad).unwrap();
             assert!(Store::open(&path).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn promotion_needs_a_confirmed_undecided_candidate_and_a_decision_undoes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut g = guids();
+        store
+            .add("eng", candidate("c-1", "https://a.test/x", Some("q")))
+            .unwrap();
+        assert!(
+            matches!(
+                store.apply("eng", "c-1", &Op::Promote, "t", &mut g),
+                Err(Error::Invalid(_))
+            ),
+            "not confirmed"
+        );
+        store
+            .apply("eng", "c-1", &Op::Confirm, "t", &mut g)
+            .unwrap();
+        let (_, p) = store
+            .apply("eng", "c-1", &Op::Promote, "t2", &mut g)
+            .unwrap();
+        assert_eq!(p.promoted.as_deref(), Some("t2"));
+        let (_, u) = store
+            .apply("eng", "c-1", &Op::Unpromote, "t3", &mut g)
+            .unwrap();
+        assert_eq!(u.promoted, None);
+        assert!(store
+            .apply("eng", "c-1", &Op::Unpromote, "t", &mut g)
+            .is_err());
+        store
+            .apply("eng", "c-1", &Op::Promote, "t4", &mut g)
+            .unwrap();
+        let (_, a) = store
+            .apply(
+                "eng",
+                "c-1",
+                &Op::Accept {
+                    justification: "internal".into(),
+                },
+                "t5",
+                &mut g,
+            )
+            .unwrap();
+        assert_eq!(
+            a.promoted, None,
+            "a decision against it takes it out of the export"
+        );
+        assert!(
+            store
+                .apply("eng", "c-1", &Op::Promote, "t", &mut g)
+                .is_err(),
+            "suppressed"
+        );
+    }
+
+    #[test]
+    fn exports_are_valid_flux_redacted_or_marked() {
+        let mut c = candidate("c-1", "https://a.test/x?token=abcdef123456", Some("q"));
+        c.finding.properties.status = Some(Status::Confirmed);
+        c.promoted = Some(NOW.into());
+        let not_promoted = candidate("c-2", "https://a.test/y", None);
+        let list = vec![c.clone(), not_promoted];
+
+        let ex = export(&list, true, "0.5.0").unwrap();
+        assert_eq!(ex.findings, 1);
+        assert!(
+            ex.redactions >= 2,
+            "cookie header and the token in the target"
+        );
+        let f = ex.report.findings().next().unwrap();
+        assert_eq!(f.properties.redacted, Some(true));
+        let req = f.web_request.as_ref().unwrap();
+        assert_eq!(req.headers["cookie"], "[REDACTED:cookie]");
+        assert!(req
+            .target
+            .as_deref()
+            .unwrap()
+            .ends_with("token=[REDACTED:token]"));
+        assert_eq!(ex.report.runs[0].tool.driver.name, "spall");
+        assert_eq!(ex.report.runs[0].tool.driver.rules.len(), 1);
+        assert_eq!(flux::validate::validate(&ex.report), vec![]);
+
+        let raw = export(&list, false, "0.5.0").unwrap();
+        let f = raw.report.findings().next().unwrap();
+        assert_eq!(f.properties.redacted, Some(false));
+        assert_eq!(
+            f.web_request.as_ref().unwrap().headers["cookie"],
+            "a=1, b=2"
+        );
+        assert_eq!(raw.redactions, 0);
+
+        // Suppressed since promotion: left out.
+        let mut sup = c;
+        sup.finding
+            .suppressions
+            .push(Suppression::false_positive("no"));
+        assert_eq!(export(&[sup], true, "0.5.0").unwrap().findings, 0);
     }
 
     #[test]

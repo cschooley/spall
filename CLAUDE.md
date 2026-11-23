@@ -119,16 +119,23 @@ risk `record`, never MCP); the Findings view (`FindingsView.tsx`,
 launcher's taphttp and flux details. Browser tests mock candidates with
 `ui/e2e/candidates-api.ts`.
 
-## Current milestone: M5 "export"
+**M5 "export": done** (tag `v0.6.0`, #52: #49-#51). Redaction lives in
+the flux crate (v0.2.1, `flux::redact`; spec draft v0.5 has the exact
+table); spall promotes (`{"op": "promote"}`, a human's call, risk
+`export`, never MCP), previews redaction per candidate
+(`/api/candidates/{id}/redaction`), and exports the promoted ones as a
+redacted, validated flux report (`POST /api/export`,
+`candidates::export`). Unredacted only with `--allow-unredacted-export`
+and an explicit ask, marked `flux/redacted: false`. The inspector's
+credential highlighting comes from flux (`/api/redaction`).
 
-Goal (docs/architecture.md): flux export of promoted findings, with
-redaction and fingerprints, and a redaction preview in Findings. No
-issues filed yet. Needs redaction in the flux crate first (flux v0.2:
-headers, bodies, URLs; JWT, bearer and API-key patterns; `flux/redacted`),
-so start there, in cschooley/flux, and re-vendor `docs/flux/SPEC.md`.
-Then spall: promotion (a human action, never MCP), export of a flux
-`Report` (driver rules from `rules::flux_rules`), the preview, and the
-credential highlighting in the inspector taken from flux's list.
+## Current milestone: M6 "agent"
+
+Not started. Read docs/architecture.md (M6) and docs/ux.md (Tasks,
+intake, roles) first: MCP server (read traffic, replay through the gate,
+`propose_finding`; never promote or export), Tasks view, approval gates,
+e-stop, attribution (taphttp `meta` / `source`). Existing issues #1, #2,
+#13. File the rest before building, as with M3 and M4.
 
 Open questions to raise, not decide alone: making Engagement the home
 view now that "waiting on you" has content (docs/ux.md).

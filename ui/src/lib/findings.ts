@@ -3,14 +3,15 @@
 
 import { stateOf, type Candidate, type State } from "./candidates.ts";
 
-export type Tab = "to triage" | "confirmed" | "decided" | "all";
-export const TABS: readonly Tab[] = ["to triage", "confirmed", "decided", "all"];
+export type Tab = "to triage" | "confirmed" | "promoted" | "decided" | "all";
+export const TABS: readonly Tab[] = ["to triage", "confirmed", "promoted", "decided", "all"];
 
 const DECIDED: readonly State[] = ["rejected", "accepted risk", "duplicate"];
 
 export function inTab(c: Candidate, tab: Tab): boolean {
   const s = stateOf(c);
   if (tab === "all") return true;
+  if (tab === "promoted") return c.promoted !== null && !c.suppressed;
   if (tab === "decided") return DECIDED.includes(s);
   if (tab === "confirmed") return s === "confirmed" || s === "fixed";
   return s === "to triage" || s === "suspected";
@@ -20,6 +21,7 @@ export function tabCounts(list: Candidate[]): Record<Tab, number> {
   return {
     "to triage": list.filter((c) => inTab(c, "to triage")).length,
     confirmed: list.filter((c) => inTab(c, "confirmed")).length,
+    promoted: list.filter((c) => inTab(c, "promoted")).length,
     decided: list.filter((c) => inTab(c, "decided")).length,
     all: list.length,
   };

@@ -217,6 +217,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,
                 candidates,
+                allow_unredacted_export: config.allow_unredacted_export,
             }))
         }
         None => None,

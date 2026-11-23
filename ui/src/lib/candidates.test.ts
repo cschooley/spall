@@ -87,3 +87,14 @@ test("paramNames from a URL's query", () => {
   assert.deepEqual(paramNames("https://a.test/x"), []);
   assert.deepEqual(paramNames("https://a.test/x?%E0%A4%A=1"), ["%E0%A4%A"]);
 });
+
+test("promotion, export names", async () => {
+  const { exportName, promotable } = await import("./candidates.ts");
+  const c = asCandidate({ ...RAW, promoted: "2026-11-23T16:00:00Z", finding: { ...RAW.finding, properties: { ...RAW.finding.properties, "flux/status": "confirmed" } } })!;
+  assert.equal(c.promoted, "2026-11-23T16:00:00Z");
+  assert.ok(promotable(c));
+  assert.ok(!promotable(asCandidate(RAW)!), "still a candidate");
+  assert.equal(exportName('attachment; filename="spall-acme-1a2b-20261123.sarif"'), "spall-acme-1a2b-20261123.sarif");
+  assert.equal(exportName('attachment; filename="../../etc/passwd"'), "spall-export.sarif");
+  assert.equal(exportName(null), "spall-export.sarif");
+});

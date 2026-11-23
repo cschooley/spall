@@ -1,6 +1,6 @@
 # flux: a SARIF 2.1.0 profile for Kudzu
 
-Status: draft v0.4 (Nov 2026). The `flux` crate v0.1.0 implements it (types, fingerprints, validation; redaction next).
+Status: draft v0.5 (Nov 2026). The `flux` crate v0.2.1 implements it (types, fingerprints, validation, redaction).
 
 ## What flux is (and isn't)
 
@@ -97,6 +97,20 @@ Required before any flux document leaves the producing tool's local store (expor
 - Replace with `[REDACTED:<kind>]`.
 - Set `flux/redacted: true`.
 - Unredacted export requires an explicit opt-in flag and leaves `flux/redacted: false` so consumers can refuse it.
+
+Exactly what the crate's `redact` module does (the definition; v0.5):
+
+| What | Where | Kind |
+|---|---|---|
+| The whole value of `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`, `Api-Key`, `X-Auth-Token`, `X-Access-Token` | request and response headers | `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `api-key`, `token` |
+| JWTs (`eyJ…` with three dot-separated base64url parts) | everywhere below | `jwt` |
+| `Bearer <token>` (8+ token characters; the scheme is kept) | everywhere below | `bearer` |
+| API keys by format: AWS (`AKIA`, `ASIA`), GitHub (`ghp_` …, `github_pat_`), GitLab (`glpat-`), Stripe (`sk_live_`, `sk_test_`, `rk_live_`), Slack (`xox?-`), Google (`AIza`) | everywhere below | `api-key` |
+| The password in `scheme://user:password@host` | everywhere below | `password` |
+| The value of a sensitive name in `name=value` and JSON `"name": value`: password, passwd, pwd, pass, passphrase (`password`); secret, client_secret, token, access_token, refresh_token, id_token, auth_token, session, sessionid, sid, private_key (`token`); api_key, api_secret (`api-key`). Names compare case-insensitively, ignoring `-` and `_`. | everywhere below | as listed |
+| A binary (base64) body, which can't be inspected: dropped | `webRequest.body`, `webResponse.body` | `binary` |
+
+"Everywhere": other header values, text bodies, `webRequest.target`, `message.text`, and location URIs and messages. Fields a tool keeps outside this profile (unknown properties) are not inspected, so producers must not put secrets there. Redaction is idempotent; a document marked `flux/redacted: true` that still has something to redact fails validation.
 
 ## Flows
 

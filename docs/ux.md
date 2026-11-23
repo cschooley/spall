@@ -197,7 +197,7 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 | Traffic (history, filters, inspector) | M1 (done) |
 | Replay in inspector | M2 (done) |
 | Findings (manual flagging, triage, suppressions) | M4 (done) |
-| Flux export with redaction preview | M5 |
+| Flux export with redaction preview | M5 (done) |
 | Tasks + MCP, e-stop, approval gates | M6 |
 | Intake chat, orchestrator plans, roles | M6 |
 | Agent buttons (PoC, Escalate impact, Find variants, Retest, Explain for devs, Test for…, Map auth, Why is this interesting) | M6; Find variants uses route maps fully from M8; Retest closes Kudzu tickets from M8 |

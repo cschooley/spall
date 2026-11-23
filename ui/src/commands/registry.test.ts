@@ -54,6 +54,8 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     openScopePaste: (what = "paste") => void calls.push(what),
     ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080", taphttpVersion: "0.6.1" }),
     openSetup: () => void calls.push("setup"),
+    promote: async (id, undo) => (calls.push(`promote:${id}${undo ? ":undo" : ""}`), id === "c-1" ? { ...asCandidate(RAW)!, id, promoted: undo ? null : "now" } : `no candidate ${id}`),
+    exportFindings: async (u) => (calls.push(`export:${u}`), u ? { ok: false, text: "an unredacted export needs spall started with --allow-unredacted-export" } : { ok: true, text: "exported spall-x.sarif (redacted)" }),
     goto: (v) => (calls.push(`goto:${v}`), ["engagement", "traffic", "findings"].includes(v)),
     flag: async (i) => {
       calls.push(`flag:${JSON.stringify(i)}`);
@@ -251,7 +253,7 @@ test("audit prints the newest attempts, one line each", async () => {
 });
 
 test("every command has a risk class; replay sends traffic and scope changes policy", () => {
-  const RISKS = ["read", "record", "sends-traffic", "unsafe-method", "destructive", "policy"];
+  const RISKS = ["read", "record", "export", "sends-traffic", "unsafe-method", "destructive", "policy"];
   for (const c of COMMANDS) assert.ok(RISKS.includes(c.risk), c.name);
   assert.deepEqual(
     COMMANDS.filter((c) => c.risk !== "read").map((c) => [c.name, c.risk]),
@@ -261,6 +263,8 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["engagement", "policy"],
       ["roe", "policy"],
       ["flag", "record"],
+      ["promote", "export"],
+      ["export", "export"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");
@@ -580,4 +584,27 @@ test("flag files a candidate; a match says where it stands; never MCP", async ()
   assert.deepEqual(bad.calls, []);
   const f = COMMANDS.find((c) => c.name === "flag")!;
   assert.equal(f.mcp, false);
+});
+
+test("promote and export are a human's: never MCP", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("promote c-1", ctx);
+  await execute("promote c-1 --undo", ctx);
+  await execute("promote c-9", ctx);
+  await execute("promote", ctx);
+  await execute("export", ctx);
+  await execute("export --unredacted", ctx);
+  await execute("export --nope", ctx);
+  assert.deepEqual(calls, ["promote:c-1", "promote:c-1:undo", "promote:c-9", "export:false", "export:true"]);
+  const out = lines.filter(([, k]) => k !== "cmd");
+  assert.deepEqual(out, [
+    ["c-1 promoted: in the next export", "out"],
+    ["c-1 is no longer promoted", "out"],
+    ["promote: no candidate c-9", "warn"],
+    ["usage: promote <candidate-id> [--undo]", "warn"],
+    ["exported spall-x.sarif (redacted)", "out"],
+    ["export: an unredacted export needs spall started with --allow-unredacted-export", "warn"],
+    ["usage: export [--unredacted]", "warn"],
+  ]);
+  for (const n of ["promote", "export", "flag"]) assert.equal(COMMANDS.find((c) => c.name === n)!.mcp, false, n);
 });

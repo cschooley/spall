@@ -57,7 +57,9 @@ struct Stub(Arc<StubState>);
 
 impl Stub {
     fn push(&self, id: &str) {
-        let json = entry(id);
+        self.push_json(id, entry(id));
+    }
+    fn push_json(&self, id: &str, json: String) {
         self.0
             .entries
             .lock()
@@ -1830,4 +1832,174 @@ async fn candidates_are_flagged_triaged_audited_and_kept_across_a_restart() {
     eventually("second backfill", || stub.exchange_queries().len() >= 2).await;
     let list2 = body_json(&get_text(again, "/api/candidates").await);
     assert_eq!(list2, list);
+}
+
+#[tokio::test]
+async fn promoted_candidates_export_as_redacted_flux_and_unredacted_needs_the_opt_in() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    // A captured login: credentials in headers, the URL and the body.
+    stub.push_json(
+        "login",
+        serde_json::json!({
+            "schema_version": 3, "id": "login", "ts": "2026-12-25T10:00:00Z", "host": "example.com",
+            "method": "POST", "url": "http://example.com/login?next=/&access_token=tok-123456",
+            "req_headers": [["cookie", "sid=8f3a91c2d4e5"], ["authorization", "Bearer abcdefghijklmnop"], ["content-type", "application/json"]],
+            "req_body": "{\"user\":\"bob\",\"password\":\"hunter2\"}", "req_body_encoding": "utf8",
+            "status": 500, "res_headers": [["set-cookie", "sid=new; HttpOnly"]],
+            "res_body": "ERROR near \"'\"", "res_body_encoding": "utf8", "duration_ms": 1, "replay_of": null
+        })
+        .to_string(),
+    );
+    let spall = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"login","rule":"WSTG-INPV-05","parameter":"user"}"#,
+        None,
+    )
+    .await;
+    let id = body_json(&res)["id"].as_str().unwrap().to_string();
+    let patch = |body: &'static str| {
+        let id = id.clone();
+        async move { send_text(spall, "PATCH", &format!("/api/candidates/{id}"), body, None).await }
+    };
+
+    // The preview says what an export would strip, and stores nothing.
+    let prev = body_json(&get_text(spall, &format!("/api/candidates/{id}/redaction")).await);
+    let kinds: Vec<&str> = prev["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["kind"].as_str().unwrap())
+        .collect();
+    for k in ["token", "authorization", "cookie", "password", "set-cookie"] {
+        assert!(kinds.contains(&k), "{k} in {kinds:?}");
+    }
+    assert_eq!(
+        prev["finding"]["webRequest"]["headers"]["cookie"],
+        "[REDACTED:cookie]"
+    );
+
+    // Nothing promoted, nothing to export; an unconfirmed one can't be promoted.
+    let res = post_text(spall, "/api/export", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    assert!(patch(r#"{"op":"promote"}"#)
+        .await
+        .starts_with("HTTP/1.1 400"));
+    assert!(patch(r#"{"op":"confirm"}"#)
+        .await
+        .starts_with("HTTP/1.1 200"));
+    let res = patch(r#"{"op":"promote"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(body_json(&res)["promoted"].is_string());
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["export"]["promoted"],
+        1
+    );
+
+    // The export: valid flux, redacted, no captured secret left in it.
+    let res = post_text(spall, "/api/export", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(res.contains("application/sarif+json"));
+    assert!(res.contains("attachment; filename=\"spall-"));
+    let (_, body) = res.split_once("\r\n\r\n").unwrap();
+    for secret in [
+        "8f3a91c2d4e5",
+        "abcdefghijklmnop",
+        "tok-123456",
+        "hunter2",
+        "sid=new",
+    ] {
+        assert!(!body.contains(secret), "{secret} leaked");
+    }
+    let report = flux::Report::from_json(body).unwrap();
+    assert_eq!(flux::validate::validate(&report), vec![]);
+    let f = report.findings().next().unwrap();
+    assert_eq!(f.properties.redacted, Some(true));
+    assert_eq!(f.properties.status, Some(flux::Status::Confirmed));
+    assert_eq!(report.runs[0].tool.driver.rules[0].id, "WSTG-INPV-05");
+    assert_eq!(report.runs[0].tool.driver.rules[0].cwes(), vec![89]);
+
+    // Unredacted: refused without the opt-in, and audited both times.
+    let res = post_text(spall, "/api/export", r#"{"unredacted":true}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 403"), "{res}");
+    let recs: Vec<serde_json::Value> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "export")
+        .collect();
+    assert!(recs.iter().any(|r| r["reason"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("exported 1 finding (redacted,")));
+    assert!(recs.iter().any(|r| r["decision"] == "deny"));
+
+    // A reject takes it out of the export.
+    patch(r#"{"op":"reject","justification":"input is parameterized"}"#).await;
+    assert!(post_text(spall, "/api/export", "{}", None)
+        .await
+        .starts_with("HTTP/1.1 409"));
+
+    // With the opt-in: unredacted, and marked so.
+    let again = start_spall_with(
+        Some(api),
+        &token,
+        &["--scope", "example.com", "--allow-unredacted-export"],
+    )
+    .await;
+    eventually("second backfill", || stub.exchange_queries().len() >= 2).await;
+    let reopen = send_text(
+        again,
+        "PATCH",
+        &format!("/api/candidates/{id}"),
+        r#"{"op":"reopen"}"#,
+        None,
+    )
+    .await;
+    assert!(reopen.starts_with("HTTP/1.1 200"), "{reopen}");
+    send_text(
+        again,
+        "PATCH",
+        &format!("/api/candidates/{id}"),
+        r#"{"op":"promote"}"#,
+        None,
+    )
+    .await;
+    let res = post_text(again, "/api/export", r#"{"unredacted":true}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let (_, body) = res.split_once("\r\n\r\n").unwrap();
+    assert!(body.contains("hunter2"));
+    let report = flux::Report::from_json(body).unwrap();
+    assert_eq!(
+        report.findings().next().unwrap().properties.redacted,
+        Some(false)
+    );
+    assert!(res.contains("-UNREDACTED.sarif"));
+}
+
+#[tokio::test]
+async fn the_redaction_list_comes_from_flux() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    let spall = start_spall(None, &token).await;
+    let v = body_json(&get_text(spall, "/api/redaction").await);
+    let headers: Vec<&str> = v["headers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h.as_str().unwrap())
+        .collect();
+    for h in [
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "x-api-key",
+    ] {
+        assert!(headers.contains(&h), "{h}");
+    }
 }

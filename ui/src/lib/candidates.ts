@@ -45,6 +45,8 @@ export interface Candidate {
   suppressed: Suppressed | null;
   confirmedBy: string[];
   evidence: Evidence | null;
+  /** When a human promoted it for export (#50); null if not. */
+  promoted: string | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -96,6 +98,7 @@ export function asCandidate(v: unknown): Candidate | null {
       ? { disposition: oneOf(sp["flux/disposition"], DISPOSITIONS), justification: str(inEffect.justification) ?? "", duplicateOf: str(sp["flux/duplicateOf"]) }
       : null,
     confirmedBy: strs(props["flux/confirmedBy"]),
+    promoted: str(c.promoted),
     evidence:
       f.webRequest || f.webResponse
         ? {
@@ -183,7 +186,63 @@ export type Op =
   | { op: "duplicate"; of: string; justification: string }
   | { op: "reopen" }
   | { op: "edit"; level?: Level; rank?: number; message?: string }
-  | { op: "evidence"; exchanges: string[] };
+  | { op: "evidence"; exchanges: string[] }
+  | { op: "promote" }
+  | { op: "unpromote" };
+
+/** Can be promoted: confirmed (or suspected) and not suppressed. */
+export function promotable(c: Candidate): boolean {
+  return (c.status === "confirmed" || c.status === "suspected") && !c.suppressed;
+}
+
+/** One thing redaction changes: where, and what kind of secret. */
+export interface RedactionChange {
+  at: string;
+  kind: string;
+}
+
+export interface RedactionPreview {
+  changes: RedactionChange[];
+  /** The redacted request target, if there is one. */
+  target: string | null;
+}
+
+/** What an export would strip from candidate `id` (#49). */
+export async function redactionPreview(id: string): Promise<RedactionPreview | string> {
+  const body = await apiJson(`/api/candidates/${encodeURIComponent(id)}/redaction`);
+  if (typeof body === "string") return body;
+  const o = obj(body);
+  const changes = Array.isArray(o.changes)
+    ? o.changes.flatMap((x) => {
+        const c = obj(x);
+        return typeof c.at === "string" && typeof c.kind === "string" ? [{ at: c.at, kind: c.kind }] : [];
+      })
+    : [];
+  return { changes, target: str(obj(obj(o.finding).webRequest).target) };
+}
+
+export type ExportResult = { kind: "file"; name: string; bytes: Uint8Array<ArrayBuffer> } | { kind: "error"; message: string };
+
+/** `spall-acme-20261123.sarif` from a Content-Disposition header; a safe default otherwise. */
+export function exportName(disposition: string | null): string {
+  const m = /filename="([A-Za-z0-9._-]{1,120})"/.exec(disposition ?? "");
+  return m ? m[1]! : "spall-export.sarif";
+}
+
+/** Export the promoted candidates as a flux report (#51). */
+export async function exportFindings(unredacted: boolean): Promise<ExportResult> {
+  let res: Response;
+  try {
+    res = await fetch("/api/export", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(unredacted ? { unredacted: true } : {}) });
+  } catch (e) {
+    return { kind: "error", message: (e as Error).message };
+  }
+  if (!res.ok) {
+    const b = obj(await res.json().catch(() => null));
+    return { kind: "error", message: str(b.error) ?? `HTTP ${res.status}` };
+  }
+  return { kind: "file", name: exportName(res.headers.get("content-disposition")), bytes: new Uint8Array(await res.arrayBuffer()) };
+}
 
 export async function change(id: string, op: Op): Promise<Candidate | string> {
   const body = await apiJson(`/api/candidates/${encodeURIComponent(id)}`, { method: "PATCH", body: op });

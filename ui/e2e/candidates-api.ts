@@ -15,6 +15,7 @@ export interface Stored {
   created: string;
   updated: string;
   flagged_by: string;
+  promoted?: string | null;
   finding: Json & { properties: Json; suppressions?: Json[]; correlationGuid?: string };
 }
 
@@ -36,7 +37,7 @@ export function findingFor(rule: string, e: Pick<TrafficEntry, "id" | "method" |
   };
 }
 
-export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed?: Stored[]; engagement?: string } = {}) {
+export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed?: Stored[]; engagement?: string; unredactedAllowed?: boolean } = {}) {
   let n = 0;
   const state = {
     list: [...(opts.seed ?? [])] as Stored[],
@@ -59,6 +60,7 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
         engagement: { id: opts.engagement ?? "acme-1a2b", name: "ACME Q4" },
         testing: { allowed: true, reason: null },
         to_triage: toTriage(),
+        export: { promoted: state.list.filter((c) => c.promoted && !inEffect(c)).length, unredacted_allowed: opts.unredactedAllowed === true },
       },
     }),
   );
@@ -97,6 +99,29 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
     const list = [...state.list].reverse().filter((c) => !x || (c.finding.properties["flux/replayIds"] as string[]).includes(x));
     return r.fulfill({ json: { candidates: list } });
   });
+  // What redaction changes: cookie and authorization headers, as flux does.
+  void page.route(/\/api\/candidates\/[^/?]+\/redaction$/, (r) => {
+    const id = decodeURIComponent(new URL(r.request().url()).pathname.split("/").at(-2)!);
+    const c = state.list.find((x) => x.id === id);
+    if (!c) return r.fulfill({ status: 404, json: { error: `no candidate ${id}` } });
+    const e = state.entries.get((c.finding.properties["flux/replayIds"] as string[])[0]!);
+    const changes = (e?.req_headers ?? [])
+      .filter(([k]) => ["cookie", "authorization"].includes(k.toLowerCase()))
+      .map(([k]) => ({ at: `webRequest.headers["${k.toLowerCase()}"]`, kind: k.toLowerCase() }));
+    return r.fulfill({ json: { id, finding: { ...c.finding, webRequest: { target: e?.url } }, changes } });
+  });
+  void page.route("**/api/export", (r) => {
+    const b = r.request().postDataJSON() as { unredacted?: boolean };
+    state.calls.push({ method: "POST", path: "/api/export", body: b });
+    if (b.unredacted && !opts.unredactedAllowed) return r.fulfill({ status: 403, json: { error: "an unredacted export needs spall started with --allow-unredacted-export" } });
+    const results = state.list.filter((c) => c.promoted && !inEffect(c)).map((c) => ({ ...c.finding, properties: { ...c.finding.properties, "flux/redacted": !b.unredacted } }));
+    if (!results.length) return r.fulfill({ status: 409, json: { error: "nothing promoted to export (promote confirmed candidates first)" } });
+    return r.fulfill({
+      status: 200,
+      headers: { "content-type": "application/sarif+json", "content-disposition": `attachment; filename="spall-acme-1a2b-20261123${b.unredacted ? "-UNREDACTED" : ""}.sarif"` },
+      body: JSON.stringify({ version: "2.1.0", runs: [{ tool: { driver: { name: "spall" } }, results }] }),
+    });
+  });
   void page.route(/\/api\/candidates\/[^/?]+$/, async (r: Route) => {
     const req = r.request();
     const id = decodeURIComponent(new URL(req.url()).pathname.split("/").pop()!);
@@ -128,6 +153,12 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
     } else if (b.op === "evidence") {
       const ids = f.properties["flux/replayIds"] as string[];
       for (const x of b.exchanges as string[]) if (!ids.includes(x)) ids.push(x);
+    } else if (b.op === "promote") {
+      if (f.properties["flux/status"] !== "confirmed" || inEffect(c)) return r.fulfill({ status: 400, json: { error: "only a confirmed candidate that isn't rejected, accepted or a duplicate can be promoted" } });
+      c.promoted = new Date().toISOString();
+    } else if (b.op === "unpromote") {
+      if (!c.promoted) return r.fulfill({ status: 400, json: { error: "not promoted" } });
+      c.promoted = null;
     } else if (b.op === "edit") {
       if (b.level) f.level = b.level;
       if (typeof b.rank === "number") f.rank = b.rank;

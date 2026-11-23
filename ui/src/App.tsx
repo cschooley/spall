@@ -38,7 +38,9 @@ import { useSourceStatus } from "./useStatus.ts";
 import { useHosts } from "./useHosts.ts";
 import { asListing, stateLookup } from "./lib/hosts.ts";
 import { loadCatalog } from "./lib/rules.ts";
-import { flag as flagCandidate } from "./lib/candidates.ts";
+import { change as changeCandidate, exportFindings, flag as flagCandidate } from "./lib/candidates.ts";
+import { saveBytes } from "./lib/download.ts";
+import { setSecretHeaders } from "./lib/secrets.ts";
 import { asCaInfo } from "./lib/ca.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
@@ -148,6 +150,14 @@ export function App() {
   }, []);
   const { store, connection, clear } = useTraffic();
   const [statusNonce, setStatusNonce] = useState(0);
+  // The inspector highlights what flux redacts: take the list from spall
+  // (the flux crate) once; secrets.ts has the same list until then.
+  useEffect(() => {
+    void fetch("/api/redaction")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b: unknown) => setSecretHeaders(b))
+      .catch(() => undefined);
+  }, []);
   const status = useSourceStatus(5000, statusNonce);
   // Host states (#39): polled while the engagement exists (lever API).
   const hosts = useHosts(status.replay, statusNonce);
@@ -468,6 +478,17 @@ export function App() {
         window.location.hash = v;
         return true;
       },
+      promote: async (id, undo) => {
+        const r = await changeCandidate(id, { op: undo ? "unpromote" : "promote" });
+        if (typeof r !== "string") setStatusNonce((n) => n + 1);
+        return r;
+      },
+      exportFindings: async (unredacted) => {
+        const r = await exportFindings(unredacted);
+        if (r.kind === "error") return { ok: false, text: r.message };
+        saveBytes(r.bytes, r.name);
+        return { ok: true, text: `exported ${r.name}${unredacted ? " (UNREDACTED: contains captured credentials)" : " (redacted)"}` };
+      },
       rules: loadCatalog,
       flag: async (i) => {
         const r = await flagCandidate(i);
@@ -628,6 +649,7 @@ export function App() {
         <main className="findings-main">
           <FindingsView
             available={status.replay}
+            exportInfo={status.export}
             onChanged={() => setStatusNonce((n) => n + 1)}
             onOpenExchange={(id) => {
               window.location.hash = "traffic";

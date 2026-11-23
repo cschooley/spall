@@ -149,7 +149,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 **Supply chain.** A security tool's dependency tree is part of its attack surface.
 - Runtime dependency budget: `react`, `react-dom`, `@tanstack/react-virtual`. Adding a runtime dependency needs a stated reason in the PR. `cmdk` was dropped in #8: it pulls about 25 runtime packages (Radix dialog machinery), including `react-style-singleton`, which injects `<style>` at runtime and conflicts with `style-src 'self'`. The palette is a small in-house component instead.
-- Credential headers are highlighted using flux's redaction list (`Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`; docs/flux/SPEC.md), so the console marks what an export will scrub. One list, to be taken from the flux crate once it has redaction (planned for flux v0.2, before M5 export).
+- Credential headers are highlighted using flux's redaction list (`Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`; docs/flux/SPEC.md), so the console marks what an export will scrub. One list, taken from the flux crate (`/api/redaction`, flux v0.2.1).
 - Lockfile committed, `npm ci` only, install scripts disabled (`ignore-scripts=true` in `.npmrc`).
 - Versions at least two weeks old, transitive ones included: resolve with `npm install --before=<date>`. A test asserts the HTML bans fire, and a post-build check rejects inline script, inline style and external URLs in `dist/index.html`.
 - OSV-Scanner on the lockfile in CI (via sec-actions).
@@ -173,7 +173,7 @@ Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3
 | **M2 replay** (done, `v0.3.0`) | Replay from the inspector via taphttp; edit, compare, Replays tab. Every action that sends traffic goes through the server-side action gate (scope, method policy, audit). CI and security gates; hardened runtime image. | Traffic | #17-#22, #10, #28, #29, taphttp#10 |
 | **M3 engagement** (done, `v0.4.0`) | The engagement as the root object: targets, scope (incl. explicit out-of-scope), rules of engagement as data that the gate reads; build scope from traffic; paste a scope list; OpenAPI import; CA setup in the UI; Engagement home view. | **Engagement** | #30 (#32, #34-#40) |
 | **M4 candidates** (done, `v0.5.0`) | Candidate model on flux crate types (cschooley/flux v0.1.0), WSTG v4.2 rule ids mapped to CWE, manual "flag as candidate", keyboard triage, evidence, suppressions. | **Findings** | #48 (#41-#47), #16 |
-| **M5 export** (next) | Flux export with redaction and fingerprints; redaction preview. Needs redaction in the flux crate (v0.2) first. | Findings | |
+| **M5 export** (done, `v0.6.0`) | Promotion, flux export with redaction (flux v0.2.1) and fingerprints; redaction preview. | Findings | #52 (#49-#51) |
 | M6 agent ("geogaddi": long, a little scary, campfire headphase on the other side) | Intake, orchestrator and role agents (chat plans, tasks act); MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | **Tasks** | #13, #1, #2 |
 | M7 intercept | Pause/modify via taphttp `--intercept-socket`. | Traffic | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypothesis correlation; route maps ("source maps for the backend"). | **Surface** | #14 |

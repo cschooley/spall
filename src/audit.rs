@@ -36,6 +36,8 @@ pub enum Outcome {
     EngagementChanged,
     /// A candidate was flagged, triaged or edited (#42).
     CandidateChanged,
+    /// Promoted findings were exported, or an export was refused (#51).
+    Exported,
 }
 
 #[derive(Debug, Clone, Serialize)]
