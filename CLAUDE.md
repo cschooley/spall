@@ -33,9 +33,10 @@ vendored (copied, pinned to a verdigris tag, never edited here) in
 
 ## Hard rules
 
-- **No findings format of our own.** Findings are flux. Once the
-  `flux` crate exists, use its types; do not define a local
-  `Finding`, `Severity`, or `Evidence`.
+- **No findings format of our own.** Findings are flux: use the
+  `flux` crate's types (cschooley/flux); do not define a local
+  `Finding`, `Severity`, or `Evidence` type, nor a lookalike under
+  another name.
 - **No Kudzu-specific code.** spall reads and writes flux. Kudzu
   ingests flux.
 - **The agent proposes, a human promotes.** The MCP server may expose
@@ -77,79 +78,65 @@ client --(proxy 127.0.0.1:8080)--> taphttp --> internet
                                       | serves ui/ (React + Vite + TS, embedded with rust-embed)
 ```
 
-## Current milestone: M2 "replay"
+**M2 "replay": done** (tag `v0.3.0`, #17-#22). Replay from the
+inspector (`⏎`) and console, edit before replay, compare with the
+original (`ui/src/lib/diff.ts`, reused by M4 evidence and M8 retests),
+the Replays tab. Every send goes through the action gate (`src/gate.rs`:
+scope, rules, confirmation; `src/confirm.rs` single-use tokens;
+`src/audit.rs` JSONL; `src/replay.rs` the chain), behind the same-origin
+guard (`src/csrf.rs`). Scope and policy changes are `policy` risk:
+never MCP.
 
-Goal (docs/architecture.md): send-to-replay from the UI via taphttp;
-replay results shown linked to the original. docs/ux.md: replay lives
-in the inspector (edit, send, see original and replay side by side);
-the mockup shows a Replay button (`⏎`) and a Replays tab.
+**M3 "engagement": done** (tag `v0.4.0`, #30: #32, #34-#40). The
+engagement is the root object (`src/engagement.rs`, one JSON file each
+in `--engagements`); scope with exclusions (`src/gate.rs` `Scope`);
+rules of engagement the gate enforces (`src/roe.rs`: windows, blackouts,
+rate, methods, agents, destructive; layers only narrow); paste a scope
+list (`src/scope_list.rs`), hosts from traffic (`src/hosts.rs`), OpenAPI
+import (`src/openapi.rs`), CA setup from taphttp's `/info` and
+`/ca.pem`; the Engagement view (`#engagement`, key `1`). #33
+(scope-limited CA) moved to `later`.
 
-Issues (GitHub milestone "M2 replay"), roughly in order:
+taphttp: v0.6.1 (`taphttp-types` 0.5.0, schema v5). `POST /replay` takes
+`{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
+`req_headers` is the whole ordered list; `meta` is attribution stored on
+the recorded replay, never sent upstream (spall sends `{"actor":
+"human"}`; M6 agents add a task id). A failed attempt is recorded with
+`error` and returned as a 502; a 400 means nothing was sent. `GET
+/exchanges?replay_of=<id>` lists replays. `GET /info`, `/ca.pem`,
+`/ca.der` give the public CA. Recorded `req_headers` are what went on
+the wire: hyper groups a repeated header name at its first position.
 
-- **#17** (done): `POST /api/replay` plus a same-origin (CSRF) guard on
-  every state-changing route (`src/csrf.rs`, run in `web::guard`).
-  Everything else builds on it.
-- **#18** (done): replay as captured from the inspector (`⏎`) and
-  console (`replay <id> [--yes]`, `scope`, `audit`); unsafe methods take
-  two presses, the second sending the gate's token (`ui/src/lib/replay.ts`).
-- **#19** (done): edit before replay (method, ordered headers, text body;
-  `ui/src/lib/edit.ts`, `RequestEditor.tsx`; console edit flags).
-- **#20** (done): compare a replay with its original; the reusable diff
-  is `ui/src/lib/diff.ts` (M4 evidence, M8 retests).
-- **#21** (done): the Replays tab, chains, and `replay:yes|no` in the
-  filter (`ui/src/lib/replays.ts`, `useReplays.ts`).
-- **#22**: the action gate: server-side scope (URL host and effective
-  `Host` header), unsafe-method policy with a single-use confirmation
-  token (#18's second `⏎` sends it), and an audit record for every
-  attempt. #17 routes through it; M6 agents reuse it. Server side done:
-  `src/gate.rs` (pure check), `src/confirm.rs` (tokens), `src/audit.rs`
-  (JSONL), `src/replay.rs` (the chain); `--scope`, `--safe-methods`,
-  `--audit-log`; `GET /api/audit`; console `audit` / `scope`; every
-  registry command has a `risk` class. Scope changes at runtime
-  (`scope add|remove`, `scope all on|off`, `SPALL_SCOPE=*`; `POST
-  /api/scope`) are in memory, audited, and `policy` risk: never MCP.
+## Current milestone: M4 "candidates"
 
-What exists: taphttp v0.6.1 (`taphttp-types` 0.5.0, schema v5; 0.6.1 adds `GET /ca.pem` and `/ca.der`, cschooley/taphttp#20;
-cschooley/taphttp#10 shipped). `POST /replay` takes `{id, method?,
-req_headers?, headers?, body?, body_encoding?, meta?}`:
+Goal (docs/architecture.md): candidates and triage on flux types.
+Lights up the **Findings** rail icon. Tracker #48; issues roughly in
+order:
 
-- `req_headers` is the whole ordered `[name, value]` list (repeats kept,
-  removals possible); the `headers` map still applies after it.
-- `body_encoding` (`utf8` | `base64`) allows binary bodies.
-- `meta` is string attribution stored on the recorded replay, never sent
-  upstream (16 keys, 64-byte keys, 1024-byte values). spall tags its
-  replays (e.g. `{"actor": "human"}`); M6 agents add a task id.
+- **#41** rule catalog: WSTG v4.2 test ids as `ruleId`s, each mapped to
+  a CWE, built as `flux::Rule` values; `spall/other` as the escape
+  hatch; WSTG attribution (CC BY-SA 4.0) shown.
+- **#42** candidate store: `flux::Finding`s per engagement, API, audit.
+  Adopt the `flux` crate (git tag `v0.1.0`) and re-vendor
+  `docs/flux/SPEC.md` here.
+- **#43** flag as candidate: inspector `f`, console `flag`; `mcp: false`.
+- **#44** Findings view: keyboard triage (`c`, `r`, `a`, `d`; reject,
+  accept and duplicate need a justification), via flux `Suppression`.
+- **#45** evidence pane (appended, never replaced; diff from `diff.ts`).
+- **#46** suppressions stick (fingerprint match → badge, not re-raised).
+- **#47** "waiting on you" lights up for candidates.
+- **#16** decide what the taphttp and flux launcher tiles show.
 
-The result is recorded as a new exchange with `replay_of` set and
-returned (it also appears on `/feed`). A failed attempt is recorded with
-`error` set and returned as a 502 carrying that entry; a 400 means bad
-input, nothing sent or recorded. `GET /exchanges?replay_of=<id>` lists
-an exchange's replays (spall forwards it on `/api/exchanges`).
-`GET /info` reports taphttp's deployment, for #16. The registry
-reserves `replay` (mockup: `replay <id> [--header H:V]`).
+The flux crate (cschooley/flux v0.1.0): `Finding` (a SARIF result),
+`Report` (a SARIF log), `fingerprint::dast_v1` / `sast_v1`,
+`validate::validate`. Redaction is not in it yet (flux v0.2, needed
+before M5 export). If spall needs something flux lacks, add it to flux
+(and its SPEC.md) rather than working around it here.
 
-Known constraints and requirements:
-
-- **CSRF.** Replay is spall's first state-changing endpoint, on an
-  unauthenticated localhost app. The Host allowlist doesn't stop it: a
-  cross-site POST from any web page carries `Host: 127.0.0.1:3000`. A
-  forged replay would resend the tester's captured requests, with their
-  credentials, to targets the attacker picks. Require same-origin
-  (check `Origin` / `Sec-Fetch-Site`), accept only `application/json`
-  (forces a CORS preflight that spall never approves), and test it from
-  a foreign origin.
-- spall proxies replay server-side (`POST /api/replay`); the token never
-  reaches the browser.
-- The recorded `req_headers` are what went on the wire: hyper groups a
-  repeated header name at its first position, so a diff against the
-  original (#20) can show reordering that the tester didn't ask for.
-- Agent-driven replay is M6 (MCP), not M2.
-
-Explicitly not in M2: the engagement model and scope UI (M3; #22's
-scope comes from config until then), candidates, triage and flux (M4), export (M5),
-MCP server, agent tasks, e-stop, attribution (M6), intercept (M7),
-image preview (#15, later). Unbuilt views and tools stay dimmed, inert
-placeholders (docs/ux.md) until they ship.
+Explicitly not in M4: promotion and export, redaction preview (M5);
+MCP, `propose_finding`, agent tasks (M6); flux in from the Kudzu
+platform (M8). Unbuilt views and tools stay dimmed, inert placeholders
+(docs/ux.md) until they ship.
 
 ## Testing
 

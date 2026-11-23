@@ -149,7 +149,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 **Supply chain.** A security tool's dependency tree is part of its attack surface.
 - Runtime dependency budget: `react`, `react-dom`, `@tanstack/react-virtual`. Adding a runtime dependency needs a stated reason in the PR. `cmdk` was dropped in #8: it pulls about 25 runtime packages (Radix dialog machinery), including `react-style-singleton`, which injects `<style>` at runtime and conflicts with `style-src 'self'`. The palette is a small in-house component instead.
-- Credential headers are highlighted using flux's redaction list (`Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`; docs/flux/SPEC.md), so the console marks what an export will scrub. One list, taken from the flux crate once it exists.
+- Credential headers are highlighted using flux's redaction list (`Authorization`, `Cookie`, `Set-Cookie`, `Proxy-Authorization`; docs/flux/SPEC.md), so the console marks what an export will scrub. One list, to be taken from the flux crate once it has redaction (planned for flux v0.2, before M5 export).
 - Lockfile committed, `npm ci` only, install scripts disabled (`ignore-scripts=true` in `.npmrc`).
 - Versions at least two weeks old, transitive ones included: resolve with `npm install --before=<date>`. A test asserts the HTML bans fire, and a post-build check rejects inline script, inline style and external URLs in `dist/index.html`.
 - OSV-Scanner on the lockfile in CI (via sec-actions).
@@ -170,9 +170,9 @@ Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3
 |---|---|---|---|
 | **M0 hello** (done, `v0.1.0`) | Docker Compose: taphttp + spall; spall tails the JSONL log and streams it to a single-page live console over SSE. | Traffic (first light) | |
 | **M1 traffic workbench** (done, `v0.2.0`) | Filtering, search, request/response detail view, command palette and console. History comes from taphttp's lever API (its sqlite store), not a spall copy; see below. | Traffic | #3-#12 |
-| **M2 replay** (current) | Replay from the inspector via taphttp; edit, compare, Replays tab. Every action that sends traffic goes through the server-side action gate (scope, method policy, audit). CI and security gates; hardened runtime image. | Traffic | #17-#22, #10, #28, #29, taphttp#10 |
-| M3 engagement | The engagement as the root object: targets, scope (incl. explicit out-of-scope), rules of engagement as data that the gate reads; build scope from traffic; Engagement home view. | **Engagement** | #30 |
-| M4 candidates | Candidate model on flux crate types, manual "flag as candidate", triage states, suppressions. | **Findings** | #16 |
+| **M2 replay** (done, `v0.3.0`) | Replay from the inspector via taphttp; edit, compare, Replays tab. Every action that sends traffic goes through the server-side action gate (scope, method policy, audit). CI and security gates; hardened runtime image. | Traffic | #17-#22, #10, #28, #29, taphttp#10 |
+| **M3 engagement** (done, `v0.4.0`) | The engagement as the root object: targets, scope (incl. explicit out-of-scope), rules of engagement as data that the gate reads; build scope from traffic; paste a scope list; OpenAPI import; CA setup in the UI; Engagement home view. | **Engagement** | #30 (#32, #34-#40) |
+| **M4 candidates** (next) | Candidate model on flux crate types (cschooley/flux v0.1.0), WSTG v4.2 rule ids mapped to CWE, manual "flag as candidate", keyboard triage, evidence, suppressions. | **Findings** | #48 (#41-#47), #16 |
 | M5 export | Flux export with redaction and fingerprints; redaction preview. | Findings | |
 | M6 agent ("geogaddi": long, a little scary, campfire headphase on the other side) | Intake, orchestrator and role agents (chat plans, tasks act); MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | **Tasks** | #13, #1, #2 |
 | M7 intercept | Pause/modify via taphttp `--intercept-socket`. | Traffic | |
@@ -180,7 +180,7 @@ Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3
 | M9 academy (capstone) | A separate Kudzu tool: graduated exercises on vulnerable targets in the sandbox, graded by spall + flux; WSTG/ASVS skills shared by humans and agents; content packs loaded from repos at runtime with their licenses shown; `--profile academy` ready-to-go lab. The content-pack loader is shared with M6 agent skills. | (its own launcher tile) | #31 |
 | Later | Wanted, not scheduled (label `later`). | | #15 |
 
-Traffic history (decided Nov 2026, spall#4): spall reads history from taphttp's lever API rather than keeping its own copy of the traffic. One store, and M2 replay goes through the same API. spall has its own store only for what it owns (candidates, from M3). Built on taphttp v0.3.0 (taphttp#7: token file outside the CA volume, sqlite-backed paging and search, `/feed?since=`): spall backfills from `/exchanges`, follows `/feed`, and proxies history to the browser as `/api/exchanges`. Tailing `--log-file` remains as a fallback when no API is configured. The API port stays on the compose network and is never published to the host.
+Traffic history (decided Nov 2026, spall#4): spall reads history from taphttp's lever API rather than keeping its own copy of the traffic. One store, and M2 replay goes through the same API. spall has its own store only for what it owns: engagements (M3) and candidates (M4). Built on taphttp v0.3.0 (taphttp#7: token file outside the CA volume, sqlite-backed paging and search, `/feed?since=`): spall backfills from `/exchanges`, follows `/feed`, and proxies history to the browser as `/api/exchanges`. Tailing `--log-file` remains as a fallback when no API is configured. The API port stays on the compose network and is never published to the host.
 
 SPA framework: decided, see Frontend above. M0 stayed one static HTML file on purpose.
 

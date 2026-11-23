@@ -194,14 +194,14 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 
 | View / pattern | Milestone |
 |---|---|
-| Traffic (history, filters, inspector) | M1 |
-| Replay in inspector | M2 |
-| Findings (manual flagging, triage, suppressions) | M4 |
+| Traffic (history, filters, inspector) | M1 (done) |
+| Replay in inspector | M2 (done) |
+| Findings (manual flagging, triage, suppressions) | M4 (next, #48) |
 | Flux export with redaction preview | M5 |
 | Tasks + MCP, e-stop, approval gates | M6 |
 | Intake chat, orchestrator plans, roles | M6 |
 | Agent buttons (PoC, Escalate impact, Find variants, Retest, Explain for devs, Test for…, Map auth, Why is this interesting) | M6; Find variants uses route maps fully from M8; Retest closes Kudzu tickets from M8 |
 | Surface (coverage) | M6–M8: needs task and check attribution (M6); seeded from route maps (M8) |
-| Engagement home, targets, scope, rules of engagement | M3 |
+| Engagement home, targets, scope, rules of engagement | M3 (done) |
 | Command palette and `` ` `` console (one registry) | M1, grows with each milestone |
 | Quad mode | M6, with agent tasks |

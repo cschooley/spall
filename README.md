@@ -5,17 +5,33 @@
 
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
-**Status:** pre-alpha, v0.2.0. M1 (traffic workbench) is done; M2 (replay) is next. See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
+**Status:** pre-alpha, v0.4.0. Done: M1 (traffic workbench), M2 (replay) and M3 (engagement). Next: M4 (candidates and triage, on flux types). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
 ## Screenshots
 
-### Today: the Traffic view (M1)
+### Today: Engagement and Traffic (M1-M3)
 
-Live traffic and history from taphttp, filter syntax, the shared inspector, command palette and the `` ` `` console. Screenshots use fixture traffic; regenerate them with `npm --prefix ui run screenshots`.
+Screenshots use fixture traffic and a sample engagement; regenerate them with `npm --prefix ui run screenshots`.
+
+**Traffic.** Live traffic and history from taphttp, filter syntax, the shared inspector, a scope dot on every row (in, excluded, undecided).
 
 ![spall Traffic view](docs/screenshots/traffic.png)
+
+**Replay and compare.** Replay from the inspector (`⏎`), or edit first (`e`); every send goes through the scope and rules-of-engagement gate. Compare sets a replay against its original.
+
+![Replay compared with its original](docs/screenshots/replay-compare.png)
+
+**Engagement.** Details, scope with exclusions, rules of engagement, hosts seen in traffic waiting for a decision, and browser setup with the CA certificate.
+
+![spall Engagement view](docs/screenshots/engagement.png)
+
+**Paste a scope list.** Straight from a statement of work: every line previewed before anything changes.
+
+![Pasting a scope list](docs/screenshots/engagement-paste.png)
+
+**Console** (`` ` ``). The same commands as the palette and, later, the MCP server.
 
 ![spall console](docs/screenshots/traffic-console.png)
 
@@ -23,7 +39,7 @@ Live traffic and history from taphttp, filter syntax, the shared inspector, comm
 
 Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
 
-**Traffic.** Still to come: attribution on every exchange (you or the agent), and replay and flag actions in the inspector.
+**Traffic.** Still to come: attribution on every exchange (you or the agent) and Flag as candidate in the inspector (M4).
 
 ![Mockup: Traffic view](docs/screenshots/mockup-traffic.png)
 
@@ -100,7 +116,7 @@ firefox --no-remote --profile ~/.spall-firefox &
 
 Then, in that window: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import `taphttp-ca.pem`, tick "Trust this CA to identify websites", and check the fingerprint. Use your `TAPHTTP_PORT` if you changed it. Firefox doesn't proxy localhost, so spall's UI still loads directly. With `libnss3-tools` installed, `certutil -A -d sql:$HOME/.spall-firefox -n taphttp -t C,, -i taphttp-ca.pem` does the import from the command line.
 
-Set `SPALL_SCOPE` to the hosts you're testing before the first start (see [Replay and scope](#replay-and-scope)), or every replay is denied. It seeds the first engagement; after that, change scope from the console.
+Until scope is set, every replay is denied. Set it in the Engagement view (`1`: add entries, paste a list, import an OpenAPI file, or decide hosts seen in traffic), from the console (`scope add …`), or with `SPALL_SCOPE` before the first start, which seeds the first engagement (see [Replay and scope](#replay-and-scope)).
 
 For a quick demo only, you can skip verification:
 
@@ -248,7 +264,7 @@ npm ci               # lockfile only; install scripts are disabled (.npmrc)
 npm run lint         # includes the "traffic is never HTML" bans
 npm test             # node:test, no browser
 npm run test:e2e     # Playwright: builds the UI, runs spall via cargo, headless Chromium
-npm run screenshots  # regenerate docs/screenshots/traffic*.png (1440x820, fixture traffic)
+npm run screenshots  # regenerate docs/screenshots/*.png (fixture traffic, mocked engagement)
 npm run build        # then rebuild spall to embed ui/dist
 npm run dev          # Vite on 127.0.0.1:5173, proxying /events, /api and /healthz to spall on :3000
 ```
@@ -272,9 +288,9 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 |---|---|---|
 | M0 hello | Docker Compose with taphttp; live traffic console over SSE | done, `v0.1.0` |
 | M1 traffic workbench | Traffic view: history and search from taphttp's API, filters, shared inspector, command palette and console, verdigris styling | done, `v0.2.0` |
-| M2 replay | Replay from the inspector and console via taphttp; results linked to the original; server-side action gate (scope, method policy, audit) | current |
-| M3 engagement | Targets, scope and rules of engagement as data; build scope from traffic; Engagement home view | |
-| M4 candidates | Flag candidates, triage, suppressions, on flux types | |
+| M2 replay | Replay from the inspector and console via taphttp, edit before sending, compare with the original, Replays tab; server-side action gate (scope, method policy, confirmation, audit) | done, `v0.3.0` |
+| M3 engagement | The engagement as root object: scope with exclusions, rules of engagement the gate enforces (windows, rate, methods), paste a scope list, hosts from traffic, OpenAPI import, browser setup with the CA; Engagement view | done, `v0.4.0` |
+| M4 candidates | Flag candidates, keyboard triage, evidence, suppressions, on [flux](https://github.com/cschooley/flux) crate types; WSTG v4.2 rule ids (#48) | next |
 | M5 export | flux export with redaction and fingerprints | |
 | M6 agent | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop, quad; execution sandbox and OOB listener | |
 | M7 intercept | Pause and modify requests via taphttp | |

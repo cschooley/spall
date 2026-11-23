@@ -1,6 +1,6 @@
 # flux: a SARIF 2.1.0 profile for Kudzu
 
-Status: draft v0.3 (Nov 2026)
+Status: draft v0.4 (Nov 2026). The `flux` crate v0.1.0 implements it (types, fingerprints, validation; redaction next).
 
 ## What flux is (and isn't)
 
@@ -30,18 +30,18 @@ Kudzu may use any internal model it likes. flux is the interchange format, not a
 | Concept | SARIF field | flux convention |
 |---|---|---|
 | Vuln class | `result.ruleId`, `run.tool.driver.rules[]` | Rule IDs stable per tool |
-| CWE / CAPEC | `run.taxonomies[]`, `result.taxa[]` | CWE taxonomy required where applicable |
+| CWE / CAPEC | `run.taxonomies[]`, `result.taxa[]` | CWE taxonomy required where applicable: `taxa` entry `{"id": "89", "toolComponent": {"name": "CWE"}}`, and the run declares a taxonomy named `CWE`. A rule's CWE goes in its `relationships[]` the same way |
 | Severity | `result.level` | `error` / `warning` / `note` |
 | Confidence / priority | `result.rank` (0-100) | Tool-reported confidence |
 | Dedup key | `result.fingerprints` | Required. See Fingerprints |
 | Same issue across runs | `result.correlationGuid` | Assigned on first confirmation, preserved after |
 | Run-over-run diff | `result.baselineState` | `new` / `unchanged` / `updated` / `absent` |
-| Triage: rejected, accepted risk | `result.suppressions[]` | `status` + `justification` required |
-| Duplicate | `result.suppressions[]` | `justification` references the original `correlationGuid` |
+| Triage: rejected, accepted risk | `result.suppressions[]` | `kind: external`, `status` + `justification` required; `flux/disposition` says which |
+| Duplicate | `result.suppressions[]` | `flux/disposition: duplicate`, `flux/duplicateOf` = the original's `correlationGuid`, which the `justification` also names |
 | Tracked ticket | `result.workItemUris[]` | Kudzu / Jira / GitHub issue URIs |
 | First/last seen | `result.provenance` | `firstDetectionTimeUtc`, `lastDetectionTimeUtc` |
 | SAST code location | `result.locations[].physicalLocation` | File + region |
-| DAST endpoint | `result.locations[]` | `artifactLocation.uri` = URL (query stripped); method in `logicalLocations` |
+| DAST endpoint | `result.locations[]` | `physicalLocation.artifactLocation.uri` = URL (query and fragment stripped); method in `logicalLocations` as `{"name": "GET", "kind": "httpMethod"}` (uppercase) |
 | SAST location on a DAST-confirmed finding | `result.relatedLocations[]` | Preserved when DAST confirms a SAST hypothesis |
 | HTTP evidence | `result.webRequest`, `result.webResponse` | See Evidence |
 | Data flow | `result.codeFlows[]` | SAST optional |
@@ -58,6 +58,15 @@ Kudzu may use any internal model it likes. flux is the interchange format, not a
 | `flux/fingerprintVersion` | string | Fingerprint algorithm version |
 | `flux/traceId` | string | OpenTelemetry trace ID linking a DAST request to runtime code locations |
 
+On a `suppression`'s property bag:
+
+| Key | Type | Meaning |
+|---|---|---|
+| `flux/disposition` | `falsePositive` \| `acceptedRisk` \| `duplicate` | Why a human suppressed it (triage: reject, accept the risk, duplicate) |
+| `flux/duplicateOf` | string | For `duplicate`: the original's `correlationGuid` |
+
+A suppression is in effect when its `status` is `accepted` or absent (SARIF's default); `underReview` is a proposal, `rejected` a refused one.
+
 `flux/status` is about whether the issue is real. `suppressions` is about what a human decided to do with it. A finding can be `confirmed` and suppressed (accepted risk).
 
 ## Fingerprints
@@ -65,8 +74,12 @@ Kudzu may use any internal model it likes. flux is the interchange format, not a
 Every result carries `fingerprints` with at least one flux key:
 
 - **DAST:** `flux/dast/v1` = SHA-256 of `host | method | normalized path | parameter name | ruleId`
-  - Normalized path: lowercase host, numeric and UUID segments replaced with `{id}`, trailing slash removed, query string removed.
-- **SAST:** `flux/sast/v1` = SHA-256 of `repo | file path | function/symbol | ruleId` (avoid line numbers; they drift).
+  - Host: lowercased, as in the URL (no userinfo; omit a default port). Method: uppercased. Parameter: its name, or empty when there is none.
+  - Normalized path: query string and fragment removed; segments of only digits, and UUIDs (8-4-4-4-12 hex), replaced with `{id}`; trailing slashes removed; a leading `/` added if missing (the root is `/`). Case and percent-encoding are kept.
+  - The parts are joined with `|` and hashed as UTF-8; the value is lowercase hex.
+- **SAST:** `flux/sast/v1` = SHA-256 of `repo | file path | function/symbol | ruleId` (avoid line numbers; they drift). Same joining and encoding.
+
+The crate's tests pin exact outputs for known inputs.
 
 Changing the algorithm means a new version suffix. Consumers match on any shared key.
 
@@ -136,7 +149,7 @@ flux is also a Rust library, so every Rust tool in Kudzu shares one set of findi
 
 - **One `Finding` type for Kudzu.** spall and scurf (and the Kudzu platform, if it is Rust) depend on `flux`; none define their own `Finding`, `Severity`, or `Evidence`.
 - **Types model this profile, not all of SARIF.** Fields map to the table above; `flux/` properties are typed fields, not a loose map.
-- **SARIF is the wire format.** `Finding` <-> SARIF `result`, `Report` <-> SARIF `log`, via serde. Evaluate building on an existing SARIF types crate (e.g. `serde-sarif`) rather than hand-writing the full SARIF object model.
+- **SARIF is the wire format.** `Finding` <-> SARIF `result`, `Report` <-> SARIF `log`, via serde. The types are hand-written for this profile's subset; SARIF fields they don't model are kept as they were, so reading and writing a document loses nothing. (`serde-sarif` was evaluated, Nov 2026: it generates all of SARIF at build time, with `schemafy`, `syn` and `typed-builder`, too heavy for a small core, and had no release since May 2025.)
 - **Fingerprint functions live here** (`flux/dast/v1`, `flux/sast/v1`), so every producer computes them identically.
 - **Redaction lives here**, so no producer can export without it.
 - **Validation lives here**: SARIF schema + flux rules, exposed as a function and a small CLI.
@@ -146,9 +159,11 @@ flux is also a Rust library, so every Rust tool in Kudzu shares one set of findi
 
 - **OCSF** (Vulnerability Finding class) for SIEM / security data lake consumers. A one-way export, not interchange.
 
-## Repo contents (planned)
+## Repo contents
 
 - `SPEC.md`: this document
-- `schema/flux-properties.schema.json`: JSON schema for the `flux/` property bag
-- `examples/`: SAST result, DAST result, SAST-confirmed-by-DAST, suppressed duplicate, retest result
-- `validate/`: small validator (SARIF schema + flux rules)
+- `src/`: the crate (`Finding`, `Report`, `fingerprint`, `validate`)
+- `schema/sarif-schema-2.1.0.json`: the official SARIF 2.1.0 schema (OASIS, errata 01), used by the tests
+- `examples/`: golden files, one per flow: DAST candidate, SAST hypothesis, SAST confirmed by DAST, suppressed duplicate, retest result
+
+Planned: redaction; a validator CLI; `schema/flux-properties.schema.json` for the `flux/` property bag.

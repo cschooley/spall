@@ -447,9 +447,11 @@ main.eng-main { display: block; overflow: auto; background: var(--vg-bg-base); }
 .eng .paste .summary { font: var(--vg-text-sm) var(--vg-font-mono); color: var(--vg-text-primary); }
 .eng .paste .actions { display: flex; gap: var(--vg-space-2); }
 .preview-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; }
-.preview { border-collapse: collapse; width: 100%; font: var(--vg-text-xs) var(--vg-font-mono); }
+/* Not the Traffic table: columns size to their text and cells wrap. */
+.preview { border-collapse: collapse; width: 100%; table-layout: auto; font: var(--vg-text-xs) var(--vg-font-mono); }
 .preview th { text-align: left; color: var(--vg-text-tertiary); font-weight: 500; padding: 2px var(--vg-space-2); border-bottom: 1px solid var(--vg-border-subtle); position: sticky; top: 0; background: var(--vg-bg-surface); }
-.preview td { padding: 2px var(--vg-space-2); vertical-align: top; overflow-wrap: anywhere; color: var(--vg-text-secondary); }
+.preview td { padding: 2px var(--vg-space-2); vertical-align: top; white-space: normal; overflow: visible; overflow-wrap: anywhere; color: var(--vg-text-secondary); }
+.preview th:first-child, .preview td.num { width: 1%; white-space: nowrap; }
 .preview td.num { color: var(--vg-text-tertiary); text-align: right; }
 .preview tr.ok td.to { color: var(--vg-accent-verdigris); }
 .preview tr.ex td.to { color: var(--vg-accent-rust); }
@@ -464,6 +466,7 @@ td.host .sc { display: inline-block; width: 1.2em; font-size: 9px; vertical-alig
 .eng .note.wrap { white-space: normal; }
 .eng .sect h3 label.check { display: inline-flex; gap: var(--vg-space-1); align-items: center; text-transform: none; letter-spacing: 0; font: var(--vg-text-xs) var(--vg-font-sans); }
 .eng .entries.hosts li { grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto; }
+.eng .entries.hosts .sc { margin-right: var(--vg-space-2); font-size: 9px; vertical-align: 1px; }
 .eng .sect-actions { display: inline-flex; gap: var(--vg-space-2); }
 .eng .paste ul.notes { margin: 0; padding-left: var(--vg-space-5); font: var(--vg-text-xs) var(--vg-font-mono); color: var(--vg-accent-rust); }
 

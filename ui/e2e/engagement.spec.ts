@@ -1,68 +1,7 @@
-// The Engagement view (#37), against an in-memory engagement API: the
-// browser test runs spall in log mode, so /api/engagement* is mocked with
-// state that survives a reload.
+// The Engagement view (#37), against the in-memory engagement API in
+// engagement-api.ts.
 import { expect, test } from "./fixtures.ts";
-import type { Page } from "@playwright/test";
-
-type Json = Record<string, unknown>;
-
-const days = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
-
-function engagementApi(page: Page, over: Json = {}) {
-  const state = {
-    e: {
-      id: "acme-1a2b",
-      name: "ACME Q4",
-      client: "ACME",
-      starts: days(-3),
-      ends: days(30),
-      expires: days(2),
-      contacts: [],
-      notes: "",
-      scope: ["*.acme.test", "!pay.acme.test"],
-      target_notes: {} as Record<string, string>,
-      rules: { methods: [], safe_methods: ["GET", "HEAD", "OPTIONS"], rate_limit: 10, time_zone: "UTC", windows: [] as Json[], blackouts: [] as Json[], agents_allowed: false, destructive_allowed: false },
-      ...over,
-    } as Json & { scope: string[]; rules: Json; target_notes: Record<string, string> },
-    others: [{ id: "beta-9f00", name: "Beta", client: "", active: false }],
-    testing: { allowed: true, reason: null as string | null },
-    calls: [] as { method: string; path: string; body: unknown }[],
-  };
-  const answer = () => ({ ...state.e, testing_now: state.testing, scope_all: false });
-  void page.route("**/api/status", (r) =>
-    r.fulfill({
-      json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: state.e.scope, scope_all: false, engagement: { id: state.e.id, name: state.e.name }, testing: state.testing },
-    }),
-  );
-  void page.route("**/api/engagement", async (r) => {
-    if (r.request().method() === "PATCH") {
-      const body = r.request().postDataJSON() as Json;
-      expect(r.request().headers()["content-type"]).toBe("application/json");
-      state.calls.push({ method: "PATCH", path: "/api/engagement", body });
-      if (body.ends === "1999-01-01") return r.fulfill({ status: 400, json: { error: "ends: before starts" } });
-      const { rules, ...rest } = body;
-      Object.assign(state.e, rest);
-      if (rules) Object.assign(state.e.rules, rules as Json);
-      return r.fulfill({ json: { engagement: answer(), changed: true } });
-    }
-    return r.fulfill({ json: answer() });
-  });
-  void page.route("**/api/engagements", (r) => r.fulfill({ json: [{ id: state.e.id, name: state.e.name, client: state.e.client, active: true }, ...state.others] }));
-  void page.route("**/api/scope", async (r) => {
-    const c = r.request().postDataJSON() as { op: string; entry: string; add?: string[]; exclude?: string[] };
-    state.calls.push({ method: "POST", path: "/api/scope", body: c });
-    if (c.op === "add") state.e.scope = [c.entry, ...state.e.scope];
-    if (c.op === "exclude") state.e.scope = [...state.e.scope, `!${c.entry}`];
-    if (c.op === "remove") state.e.scope = state.e.scope.filter((x) => x !== c.entry);
-    if (c.op === "apply") state.e.scope = [...state.e.scope, ...(c.add ?? []), ...(c.exclude ?? []).map((x) => `!${x}`)];
-    await r.fulfill({ json: { scope: state.e.scope, all: false, changed: true } });
-  });
-  void page.route("**/api/ca", (r) =>
-    r.fulfill({ json: { sha256: "AA:BB", subject: "CN=taphttp CA", not_before: null, not_after: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" } }),
-  );
-  void page.route("**/api/scope/check?*", (r) => r.fulfill({ json: { host: "pay.acme.test", state: "out", by: "!pay.acme.test" } }));
-  return state;
-}
+import { engagementApi } from "./engagement-api.ts";
 
 test("1 opens the Engagement view and 2 goes back; the rail marks the current view", async ({ page }) => {
   engagementApi(page);
@@ -251,6 +190,11 @@ test("paste a scope list: the server previews every line, one click applies (#38
   await expect(rows.nth(2)).toContainText("exclude pay.acme.test");
   await expect(rows.nth(3)).toContainText(p);
   expect(await page.locator(".eng img").count()).toBe(0);
+  // The preview isn't laid out like the Traffic table: long lines wrap
+  // instead of being cut off with an ellipsis.
+  const preview = panel.getByRole("table", { name: "Preview" });
+  expect(await preview.evaluate((t) => getComputedStyle(t).tableLayout)).toBe("auto");
+  expect(await rows.nth(0).locator("td.notes").evaluate((td) => getComputedStyle(td).whiteSpace)).toBe("normal");
   await panel.getByRole("button", { name: "apply 2" }).click();
   await expect(panel).toHaveCount(0);
   await expect(page).toHaveURL(/#engagement$/);
@@ -297,6 +241,8 @@ test("hosts from traffic: rows show their scope state, scope: filters, the Engag
   const undecided = panel.getByRole("list", { name: "Undecided hosts" });
   await expect(undecided.locator("li")).toHaveCount(2);
   await expect(undecided).toContainText(p);
+  // The state dot doesn't run into the host name.
+  expect(await undecided.locator(".sc").first().evaluate((d) => parseFloat(getComputedStyle(d).marginRight))).toBeGreaterThan(0);
   await panel.getByRole("button", { name: `Exclude *.tracker-${t}.com` }).click();
   await expect.poll(() => api.calls.at(-1)?.body).toEqual({ op: "exclude", entry: `*.tracker-${t}.com` });
   await panel.getByRole("checkbox").check();
