@@ -646,6 +646,8 @@ pub enum Op {
         #[serde(default)]
         reason: String,
     },
+    /// Steer it: a human's message, kept in its log for the agent (#61).
+    Note { text: String },
     /// Change a draft (nothing else: an approved task is what was approved).
     Edit {
         goal: Option<String>,
@@ -661,6 +663,7 @@ impl Op {
         match self {
             Op::Approve => "approve",
             Op::Halt { .. } => "halt",
+            Op::Note { .. } => "note",
             Op::Edit { .. } => "edit",
         }
     }
@@ -958,6 +961,28 @@ impl Store {
                     self.stopped()?;
                     authorize_rules(cx)?;
                     move_to(t, Status::Approved, None, cx.now)?;
+                }
+                Op::Note { text } => {
+                    let t2 = text.trim();
+                    if t2.is_empty() {
+                        return Err(Error::Invalid("note: say something".into()));
+                    }
+                    check_text("note", t2, MAX_NOTE, true).map_err(Error::Invalid)?;
+                    if t.status.finished() {
+                        return Err(Error::Conflict(format!(
+                            "{} is {}: nobody is listening",
+                            t.id,
+                            t.status.as_str()
+                        )));
+                    }
+                    push(
+                        t,
+                        Event::Note {
+                            by: "human".into(),
+                            text: t2.into(),
+                        },
+                        cx.now,
+                    )?;
                 }
                 Op::Halt { reason } => {
                     check_text("reason", reason, MAX_NOTE, false).map_err(Error::Invalid)?;

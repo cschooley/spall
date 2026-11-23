@@ -3,6 +3,8 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
+import { By } from "./Attribution.tsx";
+import { activityOf, type ActivityLine } from "../lib/attribution.ts";
 import { Approvals } from "./Approvals.tsx";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ScopePaste } from "./ScopePaste.tsx";
@@ -689,6 +691,7 @@ function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | 
         {waiting.length > WAITING_SHOWN ? <a href="#findings">{`and ${waiting.length - WAITING_SHOWN} more in Findings`}</a> : null}
       </div>
       <Approvals count={waitingApproval} onChanged={onChanged} />
+      <Activity nonce={(toTriage ?? 0) + (waitingApproval ?? 0)} />
       <ul className="todo-panels">
         {todo.map(([what, when]) => (
           <li key={what} className="todo" aria-disabled="true" title={`${what} · not built yet (${when})`}>
@@ -701,3 +704,37 @@ function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | 
   );
 }
 
+
+/** The newest audit records, yours and the agents' interleaved (#62, first cut). */
+function Activity({ nonce }: { nonce: number }) {
+  const [lines, setLines] = useState<ActivityLine[] | string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void apiJson("/api/audit?last=15").then((b) => {
+      if (!live) return;
+      if (typeof b === "string") setLines(b);
+      else setLines(Array.isArray(b) ? (b as Record<string, unknown>[]).map(activityOf).reverse() : []);
+    });
+    return () => {
+      live = false;
+    };
+  }, [nonce]);
+  return (
+    <div className="activity" role="group" aria-label="Activity">
+      <h4>Activity</h4>
+      {typeof lines === "string" ? <p className="error">{lines}</p> : null}
+      {Array.isArray(lines) && lines.length === 0 ? <p className="note">Nothing yet.</p> : null}
+      {Array.isArray(lines) && lines.length ? (
+        <ol className="entries">
+          {lines.map((l, i) => (
+            <li key={i} className={l.who.agent ? "agent" : undefined}>
+              <span className="note">{l.time}</span>
+              <By who={l.who} verb="" />
+              <span>{l.what}</span>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  );
+}

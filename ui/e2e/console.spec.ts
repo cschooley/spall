@@ -41,8 +41,9 @@ test("filter syntax: host:, method:, status: (exact and class), free text", asyn
     await filterTo(page, q);
     await expect(page.locator("tr.row"), q).toHaveCount(n);
   }
-  await filterTo(page, `by:agent ${t}`);
-  await expect(page.locator(".warn")).toHaveText("ignored: by:agent");
+  // by:agent is attribution now (#62); an unknown term is still reported.
+  await filterTo(page, `by:robot ${t}`);
+  await expect(page.locator(".warn")).toHaveText("ignored: by:robot");
 });
 
 test("clear empties the table and new traffic still arrives", async ({ page }) => {

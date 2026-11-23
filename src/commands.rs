@@ -505,6 +505,25 @@ pub static COMMANDS: &[Command] = &[
         args: || obj(&[("id", text("the task, like T-3; an agent's default and only choice is its own"))], &[]),
     },
     Command {
+        name: "halt",
+        usage: "halt <T-n> [reason]",
+        desc: "stop one agent task for good (estop stops them all)",
+        // A human's stop; an agent never halts another task.
+        risk: Risk::Record,
+        mcp: false,
+        hidden: false,
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    ("id", text("the task, like T-3")),
+                    ("reason", text("why, kept with the task")),
+                ],
+                &["id"],
+            )
+        },
+    },
+    Command {
         name: "propose_finding",
         usage: "propose_finding",
         desc: "propose a candidate finding with evidence from this task's own traffic; a human triages and promotes it",

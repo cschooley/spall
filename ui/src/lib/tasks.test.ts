@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { asWaiting, costText, decide, forTaskText, taskLines, taskListLines } from "./tasks.ts";
+import { asTask, asTasks, asWaiting, chipOf, costText, decide, forTaskText, messages, requestRows, taskFromHash, taskLines, taskListLines } from "./tasks.ts";
 
 const P = `<img src=x onerror="window.__pwned=1">`;
 
@@ -77,4 +77,46 @@ test("console lines for tasks", () => {
     "waiting on approval: POST https://a.test/ (asks)",
     "log: 2 entries",
   ]);
+});
+
+const FULL = {
+  id: "T-3", goal: P, role: "tester", status: "running", reason: null, spent: 4, asked_by: "human", note: "", created: "2026-11-23T20:00:00Z", started: "2026-11-23T20:00:05Z", ended: null,
+  constraints: { budget: 30, time_limit_minutes: 60, hosts: ["a.test"], methods: ["GET", "POST"], safe_methods: ["GET"], rate_limit: 2, stop: { server_errors: 3 } },
+  plan: [{ text: "baseline", done: true }, { text: "fixation", done: false }],
+  log: [
+    { ts: "2026-11-23T20:00:05Z", kind: "status", from: "approved", to: "running" },
+    { ts: "2026-11-23T20:00:06Z", kind: "read", exchange: "e1" },
+    { ts: "2026-11-23T20:00:07Z", kind: "request", exchange: "r-e1", method: "GET", target: `https://a.test/${P}`, outcome: "sent", status: 200 },
+    { ts: "2026-11-23T20:00:08Z", kind: "request", exchange: null, method: "POST", target: "https://a.test/login", outcome: "denied" },
+    { ts: "2026-11-23T20:00:09Z", kind: "note", by: "human", text: "skip reset" },
+    { ts: "2026-11-23T20:00:10Z", kind: "turn", text: P },
+    { ts: "2026-11-23T20:00:11Z", kind: "approval", what: "POST https://a.test/login", outcome: "asked" },
+  ],
+};
+
+test("a full task: constraints, plan, request rows and messages", () => {
+  const t = asTask(FULL)!;
+  assert.deepEqual([t.budget, t.timeLimit, t.rate, t.stop.serverErrors, t.hosts, t.safeMethods], [30, 60, 2, 3, ["a.test"], ["GET"]]);
+  assert.deepEqual(t.plan, [{ text: "baseline", done: true }, { text: "fixation", done: false }]);
+  assert.deepEqual(requestRows(t), [
+    { time: "20:00:07", method: "GET", target: `https://a.test/${P}`, status: 200, outcome: "sent", exchange: "r-e1", check: null },
+    { time: "20:00:08", method: "POST", target: "https://a.test/login", status: null, outcome: "denied", exchange: null, check: null },
+  ]);
+  assert.deepEqual(messages(t), [
+    { time: "20:00:05", who: "sys", text: "approved → running" },
+    { time: "20:00:09", who: "you", text: "skip reset" },
+    { time: "20:00:10", who: "agent", text: P },
+    { time: "20:00:11", who: "sys", text: "asked: POST https://a.test/login" },
+  ]);
+  assert.equal(asTask({ goal: "no id" }), null);
+  assert.deepEqual(asTasks({ tasks: [FULL, null, { id: 5 }] }).map((x) => x.id), ["T-3"]);
+  assert.equal(asTasks({ tasks: [{ ...FULL, log: undefined, log_len: 9 }] })[0]!.logLen, 9);
+});
+
+test("chips and hashes", () => {
+  assert.deepEqual(chipOf("waiting_on_approval"), { label: "Needs approval", cls: "waiting" });
+  assert.deepEqual(chipOf("failed"), { label: "Failed", cls: "halted" });
+  assert.equal(taskFromHash("#tasks/T-12"), "T-12");
+  assert.equal(taskFromHash("#tasks/../x"), null);
+  assert.equal(taskFromHash("#tasks"), null);
 });

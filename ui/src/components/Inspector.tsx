@@ -3,6 +3,8 @@
 // curl, save body, flag as candidate (M4, here and never on a row). Every
 // value is attacker-controlled and rendered as text.
 
+import { By } from "./Attribution.tsx";
+import { ofExchange } from "../lib/attribution.ts";
 import { Fragment, useEffect, useState } from "react";
 import { FlagForm } from "./FlagForm.tsx";
 import { listCandidates, stateOf, type Candidate } from "../lib/candidates.ts";
@@ -154,6 +156,7 @@ export function Inspector({
           <span className={statusClass(entry.status)}>{statusLine(entry.status)}</span>
           {entry.error ? <span className="error">{entry.error}</span> : null}
           {entry.duration_ms !== null ? <span>{durationText(entry.duration_ms)}</span> : null}
+          <By who={ofExchange(entry.meta)} />
           {entry.replay_of ? (
             <button type="button" className="link orig" title="Open the original" onClick={() => onOpen(entry.replay_of!)}>
               {`replay of ${entry.replay_of}`}

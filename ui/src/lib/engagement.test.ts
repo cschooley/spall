@@ -46,6 +46,7 @@ test("the authorization countdown", async () => {
   assert.equal(viewFromHash("#"), "engagement");
   assert.equal(viewFromHash("#traffic"), "traffic");
   assert.equal(viewFromHash("#findings/c-1"), "findings");
+  assert.equal(viewFromHash("#tasks/T-3"), "tasks", "Tasks is built (#61)");
   assert.equal(viewFromHash("#surface"), "engagement", "unbuilt views fall back to home");
   assert.equal(viewFromHash("#nonsense"), "engagement");
   assert.equal(viewFromHash("#engagement/paste"), "engagement");

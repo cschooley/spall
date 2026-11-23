@@ -3570,3 +3570,60 @@ async fn claude_code_over_stdio_reads_replays_and_proposes_and_an_unsafe_send_wa
         });
     assert!(ended, "the bridge ends its session on EOF");
 }
+
+#[tokio::test]
+async fn an_approved_task_starts_with_its_agent_and_steering_reaches_it() {
+    let (dir, _stub, spall, r) = agent_setup("{}").await;
+    post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"second","role":"mapper"}"#,
+        None,
+    )
+    .await;
+    send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    let mut m = Mcp::new(spall, &dir.path().join("api-token"));
+    m.initialize("?task=T-2").await;
+    let (text, _) = m.call("task", serde_json::json!({})).await;
+    assert!(
+        text.starts_with("It hasn't started"),
+        "reading its task doesn't start it: {text}"
+    );
+    assert_eq!(task_of(&r, "T-2").status, spall::tasks::Status::Approved);
+    let (_, is_err) = m.call("open", serde_json::json!({"id": "e1"})).await;
+    assert!(!is_err);
+    let t = task_of(&r, "T-2");
+    assert_eq!(t.status, spall::tasks::Status::Running);
+    assert!(t.started.is_some());
+
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"note","text":"skip password reset; out of scope this week"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"note","text":"  "}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 400"), "{res}");
+    let (text, _) = m.call("task", serde_json::json!({})).await;
+    assert!(
+        text.contains("skip password reset; out of scope this week"),
+        "{text}"
+    );
+}

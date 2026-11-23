@@ -1,6 +1,7 @@
 // The exchange list: virtualized (thousands of rows stay fast), follows the
 // tail, and asks for older history when scrolled to the top.
 
+import { AgentMark } from "./Attribution.tsx";
 import { memo, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { durationText, methodClass, pathOf, statusClass, statusText, timeOf } from "../lib/format.ts";
@@ -155,6 +156,7 @@ const Row = memo(function Row({
       <td title={entry.url}>
         {pathOf(entry.url)}
         {entry.replay_of ? <span className="replay">replay</span> : null}
+        <AgentMark meta={entry.meta} />
       </td>
       <td className={statusClass(entry.status)} title={entry.error ?? undefined}>
         {statusText(entry.status)}

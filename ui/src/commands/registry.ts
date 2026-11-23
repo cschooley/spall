@@ -59,6 +59,8 @@ export interface Ctx {
   promote(id: string, undo: boolean): Promise<Candidate | string>;
   /** Export the promoted candidates as a flux report and save it (#51); what happened. */
   exportFindings(unredacted: boolean): Promise<{ ok: boolean; text: string }>;
+  /** Halt a task for good (#61); what happened. */
+  haltTask(id: string, reason: string): Promise<{ ok: boolean; text: string }>;
   /** A task's details as console lines, or every task's one-liner with no id (#54); or why not. */
   task(id?: string): Promise<string[] | string>;
   /** Engage the agent e-stop, or clear it (#57); what happened. */
@@ -557,6 +559,17 @@ const IMPLS: readonly Impl[] = [
       const r = await ctx.task(id);
       if (typeof r === "string") return ctx.out(`task: ${r}`, "warn");
       for (const line of r) ctx.out(line);
+    },
+  },
+  {
+    name: "halt",
+    group: "app",
+    palette: { label: "Halt a task…", hint: "halt <T-n>", needsArgs: true },
+    run: async (args, ctx, rest) => {
+      const [id] = args;
+      if (!id || !/^T-\d{1,9}$/.test(id)) return ctx.out("usage: halt <T-n> [reason]", "warn");
+      const r = await ctx.haltTask(id, rest.slice(id.length).trim());
+      ctx.out(r.text, r.ok ? "stop" : "warn");
     },
   },
   {

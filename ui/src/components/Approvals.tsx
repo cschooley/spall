@@ -35,7 +35,7 @@ export function Approvals({ count, onChanged }: { count: number | null; onChange
   );
 }
 
-function Card({ w, onDone }: { w: Waiting; onDone(): void }) {
+export function Card({ w, onDone }: { w: Waiting; onDone(): void }) {
   const [denying, setDenying] = useState(false);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);

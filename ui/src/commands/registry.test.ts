@@ -57,6 +57,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080", taphttpVersion: "0.6.1" }),
     openSetup: () => void calls.push("setup"),
     promote: async (id, undo) => (calls.push(`promote:${id}${undo ? ":undo" : ""}`), id === "c-1" ? { ...asCandidate(RAW)!, id, promoted: undo ? null : "now" } : `no candidate ${id}`),
+    haltTask: async (id, reason) => (calls.push(`halt:${id}:${reason}`), id === "T-1" ? { ok: true, text: "T-1 halted" } : { ok: false, text: "no such task" }),
     task: async (id) => (calls.push(`task:${id ?? ""}`), id === "T-9" ? "no such task" : [`${id ?? "all"} line`]),
     estop: async (a, reason) => (calls.push(`estop:${a}:${reason ?? ""}`), { ok: true, text: a === "clear" ? "cleared" : "engaged" }),
     exportFindings: async (u) => (calls.push(`export:${u}`), u ? { ok: false, text: "an unredacted export needs spall started with --allow-unredacted-export" } : { ok: true, text: "exported spall-x.sarif (redacted)" }),
@@ -269,6 +270,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["flag", "record"],
       ["promote", "export"],
       ["export", "export"],
+      ["halt", "record"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");
@@ -674,4 +676,20 @@ test("task lists tasks or shows one; propose_finding is the agent's, not the con
     ],
   );
   assert.ok(SPECS.some((s) => s.name === "propose_finding" && s.mcp && !s.ui));
+});
+
+test("halt stops one task for good, by id, with a reason", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("halt T-1 wrong host", ctx);
+  await execute("halt", ctx);
+  await execute("halt T-2", ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("halt")), ["halt:T-1:wrong host", "halt:T-2:"]);
+  assert.deepEqual(
+    lines.filter(([, k]) => k !== "cmd"),
+    [
+      ["T-1 halted", "stop"],
+      ["usage: halt <T-n> [reason]", "warn"],
+      ["no such task", "warn"],
+    ],
+  );
 });

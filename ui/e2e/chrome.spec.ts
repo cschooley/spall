@@ -11,7 +11,7 @@ test("the brand shows the spall mark from verdigris", async ({ page }) => {
   await expect(page.locator(".brand")).toHaveText("spall");
 });
 
-test("the rail shows all five views in order; Engagement and Traffic are live", async ({ page }) => {
+test("the rail shows all five views in order; all but Surface are live", async ({ page }) => {
   await page.goto("/#traffic");
   const items = page.locator(".rail > *");
   await expect(items).toHaveCount(5);
@@ -32,7 +32,8 @@ test("the rail shows all five views in order; Engagement and Traffic are live", 
   await expect(traffic).toHaveAttribute("title", "Traffic (2)");
   await expect(page.getByRole("link", { name: "Engagement" })).toHaveAttribute("title", "Engagement (1)");
   await expect(page.getByRole("link", { name: "Findings" })).toHaveAttribute("title", "Findings (5)");
-  for (const [view, key] of [["surface", "3"], ["tasks", "4"]] as const) {
+  await expect(page.getByRole("link", { name: "Tasks" })).toHaveAttribute("title", "Tasks (4)");
+  for (const [view, key] of [["surface", "3"]] as const) {
     const el = page.locator(`.rail [data-view='${view}']`);
     await expect(el).toHaveAttribute("aria-disabled", "true");
     await expect(el).toHaveClass(/todo/);
@@ -41,7 +42,7 @@ test("the rail shows all five views in order; Engagement and Traffic are live", 
     expect(Number(await el.evaluate((e) => getComputedStyle(e).opacity))).toBeLessThan(0.5);
   }
   // A placeholder's number key does nothing.
-  await page.keyboard.press("4");
+  await page.keyboard.press("3");
   await expect(traffic).toHaveAttribute("aria-current", "page");
 });
 

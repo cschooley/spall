@@ -7,6 +7,8 @@
 // each candidate shows what redaction will strip (#49). Every string shown
 // came from captured traffic or a tester: text only.
 
+import { By } from "./Attribution.tsx";
+import { ofCandidate } from "../lib/attribution.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   change,
@@ -239,6 +241,11 @@ export function FindingsView({
                 <span className="rule">{c.ruleId}</span>
                 <span className="where">{where(c)}</span>
                 <span className={`state st-${stateOf(c).replace(/ /g, "-")}`}>{stateOf(c)}</span>
+                {ofCandidate(c.flaggedBy).agent ? (
+                  <span className="by-agent" title={`proposed by ${ofCandidate(c.flaggedBy).label}`}>
+                    {`◆ ${ofCandidate(c.flaggedBy).task ?? "agent"}`}
+                  </span>
+                ) : null}
               </button>
             </li>
           ))}
@@ -257,7 +264,7 @@ export function FindingsView({
               {current.cwes.map((c) => (
                 <span key={c}>{`CWE-${c}`}</span>
               ))}
-              <span>{`flagged by ${current.flaggedBy || "?"} ${timeOf(current.created)}`}</span>
+              <By who={ofCandidate(current.flaggedBy)} verb={ofCandidate(current.flaggedBy).agent ? "proposed by" : "flagged by"} when={timeOf(current.created)} />
             </div>
           </header>
           <div className="actions">

@@ -6,8 +6,9 @@ import { Icon } from "./components/Icon.tsx";
 import { Inspector, type Tab as InspectorTab } from "./components/Inspector.tsx";
 import { Launcher } from "./components/Launcher.tsx";
 import { EStopButton, HaltBanner } from "./components/EStop.tsx";
+import { TasksView } from "./components/TasksView.tsx";
 import { clearEStop, engageEStop } from "./lib/estop.ts";
-import { taskLines, taskListLines } from "./lib/tasks.ts";
+import { changeTask, taskLines, taskListLines } from "./lib/tasks.ts";
 import { Rail, VIEWS } from "./components/Rail.tsx";
 import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
@@ -493,6 +494,12 @@ export function App() {
         return { ok: true, text: `exported ${r.name}${unredacted ? " (UNREDACTED: contains captured credentials)" : " (redacted)"}` };
       },
       rules: loadCatalog,
+      haltTask: async (id, reason) => {
+        const err = await changeTask(id, reason ? { op: "halt", reason } : { op: "halt" });
+        if (err) return { ok: false, text: `halt: ${err}` };
+        setStatusNonce((n) => n + 1);
+        return { ok: true, text: `${id} halted for good: it never runs again.` };
+      },
       task: async (id) => {
         const body = await apiJson(id ? `/api/tasks/${encodeURIComponent(id)}` : "/api/tasks");
         if (typeof body === "string") return body;
@@ -680,7 +687,18 @@ export function App() {
 
       <Rail current={view} />
 
-      {view === "findings" ? (
+      {view === "tasks" ? (
+        <main className="tasks-main">
+          <TasksView
+            available={status.replay}
+            onChanged={() => setStatusNonce((n) => n + 1)}
+            onOpenExchange={(id) => {
+              window.location.hash = "traffic";
+              void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
+            }}
+          />
+        </main>
+      ) : view === "findings" ? (
         <main className="findings-main">
           <FindingsView
             available={status.replay}

@@ -48,10 +48,10 @@ test("console commands drive the same actions as the UI", async ({ page }) => {
 
   await run(page, "theme blued-light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "blued-light");
-  await run(page, "goto tasks");
+  await run(page, "goto surface");
   await run(page, "frobnicate");
   const log = page.locator(".con-log");
-  await expect(log.locator(".l-warn")).toHaveText(["goto: tasks is not built yet", "unknown command: frobnicate. try help"]);
+  await expect(log.locator(".l-warn")).toHaveText(["goto: surface is not built yet", "unknown command: frobnicate. try help"]);
   await run(page, "god");
   await expect(log.locator(".l-out").last()).toHaveText("no.");
   await run(page, "clear");
@@ -87,11 +87,11 @@ test("system messages while closed show an unread count in the status bar", asyn
   const t = token();
   await page.goto("/#traffic");
   await expect(page.locator(".con-unread")).toHaveCount(0);
-  await filterTo(page, `by:agent ${t}`);
+  await filterTo(page, `by:robot ${t}`);
   const badge = page.locator(".con-unread");
   await expect(badge).toHaveText("` 1");
   await badge.click();
-  await expect(page.locator(".con-log .l-warn")).toContainText("filter: ignored by:agent");
+  await expect(page.locator(".con-log .l-warn")).toContainText("filter: ignored by:robot");
   await page.keyboard.press("Escape");
   await expect(badge).toHaveCount(0);
 });

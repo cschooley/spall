@@ -3,7 +3,10 @@
 // spall); the same predicate runs client-side on live rows, mirroring the
 // API's semantics so both agree. `replay:` is client-side only: taphttp
 // filters on one original (`replay_of=<id>`), not on being a replay.
-// `scope:` is client-side too, from spall's host states (#39).
+// `scope:` is client-side too, from spall's host states (#39), and so are
+// `actor:` and `task:` (#62): taphttp doesn't filter on `meta`.
+
+import { ofExchange } from "./attribution.ts";
 
 export interface Query {
   host?: string;
@@ -15,6 +18,10 @@ export interface Query {
   replay?: boolean;
   /** scope:in|out|unknown, from the server's host states (#39). */
   scope?: "in" | "out" | "unknown";
+  /** actor:agent|you (or by:), from the exchange's attribution (#62). */
+  actor?: "agent" | "you";
+  /** task:T-3: what that agent task sent (#62). */
+  task?: string;
   /** Tokens that look like filters but aren't supported (e.g. by:agent, M5). */
   ignored: string[];
 }
@@ -36,7 +43,9 @@ export function parseFilter(input: string): Query {
     else if (key === "status" && /^[1-5]xx$/i.test(val)) q.statusClass = Number(val[0]);
     else if (key === "replay" && /^(yes|no)$/i.test(val)) q.replay = val.toLowerCase() === "yes";
     else if (key === "scope" && /^(in|out|unknown)$/i.test(val)) q.scope = val.toLowerCase() as Query["scope"];
-    else if (["host", "method", "status", "by", "replay", "scope"].includes(key)) q.ignored.push(tok);
+    else if ((key === "actor" || key === "by") && /^(agent|you|human)$/i.test(val)) q.actor = /^agent$/i.test(val) ? "agent" : "you";
+    else if (key === "task" && /^T-\d{1,9}$/i.test(val)) q.task = val.toUpperCase();
+    else if (["host", "method", "status", "by", "actor", "task", "replay", "scope"].includes(key)) q.ignored.push(tok);
     else words.push(tok); // e.g. "https://..." in free text
   }
   if (words.length) q.text = words.join(" ");
@@ -55,7 +64,7 @@ export function apiParams(q: Query): [string, string][] {
 }
 
 export function matchesQuery(
-  e: { host: string; method: string; url: string; status: number | null; replay_of?: string | null },
+  e: { host: string; method: string; url: string; status: number | null; replay_of?: string | null; meta?: Record<string, string> },
   q: Query,
   /** A host's scope state, for scope:; a host the server hasn't seen yet is unknown. */
   stateOf: (host: string) => "in" | "out" | "unknown" | null = () => null,
@@ -68,9 +77,12 @@ export function matchesQuery(
   if (q.text && !lc(e.url).includes(lc(q.text)) && !lc(e.host).includes(lc(q.text))) return false;
   if (q.replay !== undefined && Boolean(e.replay_of) !== q.replay) return false;
   if (q.scope !== undefined && (stateOf(e.host) ?? "unknown") !== q.scope) return false;
+  const by = ofExchange(e.meta);
+  if (q.actor !== undefined && (by.agent ? "agent" : "you") !== q.actor) return false;
+  if (q.task !== undefined && by.task !== q.task) return false;
   return true;
 }
 
 export function isEmptyQuery(q: Query): boolean {
-  return apiParams(q).length === 0 && q.replay === undefined && q.scope === undefined;
+  return apiParams(q).length === 0 && q.replay === undefined && q.scope === undefined && q.actor === undefined && q.task === undefined;
 }

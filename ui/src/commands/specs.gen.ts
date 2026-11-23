@@ -532,6 +532,32 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "id": {
+          "description": "the task, like T-3",
+          "type": "string"
+        },
+        "reason": {
+          "description": "why, kept with the task",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "stop one agent task for good (estop stops them all)",
+    "hidden": false,
+    "mcp": false,
+    "name": "halt",
+    "risk": "record",
+    "ui": true,
+    "usage": "halt <T-n> [reason]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "evidence": {
           "description": "more exchanges (replays) backing it: ones this task sent or read",
           "items": {

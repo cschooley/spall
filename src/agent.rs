@@ -120,6 +120,20 @@ impl Tools {
                 eng.id
             ));
         };
+        // An approved task starts with its agent's first action: that's
+        // when it runs and its time limit starts (halt and e-stop still win).
+        let t = if t.status == Status::Approved && name != "task" {
+            let now = taphttp_types::Timestamp::now().to_string();
+            match r
+                .tasks
+                .transition(&eng.id, task, Status::Running, None, &now)
+            {
+                Ok(t) => t,
+                Err(e) => return err(format!("{task} can't start: {e}")),
+            }
+        } else {
+            t
+        };
         if t.status.finished() && name != "task" {
             return err(format!(
                 "{task} is {}{}: nothing more runs under it. Stop; the tester gives new work as a new task.",

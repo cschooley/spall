@@ -15,8 +15,8 @@ test("parses tokens and free text", () => {
 });
 
 test("unsupported or malformed tokens are reported, not guessed", () => {
-  assert.deepEqual(parseFilter("by:agent status:abc status:7xx status:99999 host:").ignored, [
-    "by:agent",
+  assert.deepEqual(parseFilter("by:robot status:abc status:7xx status:99999 host:").ignored, [
+    "by:robot",
     "status:abc",
     "status:7xx",
     "status:99999",
@@ -68,4 +68,19 @@ test("scope:in|out|unknown uses the server's host states", () => {
   assert.ok(!matchesQuery(e, parseFilter("scope:out"), look));
   assert.ok(matchesQuery({ ...e, host: "new.test" }, parseFilter("scope:unknown"), look), "not seen yet: unknown");
   assert.ok(!isEmptyQuery(parseFilter("scope:unknown")));
+});
+
+test("actor: and task: filter on the exchange's attribution, client-side (#62)", () => {
+  const q = parseFilter("actor:agent task:t-3 login");
+  assert.deepEqual({ actor: q.actor, task: q.task, text: q.text }, { actor: "agent", task: "T-3", text: "login" });
+  assert.deepEqual(apiParams(q), [["q", "login"]], "taphttp doesn't filter on meta");
+  assert.equal(parseFilter("by:you").actor, "you");
+  assert.deepEqual(parseFilter("task:3 actor:bot").ignored, ["task:3", "actor:bot"]);
+  assert.equal(isEmptyQuery(parseFilter("actor:agent")), false);
+  const e = (meta?: Record<string, string>) => ({ host: "a.test", method: "GET", url: "https://a.test/login", status: 200, meta });
+  assert.ok(matchesQuery(e({ actor: "agent", task: "T-3" }), q));
+  assert.ok(!matchesQuery(e({ actor: "agent", task: "T-4" }), q));
+  assert.ok(!matchesQuery(e({ actor: "human" }), q));
+  assert.ok(matchesQuery(e(undefined), parseFilter("actor:you")), "captured traffic is yours");
+  assert.ok(!matchesQuery(e({ actor: "agent" }), parseFilter("actor:you")));
 });

@@ -213,6 +213,18 @@ evidence the task sent or read (`Event::Request`/`Event::Read`), is
 registry's `ui` flag marks agent-only commands (`propose_finding`).
 `tests/fixtures/injection-corpus.txt` is the injection corpus.
 
+Tasks view and attribution (#61, #62, done): `ui/src/components/TasksView.tsx`
+(key 4) polls `/api/tasks` every 2 s while open (the SSE stream carries
+traffic only). Humans add steering with `PATCH {"op":"note"}`; an
+approved task starts on its agent's first non-`task` tool call. `halt
+<T-n>` and `task [T-n]` are console commands. Attribution comes from the
+record: taphttp `meta` on exchanges (`ui/src/lib/attribution.ts`
+`ofExchange`), `flagged_by: agent:T-n` on candidates; ◆ plus a label,
+never color alone. Filters `actor:agent|you` (or `by:`) and `task:T-n`
+are client-side. The Engagement view's Activity reads `/api/audit`.
+Browser tests mock `/api/candidates`, `/api/tasks` and `/api/audit` by
+default (log mode has none).
+
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
 

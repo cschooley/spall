@@ -145,3 +145,185 @@ export function taskLines(v: unknown): string[] {
   out.push(`log: ${log.length} entr${log.length === 1 ? "y" : "ies"}`);
   return out;
 }
+
+/** A task in full, as `GET /api/tasks/{id}` (or a list row, without its log). */
+export interface Task {
+  id: string;
+  goal: string;
+  role: string;
+  status: string;
+  reason: string | null;
+  spent: number;
+  budget: number;
+  timeLimit: number;
+  hosts: string[];
+  methods: string[];
+  safeMethods: string[];
+  rate: number | null;
+  stop: { serverErrors: number | null; throttled: number | null };
+  plan: { text: string; done: boolean }[];
+  askedBy: string;
+  note: string;
+  created: string;
+  started: string | null;
+  ended: string | null;
+  log: Record<string, unknown>[];
+  /** Log entries the server has (lists leave the log out). */
+  logLen: number;
+  /** The request it waits on, in the server's shape (for asWaiting). */
+  pendingRaw: unknown;
+}
+
+const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+const opt = (v: unknown) => (typeof v === "string" ? v : null);
+const optNum = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+export function asTask(v: unknown): Task | null {
+  const t = (v ?? null) as Record<string, unknown> | null;
+  if (!t || typeof t.id !== "string") return null;
+  const c = (t.constraints ?? {}) as Record<string, unknown>;
+  const stop = (c.stop ?? {}) as Record<string, unknown>;
+  const log = Array.isArray(t.log) ? (t.log.filter((e) => e && typeof e === "object") as Record<string, unknown>[]) : [];
+  return {
+    id: t.id,
+    goal: str(t.goal),
+    role: str(t.role),
+    status: str(t.status),
+    reason: opt(t.reason),
+    spent: num(t.spent),
+    budget: num(c.budget),
+    timeLimit: num(c.time_limit_minutes),
+    hosts: strs(c.hosts),
+    methods: strs(c.methods),
+    safeMethods: strs(c.safe_methods),
+    rate: optNum(c.rate_limit),
+    stop: { serverErrors: optNum(stop.server_errors), throttled: optNum(stop.throttled) },
+    plan: Array.isArray(t.plan) ? t.plan.map((p) => ({ text: str((p as Record<string, unknown>)?.text), done: (p as Record<string, unknown>)?.done === true })) : [],
+    askedBy: str(t.asked_by),
+    note: str(t.note),
+    created: str(t.created),
+    started: opt(t.started),
+    ended: opt(t.ended),
+    log,
+    logLen: typeof t.log_len === "number" ? t.log_len : log.length,
+    pendingRaw: t.pending ?? null,
+  };
+}
+
+export function asTasks(v: unknown): Task[] {
+  const list = (v as { tasks?: unknown } | null)?.tasks;
+  return Array.isArray(list) ? list.flatMap((x) => asTask(x) ?? []) : [];
+}
+
+/** The status as a chip: label and class. */
+export function chipOf(status: string): { label: string; cls: string } {
+  switch (status) {
+    case "running":
+      return { label: "Running", cls: "running" };
+    case "waiting_on_approval":
+      return { label: "Needs approval", cls: "waiting" };
+    case "halted":
+      return { label: "Halted", cls: "halted" };
+    case "draft":
+      return { label: "Draft", cls: "draft" };
+    case "approved":
+      return { label: "Approved", cls: "approved" };
+    case "done":
+      return { label: "Done", cls: "done" };
+    case "failed":
+      return { label: "Failed", cls: "halted" };
+    default:
+      return { label: status || "?", cls: "" };
+  }
+}
+
+export const finished = (status: string) => status === "done" || status === "halted" || status === "failed";
+
+const timeOf = (ts: string) => ts.match(/T(\d\d:\d\d:\d\d)/)?.[1] ?? "--:--:--";
+
+/** The request log: every request the task sent or tried, oldest first. */
+export interface RequestRow {
+  time: string;
+  method: string;
+  target: string;
+  status: number | null;
+  outcome: string;
+  exchange: string | null;
+  check: string | null;
+}
+
+export function requestRows(t: Task): RequestRow[] {
+  return t.log
+    .filter((e) => e.kind === "request")
+    .map((e) => ({
+      time: timeOf(str(e.ts)),
+      method: str(e.method),
+      target: str(e.target),
+      status: optNum(e.status),
+      outcome: str(e.outcome),
+      exchange: opt(e.exchange),
+      check: opt(e.check),
+    }));
+}
+
+/** The steering panel: your notes, the agent's turns, and what happened, oldest first. */
+export interface Message {
+  time: string;
+  who: "you" | "agent" | "sys";
+  text: string;
+}
+
+export function messages(t: Task): Message[] {
+  const out: Message[] = [];
+  for (const e of t.log) {
+    const time = timeOf(str(e.ts));
+    switch (e.kind) {
+      case "note":
+        out.push({ time, who: str(e.by) === "human" ? "you" : "agent", text: str(e.text) });
+        break;
+      case "turn":
+        out.push({ time, who: "agent", text: str(e.text) });
+        break;
+      case "status":
+        out.push({ time, who: "sys", text: `${str(e.from)} → ${str(e.to)}${str(e.reason) ? `: ${str(e.reason)}` : ""}` });
+        break;
+      case "approval":
+        out.push({ time, who: "sys", text: `${str(e.outcome)}: ${str(e.what)}` });
+        break;
+    }
+  }
+  return out;
+}
+
+export interface NewTask {
+  goal: string;
+  role: string;
+  budget?: number;
+  timeLimit?: number;
+  hosts?: string[];
+  methods?: string[];
+  note?: string;
+}
+
+/** POST /api/tasks: the new draft, or the server's message. */
+export async function createTask(n: NewTask): Promise<Task | string> {
+  const constraints: Record<string, unknown> = {};
+  if (n.budget !== undefined) constraints.budget = n.budget;
+  if (n.timeLimit !== undefined) constraints.time_limit_minutes = n.timeLimit;
+  if (n.hosts?.length) constraints.hosts = n.hosts;
+  if (n.methods?.length) constraints.methods = n.methods;
+  const body = await apiJson("/api/tasks", { method: "POST", body: { goal: n.goal, role: n.role, constraints, note: n.note ?? "" } });
+  if (typeof body === "string") return body;
+  return asTask(body) ?? "unexpected answer from spall";
+}
+
+/** PATCH a task (approve, halt, note); null when done, else the server's message. */
+export async function changeTask(id: string, op: Record<string, unknown>): Promise<string | null> {
+  const body = await apiJson(`/api/tasks/${encodeURIComponent(id)}`, { method: "PATCH", body: op });
+  return typeof body === "string" ? body : null;
+}
+
+/** A task id from `#tasks/T-3`. */
+export function taskFromHash(hash: string): string | null {
+  return /^#?tasks\/(T-\d{1,9})$/.exec(hash)?.[1] ?? null;
+}

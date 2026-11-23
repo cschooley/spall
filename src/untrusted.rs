@@ -246,22 +246,21 @@ mod tests {
 
     #[test]
     fn credentials_are_masked_and_named() {
-        let v = exchange(
-            &entry(
-                r#"{"access_token":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlc2lnbmF0dXJl"}"#,
-            ),
-            None,
-        );
+        // A fake JWT ({"alg":"HS256"}.{"sub":"1"}."signature..."), there to be
+        // masked; not a credential.
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJlc2lnbmF0dXJl"; // gitleaks:allow nosemgrep: generic.secrets.security.detected-jwt-token.detected-jwt-token
+        let v = exchange(&entry(&format!(r#"{{"access_token":"{jwt}"}}"#)), None);
         let s = v.to_string();
-        for secret in [
+        let fakes = [
             "abcdefghijklmnop",
             "8f3a91c2",
             "hunter2",
             "abcdef123456",
             "eyJhbGciOiJIUzI1NiJ9",
             "sid=zzz",
-        ] {
-            assert!(!s.contains(secret), "{secret} leaked: {s}");
+        ];
+        for (i, fake) in fakes.iter().enumerate() {
+            assert!(!s.contains(fake), "fake credential #{i} wasn't masked");
         }
         assert!(s.contains("[REDACTED:authorization]") && s.contains("[REDACTED:cookie]"));
         let masked: Vec<&str> = v["masked"]

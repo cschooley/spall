@@ -2,3 +2,5 @@
 # Format: <commit>:<file>:<rule>:<line>
 # src/candidates.rs export test fixture (token=abcdef123456), before it was marked gitleaks:allow in 45719d1.
 e1d114471d8117eae2cbfbc24dff0a15631aee03:src/candidates.rs:generic-api-key:1186
+# src/untrusted.rs masking test (a fake JWT), before it was marked gitleaks:allow.
+5be2816bade6bb1f90d0fdf0e6ec6db785509752:src/untrusted.rs:generic-api-key:251
