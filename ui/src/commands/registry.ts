@@ -59,6 +59,8 @@ export interface Ctx {
   promote(id: string, undo: boolean): Promise<Candidate | string>;
   /** Export the promoted candidates as a flux report and save it (#51); what happened. */
   exportFindings(unredacted: boolean): Promise<{ ok: boolean; text: string }>;
+  /** Engage the agent e-stop, or clear it (#57); what happened. */
+  estop(action: "engage" | "clear", reason?: string): Promise<{ ok: boolean; text: string }>;
   /** Flag an exchange as a candidate (#43). */
   flag(i: FlagInput): Promise<FlagResult>;
   /** The rule catalog (#41), or why not. */
@@ -451,6 +453,20 @@ const IMPLS: readonly Impl[] = [
         return apply({ blackouts: [...e.rules.blackouts, { from, to, note: note.join(" ") }] });
       }
       ctx.out(ROE_USAGE, "warn");
+    },
+  },
+  {
+    name: "estop",
+    group: "app",
+    palette: { label: "E-stop: halt every agent task", hint: "estop" },
+    run: async (args, ctx, rest) => {
+      if (args[0] === "clear") {
+        if (args.length > 1) return ctx.out("usage: estop [reason] | estop clear", "warn");
+        const r = await ctx.estop("clear");
+        return ctx.out(r.text, r.ok ? "out" : "warn");
+      }
+      const r = await ctx.estop("engage", rest);
+      ctx.out(r.text, r.ok ? "stop" : "warn");
     },
   },
   {

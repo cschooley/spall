@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -600,10 +601,38 @@ struct Book {
     tasks: Vec<Task>,
 }
 
+/// The agent e-stop (#57), while engaged. Saved beside the task files,
+/// so spall comes back up stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EStop {
+    pub since: String,
+    pub by: String,
+    pub reason: String,
+}
+
+/// Not `.json`, so `Store::open` never takes it for an engagement's tasks.
+const ESTOP_FILE: &str = "estop";
+
+/// What engaging the e-stop did.
+#[derive(Debug, Serialize)]
+pub struct Stopped {
+    pub estop: EStop,
+    /// `engagement/T-n` for every task it halted.
+    pub halted: Vec<String>,
+    /// What couldn't be saved. The stop holds in memory regardless.
+    pub errors: Vec<String>,
+}
+
 /// Every engagement's tasks, loaded at start.
 pub struct Store {
     dir: PathBuf,
     by_engagement: Mutex<HashMap<String, Book>>,
+    /// Up the moment the e-stop is engaged, before anything else happens;
+    /// `charge` checks it under the book lock, so nothing not yet charged
+    /// is sent after it.
+    stopped: AtomicBool,
+    estop: Mutex<Option<EStop>>,
 }
 
 impl Store {
@@ -622,10 +651,96 @@ impl Store {
             let (eng, book) = load(&path)?;
             by_engagement.insert(eng, book);
         }
+        let estop = load_estop(&dir.join(ESTOP_FILE));
+        if let Some(e) = &estop {
+            tracing::warn!(
+                "the agent e-stop is engaged (since {}): {}",
+                e.since,
+                e.reason
+            );
+        }
         Ok(Store {
             dir: dir.to_path_buf(),
             by_engagement: Mutex::new(by_engagement),
+            stopped: AtomicBool::new(estop.is_some()),
+            estop: Mutex::new(estop),
         })
+    }
+
+    /// The e-stop, if engaged.
+    pub fn estop(&self) -> Option<EStop> {
+        self.estop.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// Engage the e-stop (#57): from this instant no task is charged, so
+    /// no agent request not yet sent is sent; then it's saved, and every
+    /// unfinished task in every engagement is halted, for good. Engaging
+    /// it again halts anything new and keeps the first `since`.
+    pub fn engage(&self, by: &str, reason: &str, now: &str) -> Stopped {
+        self.stopped.store(true, Ordering::SeqCst);
+        let estop = {
+            let mut e = self.estop.lock().unwrap_or_else(|p| p.into_inner());
+            e.get_or_insert_with(|| EStop {
+                since: now.into(),
+                by: by.into(),
+                reason: reason.into(),
+            })
+            .clone()
+        };
+        let mut errors = Vec::new();
+        match serde_json::to_vec_pretty(&estop) {
+            Ok(bytes) => {
+                if let Err(e) = write_atomic(&self.dir.join(ESTOP_FILE), &bytes) {
+                    errors.push(format!("saving the e-stop: {e:#}"));
+                }
+            }
+            Err(e) => errors.push(format!("saving the e-stop: {e}")),
+        }
+        let why = format!("e-stop: {}", estop.reason);
+        let mut halted = Vec::new();
+        let mut all = self.lock();
+        for (eng, book) in all.iter_mut() {
+            let mut changed = false;
+            for t in book.tasks.iter_mut().filter(|t| !t.status.finished()) {
+                if move_to(t, Status::Halted, Some(why.clone()), now).is_ok() {
+                    halted.push(format!("{eng}/{}", t.id));
+                    changed = true;
+                }
+            }
+            if changed {
+                if let Err(e) = save(&self.dir, eng, book) {
+                    errors.push(format!("saving {eng}'s tasks: {e:#}"));
+                }
+            }
+        }
+        Stopped {
+            estop,
+            halted,
+            errors,
+        }
+    }
+
+    /// Clear the e-stop: new tasks may be approved and run again. Halted
+    /// tasks stay halted. Returns the stop that was cleared, if any.
+    pub fn clear_estop(&self) -> Result<Option<EStop>, Error> {
+        let mut e = self.estop.lock().unwrap_or_else(|p| p.into_inner());
+        match fs::remove_file(self.dir.join(ESTOP_FILE)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(Error::Save(format!("removing the e-stop: {err}"))),
+        }
+        self.stopped.store(false, Ordering::SeqCst);
+        Ok(e.take())
+    }
+
+    fn stopped(&self) -> Result<(), Error> {
+        if self.stopped.load(Ordering::SeqCst) {
+            Err(Error::Conflict(
+                "the agent e-stop is engaged: no task runs until a human clears it".into(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Book>> {
@@ -722,6 +837,7 @@ impl Store {
             let before = t.clone();
             match op {
                 Op::Approve => {
+                    self.stopped()?;
                     authorize_rules(cx)?;
                     move_to(t, Status::Approved, None, cx.now)?;
                 }
@@ -779,6 +895,9 @@ impl Store {
         now: &str,
     ) -> Result<Task, Error> {
         self.change(engagement, |book| {
+            if matches!(to, Status::Running | Status::Approved) {
+                self.stopped()?;
+            }
             let t = find(book, id)?;
             move_to(t, to, reason, now)?;
             Ok(t.clone())
@@ -873,6 +992,7 @@ impl Store {
     /// overspend.
     pub fn charge(&self, engagement: &str, id: &str, now: &str) -> Result<u32, Error> {
         self.change(engagement, |book| {
+            self.stopped()?;
             let t = find(book, id)?;
             if t.status != Status::Running {
                 return Err(Error::Conflict(format!(
@@ -949,6 +1069,26 @@ fn move_to(t: &mut Task, to: Status, reason: Option<String>, now: &str) -> Resul
     let _ = push(t, Event::Status { from, to, reason }, now);
     t.updated = now.into();
     Ok(())
+}
+
+/// The saved e-stop. A file that is there but can't be read counts as
+/// engaged: failing safe beats a stop that silently disappears.
+fn load_estop(path: &Path) -> Option<EStop> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => return Some(unreadable_estop(&e.to_string())),
+    };
+    Some(serde_json::from_str(&text).unwrap_or_else(|e| unreadable_estop(&e.to_string())))
+}
+
+fn unreadable_estop(why: &str) -> EStop {
+    tracing::error!("the e-stop file can't be read ({why}); treating the e-stop as engaged");
+    EStop {
+        since: "unknown".into(),
+        by: "spall".into(),
+        reason: format!("the saved e-stop couldn't be read ({why}), so it holds"),
+    }
 }
 
 fn load(path: &Path) -> anyhow::Result<(String, Book)> {
@@ -1836,5 +1976,123 @@ mod tests {
             t.reason.as_deref(),
             Some("stop condition: throttled 2 times (429)")
         );
+    }
+
+    #[test]
+    fn the_e_stop_halts_every_task_for_good_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let (r, sc) = (rules(), scope());
+        {
+            let store = Store::open(dir.path()).unwrap();
+            running(&store, Requested::default());
+            store
+                .create("e", &new("draft"), "human", &cx(&r, &sc))
+                .unwrap();
+            store
+                .create("other", &new("elsewhere"), "human", &cx(&r, &sc))
+                .unwrap();
+            store
+                .apply("other", "T-1", &Op::Approve, &cx(&r, &sc))
+                .unwrap();
+            let done = store
+                .create("e", &new("done"), "human", &cx(&r, &sc))
+                .unwrap();
+            store
+                .apply("e", &done.id, &Op::Approve, &cx(&r, &sc))
+                .unwrap();
+            store
+                .transition("e", &done.id, Status::Running, None, NOW)
+                .unwrap();
+            store
+                .transition("e", &done.id, Status::Done, None, NOW)
+                .unwrap();
+
+            let st = store.engage("human", "something looks wrong", NOW);
+            assert!(st.errors.is_empty(), "{:?}", st.errors);
+            let mut halted = st.halted.clone();
+            halted.sort();
+            assert_eq!(
+                halted,
+                ["e/T-1", "e/T-2", "other/T-1"],
+                "every unfinished task, every engagement"
+            );
+            assert_eq!(
+                store.get("e", "T-3").unwrap().status,
+                Status::Done,
+                "finished stays finished"
+            );
+            let t = store.get("e", "T-1").unwrap();
+            assert_eq!(
+                (t.status, t.reason.as_deref()),
+                (Status::Halted, Some("e-stop: something looks wrong"))
+            );
+
+            // Nothing runs, nothing is charged, nothing is approved.
+            assert!(matches!(
+                store.charge("e", "T-1", NOW),
+                Err(Error::Conflict(_))
+            ));
+            store
+                .create("e", &new("new"), "human", &cx(&r, &sc))
+                .unwrap();
+            assert!(
+                matches!(store.apply("e", "T-4", &Op::Approve, &cx(&r, &sc)), Err(Error::Conflict(m)) if m.contains("e-stop"))
+            );
+            let again = store.engage("human", "second press", "2026-11-23T16:00:00Z");
+            assert_eq!(
+                (again.estop.since.as_str(), again.estop.reason.as_str()),
+                (NOW, "something looks wrong"),
+                "the first stop stands"
+            );
+        }
+        // Back up stopped after a restart.
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.estop().unwrap().reason, "something looks wrong");
+        assert!(matches!(
+            store.apply("e", "T-4", &Op::Approve, &cx(&r, &sc)),
+            Err(Error::Conflict(_))
+        ));
+
+        // Clearing lets new work run; halted tasks stay halted.
+        assert!(store.clear_estop().unwrap().is_some());
+        assert!(store.estop().is_none());
+        assert!(
+            store.clear_estop().unwrap().is_none(),
+            "clearing twice is fine"
+        );
+        assert_eq!(
+            store.get("e", "T-4").unwrap().status,
+            Status::Halted,
+            "the second press halted the draft made after the first"
+        );
+        let fresh = store
+            .create("e", &new("again"), "human", &cx(&r, &sc))
+            .unwrap();
+        store
+            .apply("e", &fresh.id, &Op::Approve, &cx(&r, &sc))
+            .unwrap();
+        assert!(store
+            .transition("e", "T-1", Status::Running, None, NOW)
+            .is_err());
+        assert!(
+            Store::open(dir.path()).unwrap().estop().is_none(),
+            "cleared on disk too"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_e_stop_file_holds_the_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(ESTOP_FILE), "{not json").unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let e = store.estop().expect("fails safe: engaged");
+        assert!(e.reason.contains("couldn't be read"), "{}", e.reason);
+        running_fails(&store);
+    }
+
+    fn running_fails(store: &Store) {
+        let (r, s) = (rules(), scope());
+        store.create("e", &new("t"), "human", &cx(&r, &s)).unwrap();
+        assert!(store.apply("e", "T-1", &Op::Approve, &cx(&r, &s)).is_err());
     }
 }

@@ -118,7 +118,7 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 - **Everything links.** Finding → evidence exchanges → producing task → endpoint in Surface, and back.
 - **Command palette (`⌘K` / `Ctrl+K`)** instead of right-click menus: "replay this", "task agent on this endpoint", "flag". Keyboard first, discoverable.
 - **Attribution everywhere.** Every exchange and candidate shows who created it: `you`, `agent · T-3`, or `scurf`. Agent-originated items carry a distinct glyph (◆), never color alone.
-- **Agent e-stop.** Always visible in the top bar. One click (or `Shift+Esc`) halts every running task. A hardware e-stop on purpose: a confident AI testing someone else's app needs a big red button, and its constant presence builds trust.
+- **Agent e-stop.** Always visible in the top bar. One click (or `Shift+Esc`, which works even while typing and never clears it) halts every agent task, in every engagement, for good: a halted task is never resumed, and the work is given again as a new task. Confirm tokens are revoked, the stop survives a restart, and it holds until a human clears it with two presses; clearing only lets new tasks run. A hardware e-stop on purpose: a confident AI testing someone else's app needs a big red button, and its constant presence builds trust.
 
 ## Verbs on objects (buttons)
 

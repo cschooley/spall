@@ -96,6 +96,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/export", post(api_export))
         .route("/api/tasks", get(api_tasks).post(api_tasks_new))
+        .route("/api/estop", post(api_estop))
+        .route("/api/estop/clear", post(api_estop_clear))
         .route("/api/tasks/{id}", get(api_task).patch(api_task_patch))
         .route("/api/redaction", get(api_redaction))
         .route("/api/ca", get(api_ca))
@@ -291,6 +293,11 @@ async fn api_status(State(state): State<AppState>) -> Response {
             .filter(|c| crate::candidates::to_triage(c))
             .count()
             .into(),
+        None => serde_json::Value::Null,
+    };
+    // The agent e-stop (#57): null, or {since, by, reason}.
+    body["estop"] = match &state.replayer {
+        Some(r) => serde_json::to_value(r.tasks.estop()).unwrap_or_default(),
         None => serde_json::Value::Null,
     };
     axum::Json(body).into_response()
@@ -534,6 +541,27 @@ fn no_tasks() -> Response {
         StatusCode::SERVICE_UNAVAILABLE,
         "tasks need taphttp's lever API (start spall with --taphttp-api)",
     )
+}
+
+/// Engage the agent e-stop (#57): `{"reason"?}`. Same-origin JSON like
+/// every change; an empty or unreadable body still stops.
+async fn api_estop(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let reason = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(String::from))
+        .unwrap_or_default();
+    r.engage_estop(&reason)
+}
+
+/// Clear the e-stop: `{}`. Halted tasks stay halted.
+async fn api_estop_clear(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    r.clear_estop()
 }
 
 /// The active engagement's tasks (#54), newest first, without logs.

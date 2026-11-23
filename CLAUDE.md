@@ -177,6 +177,16 @@ Agents never get or use a confirm token. The budget is charged under the
 task store's lock just before sending; taphttp `meta` is
 `{"actor":"agent","task":"T-n"}`; audit records carry `task`.
 
+E-stop (#57, done): `tasks::Store::engage` raises a flag first (checked
+by `charge` under the book lock, so nothing uncharged is sent after it),
+saves `<engagements>/tasks/estop` (unreadable = still engaged), then
+halts every unfinished task in every engagement. While engaged, nothing
+is approved or started; `clear_estop` only lets new tasks run. UI: the
+top-bar button (two presses to clear), Shift+Esc (engage only), the halt
+banner, console `estop [reason] | estop clear`. `/api/estop`,
+`/api/estop/clear`, `estop` in `/api/status`. #63 (model loops), #13
+(sandboxes) and #66 (quad) must stop when `Store::estop()` is set.
+
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
 

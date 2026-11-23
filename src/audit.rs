@@ -42,6 +42,8 @@ pub enum Outcome {
     TaskChanged,
     /// An agent's request was outside its task: the task waits on a human (#55).
     Paused,
+    /// The agent e-stop was engaged or cleared (#57).
+    EStop,
 }
 
 #[derive(Debug, Clone, Serialize)]

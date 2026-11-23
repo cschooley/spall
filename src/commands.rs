@@ -345,6 +345,24 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "estop",
+        usage: "estop [reason] | estop clear",
+        desc: "agent e-stop (Shift+Esc): halt every agent task for good; clear lets new tasks run",
+        // Clearing it is a human's call; an agent is never offered either.
+        risk: Risk::Policy,
+        mcp: false,
+        hidden: false,
+        args: || {
+            obj(
+                &[
+                    ("clear", flag("clear the stop instead (halted tasks stay halted)")),
+                    ("reason", text("why, for the audit log")),
+                ],
+                &[],
+            )
+        },
+    },
+    Command {
         name: "hosts",
         usage: "hosts [--unknown]",
         desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",
@@ -732,7 +750,7 @@ mod tests {
         let risk = |n: &str| find(n).map(|c| c.risk);
         assert_eq!(risk("replay"), Some(Risk::Send));
         assert_eq!(risk("flag"), Some(Risk::Record));
-        for n in ["scope", "engagement", "roe"] {
+        for n in ["scope", "engagement", "roe", "estop"] {
             assert_eq!(risk(n), Some(Risk::Policy), "{n}");
         }
         for n in ["promote", "export"] {

@@ -316,6 +316,29 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "clear": {
+          "description": "clear the stop instead (halted tasks stay halted)",
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "why, for the audit log",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "agent e-stop (Shift+Esc): halt every agent task for good; clear lets new tasks run",
+    "hidden": false,
+    "mcp": false,
+    "name": "estop",
+    "risk": "policy",
+    "usage": "estop [reason] | estop clear"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "unknown": {
           "description": "only hosts neither in scope nor excluded",
           "type": "boolean"

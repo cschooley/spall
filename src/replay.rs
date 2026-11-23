@@ -781,6 +781,72 @@ impl Replayer {
         None
     }
 
+    /// Engage the agent e-stop (#57): every task in every engagement
+    /// halted for good, every confirmation token revoked, and the stop
+    /// saved so spall comes back up stopped. Audited.
+    pub fn engage_estop(&self, reason: &str) -> Response {
+        let reason = match short(reason) {
+            r if r.is_empty() => "stopped by a human".to_string(),
+            r => r,
+        };
+        let now = taphttp_types::Timestamp::now().to_string();
+        let stopped = self.tasks.engage("human", &reason, &now);
+        let revoked = self.confirmations.clear();
+        self.task_limiters
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+        let mut rec = Record::new("estop", "", Outcome::EStop);
+        rec.reason = Some(format!("engaged: {reason}"));
+        rec.changes = Some(serde_json::json!({
+            "halted": stopped.halted,
+            "tokens_revoked": revoked,
+        }));
+        if !stopped.errors.is_empty() {
+            rec.error = Some(stopped.errors.join("; "));
+        }
+        self.audit(&rec);
+        tracing::warn!(
+            "agent e-stop engaged: {reason} ({} tasks halted)",
+            stopped.halted.len()
+        );
+        let mut body = serde_json::to_value(&stopped).unwrap_or_default();
+        if stopped.errors.is_empty() {
+            json(StatusCode::OK, body)
+        } else {
+            // Stopped in memory all the same; the tester must know it may
+            // not survive a restart.
+            body["error"] = format!(
+                "agents are stopped, but not everything was saved (a restart may lose it): {}",
+                stopped.errors.join("; ")
+            )
+            .into();
+            json(StatusCode::INTERNAL_SERVER_ERROR, body)
+        }
+    }
+
+    /// Clear the e-stop: new tasks may be approved and run. Nothing halted
+    /// comes back. A human's call; audited.
+    pub fn clear_estop(&self) -> Response {
+        let mut rec = Record::new("estop", "", Outcome::EStop);
+        match self.tasks.clear_estop() {
+            Ok(was) => {
+                rec.reason = Some("cleared".into());
+                rec.changes = Some(serde_json::json!({ "was": was }));
+                self.audit(&rec);
+                json(
+                    StatusCode::OK,
+                    serde_json::json!({ "estop": null, "was": was }),
+                )
+            }
+            Err(e) => {
+                rec.error = Some(e.to_string());
+                self.audit(&rec);
+                error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            }
+        }
+    }
+
     /// Pause task `id` on this exact request (#55): it waits on a human,
     /// and the agent is told why. Nothing is sent, and no token is issued.
     fn pause(
@@ -917,6 +983,15 @@ impl Replayer {
                         serde_json::json!({ "error": why, "decision": "deny" }),
                     )
                 };
+                if let Some(e) = self.tasks.estop() {
+                    return refuse(
+                        &mut rec,
+                        format!(
+                            "the agent e-stop is engaged (since {}: {}); no agent request is sent, and halted tasks never run again",
+                            e.since, e.reason
+                        ),
+                    );
+                }
                 if req.confirm.is_some() {
                     return refuse(
                         &mut rec,

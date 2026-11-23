@@ -50,6 +50,8 @@ struct StubState {
     live: Mutex<Option<broadcast::Sender<String>>>,
     /// Body of each POST /replay, parsed.
     replays: Mutex<Vec<serde_json::Value>>,
+    /// Where it listens, for a restart against the same stub.
+    addr: Mutex<Option<SocketAddr>>,
 }
 
 #[derive(Clone)]
@@ -221,6 +223,7 @@ async fn start_stub() -> (Stub, SocketAddr) {
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    *state.0.addr.lock().unwrap() = Some(addr);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (state, addr)
 }
@@ -2578,4 +2581,169 @@ async fn a_task_past_its_time_limit_pauses() {
     let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
     assert_eq!(status, 200, "T-1 is inside its minute");
     assert_eq!(stub.replays().len(), 1);
+}
+
+#[tokio::test]
+async fn the_e_stop_halts_every_task_revokes_tokens_and_survives_a_restart() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let token = dir.path().join("api-token");
+    // A human's pending confirmation, issued before the stop.
+    let res = post_text(
+        spall,
+        "/api/replay",
+        r#"{"id":"e1","method":"DELETE"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 428"), "{res}");
+    let confirm = body_json(&res)["confirm"].as_str().unwrap().to_string();
+
+    let res = post_text(spall, "/api/estop", r#"{"reason":"weird responses"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let st = body_json(&res);
+    assert_eq!(st["halted"].as_array().unwrap().len(), 1);
+    assert_eq!(st["estop"]["reason"], "weird responses");
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["estop"]["by"],
+        "human"
+    );
+
+    // Agents: refused, saying why; nothing sent.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("e-stop is engaged"),
+        "{body}"
+    );
+    assert!(stub.replays().is_empty());
+    let t = task_of(&r, "T-1");
+    assert_eq!(
+        (t.status, t.reason.as_deref()),
+        (
+            spall::tasks::Status::Halted,
+            Some("e-stop: weird responses")
+        )
+    );
+
+    // The token issued before the stop is gone; a human still replays.
+    let res = post_text(
+        spall,
+        "/api/replay",
+        &format!(r#"{{"id":"e1","method":"DELETE","confirm":"{confirm}"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 409"), "revoked: {res}");
+    let res = post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await;
+    assert!(
+        res.starts_with("HTTP/1.1 200"),
+        "human traffic is unaffected: {res}"
+    );
+
+    // No new task may run while stopped.
+    post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"next","role":"mapper"}"#,
+        None,
+    )
+    .await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 409") && res.contains("e-stop"),
+        "{res}"
+    );
+
+    let recs: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "estop")
+        .collect();
+    assert_eq!(recs.len(), 1);
+    assert_eq!(recs[0]["outcome"], "e_stop");
+    assert_eq!(recs[0]["changes"]["tokens_revoked"], 1);
+
+    // Still stopped after a restart (same data, same stub).
+    let api = stub_addr(&stub);
+    let (again, r2) = start_agent_spall(api, &token, &["--scope", "example.com"]).await;
+    assert_eq!(
+        body_json(&get_text(again, "/api/status").await)["estop"]["reason"],
+        "weird responses"
+    );
+    let (status, _) = agent_send(&r2, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+
+    // Cleared by a human: new work runs; the halted task never does.
+    let res = post_text(again, "/api/estop/clear", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(body_json(&get_text(again, "/api/status").await)["estop"].is_null());
+    let res = send_text(
+        again,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 200"),
+        "a draft made while stopped may run once a human clears it: {res}"
+    );
+    let (status, body) = agent_send(&r2, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("never sends again"),
+        "{body}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn nothing_uncharged_is_sent_after_the_e_stop() {
+    let (_dir, stub, spall, r) = agent_setup(r#"{"budget":1000}"#).await;
+    send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"rate_limit":0}}"#,
+        None,
+    )
+    .await;
+    let sends: Vec<_> = (0..40)
+        .map(|_| {
+            let r = r.clone();
+            tokio::spawn(async move { agent_send(&r, "T-1", r#"{"id":"e1"}"#).await.0 })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    let res = post_text(spall, "/api/estop", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    for s in sends {
+        s.await.unwrap();
+    }
+    let spent = task_of(&r, "T-1").spent as usize;
+    assert_eq!(
+        stub.replays().len(),
+        spent,
+        "every send that went out was charged before the stop"
+    );
+    let after = stub.replays().len();
+    let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+    assert_eq!(stub.replays().len(), after);
+}
+
+fn stub_addr(stub: &Stub) -> SocketAddr {
+    stub.0.addr.lock().unwrap().unwrap()
 }

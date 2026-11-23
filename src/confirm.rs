@@ -56,6 +56,14 @@ impl Confirmations {
         }
     }
 
+    /// Revoke every outstanding token (the e-stop, #57). Returns how many.
+    pub fn clear(&self) -> usize {
+        let mut p = self.lock();
+        let n = p.len();
+        p.clear();
+        n
+    }
+
     pub fn ttl(&self) -> Duration {
         self.ttl
     }

@@ -57,6 +57,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080", taphttpVersion: "0.6.1" }),
     openSetup: () => void calls.push("setup"),
     promote: async (id, undo) => (calls.push(`promote:${id}${undo ? ":undo" : ""}`), id === "c-1" ? { ...asCandidate(RAW)!, id, promoted: undo ? null : "now" } : `no candidate ${id}`),
+    estop: async (a, reason) => (calls.push(`estop:${a}:${reason ?? ""}`), { ok: true, text: a === "clear" ? "cleared" : "engaged" }),
     exportFindings: async (u) => (calls.push(`export:${u}`), u ? { ok: false, text: "an unredacted export needs spall started with --allow-unredacted-export" } : { ok: true, text: "exported spall-x.sarif (redacted)" }),
     goto: (v) => (calls.push(`goto:${v}`), ["engagement", "traffic", "findings"].includes(v)),
     flag: async (i) => {
@@ -263,6 +264,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["scope", "policy"],
       ["engagement", "policy"],
       ["roe", "policy"],
+      ["estop", "policy"],
       ["flag", "record"],
       ["promote", "export"],
       ["export", "export"],
@@ -633,4 +635,21 @@ test("goto and theme take what the UI has (the server's list names them too)", (
   const enumOf = (c: (typeof COMMANDS)[number], k: string) => (c.args.properties as Record<string, { enum?: readonly string[] }>)[k]?.enum;
   assert.deepEqual(enumOf(goto, "view"), [...VIEWS]);
   assert.deepEqual(enumOf(theme, "name"), [...THEMES]);
+});
+
+test("estop engages with a reason, clear clears; an agent is never offered it", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("estop odd 500s", ctx);
+  await execute("estop clear", ctx);
+  await execute("estop clear now", ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("estop")), ["estop:engage:odd 500s", "estop:clear:"]);
+  const said = lines.filter(([, k]) => k !== "cmd");
+  assert.deepEqual(said, [
+    ["engaged", "stop"],
+    ["cleared", "out"],
+    ["usage: estop [reason] | estop clear", "warn"],
+  ]);
+  const e = COMMANDS.find((c) => c.name === "estop")!;
+  assert.equal(e.mcp, false);
+  assert.ok(paletteItems().some((i) => i.command === "estop" && !i.prefill), "one press from the palette");
 });

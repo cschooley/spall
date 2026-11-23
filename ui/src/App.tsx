@@ -5,6 +5,8 @@ import { Console } from "./components/Console.tsx";
 import { Icon } from "./components/Icon.tsx";
 import { Inspector, type Tab as InspectorTab } from "./components/Inspector.tsx";
 import { Launcher } from "./components/Launcher.tsx";
+import { EStopButton, HaltBanner } from "./components/EStop.tsx";
+import { clearEStop, engageEStop } from "./lib/estop.ts";
 import { Rail, VIEWS } from "./components/Rail.tsx";
 import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
@@ -490,6 +492,11 @@ export function App() {
         return { ok: true, text: `exported ${r.name}${unredacted ? " (UNREDACTED: contains captured credentials)" : " (redacted)"}` };
       },
       rules: loadCatalog,
+      estop: async (action, reason) => {
+        const r = action === "clear" ? await clearEStop() : await engageEStop(reason);
+        setStatusNonce((n) => n + 1);
+        return r;
+      },
       flag: async (i) => {
         const r = await flagCandidate(i);
         if (r.kind === "created") setStatusNonce((n) => n + 1);
@@ -541,6 +548,19 @@ export function App() {
   );
 
   const run = useCallback((line: string) => void execute(line, ctx), [ctx]);
+
+  // The agent e-stop (#57): the button and Shift+Esc engage it at once;
+  // what happened goes to the console log.
+  const stopAgents = useCallback(async () => {
+    const r = await engageEStop();
+    out(r.text, r.ok ? "stop" : "warn");
+    setStatusNonce((n) => n + 1);
+  }, [out]);
+  const clearStop = useCallback(async () => {
+    const r = await clearEStop();
+    out(r.text, r.ok ? "out" : "warn");
+    setStatusNonce((n) => n + 1);
+  }, [out]);
   const choose = useCallback(
     (item: PaletteItem) => (item.prefill ? openConsole(item.prefill) : run(item.command)),
     [openConsole, run],
@@ -550,6 +570,13 @@ export function App() {
   // typing in a field (the console handles its own toggle key).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Shift+Esc stops agents from anywhere, even mid-typing. It only ever
+      // engages the e-stop; clearing takes two presses of the button.
+      if (e.key === "Escape" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        void stopAgents();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
@@ -605,7 +632,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter, selected, replay, view]);
+  }, [palette, sheet, consoleKey, consoleOpen, openConsole, closeConsole, move, toggleMode, focusFilter, selected, replay, view, stopAgents]);
 
   // Any click outside the Replay button disarms it.
   useEffect(() => {
@@ -639,9 +666,11 @@ export function App() {
         </span>
         <RateMeter live={store.items} />
         <span className="spacer" />
+        <EStopButton estop={status.estop} available={status.replay} onEngage={() => void stopAgents()} onClear={() => void clearStop()} />
         <ThemePicker theme={theme} setTheme={setTheme} />
         <Launcher status={{ taphttpConnected: status.source === "lever" ? status.connected : null, source: status.source, proxy: status.proxy, flux: status.flux }} />
       </header>
+      {status.estop && <HaltBanner estop={status.estop} />}
 
       <Rail current={view} />
 

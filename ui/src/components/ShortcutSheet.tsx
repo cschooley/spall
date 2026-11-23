@@ -1,5 +1,5 @@
 // The ? sheet. Lists only keys that work today; keys for later features
-// (flag, task the agent, e-stop) appear when those ship.
+// (task the agent) appear when those ship.
 const isMac = () => /Mac|iPhone|iPad/.test(navigator.platform || "");
 
 export function modKey(): string {
@@ -13,6 +13,7 @@ export function ShortcutSheet({ consoleKey, onClose }: { consoleKey: string; onC
     [["?"], "This sheet"],
     [["1", "–", "5"], "Switch view"],
     [["t"], "Light / dark"],
+    [["Shift", "Esc"], "Stop every agent task (e-stop)"],
   ];
   const traffic: [string[], string][] = [
     [["/"], "Filter"],

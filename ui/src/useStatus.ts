@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { testingOf } from "./lib/engagement.ts";
+import { asEStop, type EStop } from "./lib/estop.ts";
 
 export interface SourceStatus {
   /** pending: not asked yet; unknown: /api/status failed. */
@@ -24,9 +25,11 @@ export interface SourceStatus {
   flux: { crate: string; spec: string; rules: string } | null;
   /** Promoted candidates, and whether an unredacted export is allowed (#51). */
   export: { promoted: number; unredactedAllowed: boolean } | null;
+  /** The agent e-stop (#57), while engaged. */
+  estop: EStop | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -48,6 +51,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           to_triage?: unknown;
           flux?: { crate?: unknown; spec?: unknown; rules?: unknown } | null;
           export?: { promoted?: unknown; unredacted_allowed?: unknown } | null;
+          estop?: unknown;
         };
         const ex = body.export;
         const fx = body.flux;
@@ -66,6 +70,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           flux:
             fx && typeof fx.crate === "string" && typeof fx.spec === "string" && typeof fx.rules === "string" ? { crate: fx.crate, spec: fx.spec, rules: fx.rules } : null,
           export: ex && typeof ex.promoted === "number" ? { promoted: ex.promoted, unredactedAllowed: ex.unredacted_allowed === true } : null,
+          estop: asEStop(body.estop),
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });
