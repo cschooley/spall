@@ -126,3 +126,13 @@ test("? opens the shortcut sheet (working keys only); Esc closes", async ({ page
   await page.keyboard.press("Escape");
   await expect(sheet).toHaveCount(0);
 });
+
+test("rules lists the WSTG catalog from the server (#41)", async ({ page }) => {
+  await page.goto("/");
+  await openConsole(page);
+  await run(page, "rules sql injection");
+  await expect(page.locator(".con-log")).toContainText("WSTG-INPV-05 Testing for SQL Injection (CWE-89)");
+  await expect(page.locator(".con-log")).toContainText("Web Security Testing Guide v4.2 (CC BY-SA 4.0)");
+  await run(page, "rules cwe-639");
+  await expect(page.locator(".con-log")).toContainText("WSTG-ATHZ-04 Testing for Insecure Direct Object References (CWE-639)");
+});

@@ -80,6 +80,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scope", post(api_scope))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
+        .route("/api/rules", get(api_rules))
         .route("/api/ca", get(api_ca))
         .route("/api/ca.pem", get(api_ca_pem))
         .route("/api/ca.der", get(api_ca_der))
@@ -420,6 +421,20 @@ async fn api_openapi_parse(State(state): State<AppState>, body: axum::body::Byte
 /// Hosts seen in traffic with their scope state (#39), most seen first.
 /// `?state=in|out|unknown` narrows the list (counts cover every host).
 /// Without the lever API there's no engagement, so every host is unknown.
+/// The rule catalog (#41): WSTG v4.2 ids, titles, CWE and help links.
+async fn api_rules() -> Response {
+    let rules: Vec<serde_json::Value> = crate::rules::CATALOG
+        .iter()
+        .map(|e| serde_json::json!({"id": e.id, "title": e.title, "cwe": e.cwe, "help": e.help_uri()}))
+        .collect();
+    axum::Json(serde_json::json!({
+        "wstg": crate::rules::WSTG_VERSION,
+        "attribution": crate::rules::ATTRIBUTION,
+        "rules": rules,
+    }))
+    .into_response()
+}
+
 async fn api_hosts(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
     let scope = state
         .replayer
@@ -906,6 +921,27 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(body_string(res).await, "ok");
+    }
+
+    #[tokio::test]
+    async fn rules_list_the_wstg_catalog() {
+        let res = app(Arc::new(Hub::new(1)))
+            .oneshot(get_req("/api/rules", "127.0.0.1:3000"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v: serde_json::Value = serde_json::from_str(&body_string(res).await).unwrap();
+        assert_eq!(v["wstg"], "4.2");
+        assert!(v["attribution"].as_str().unwrap().contains("CC BY-SA 4.0"));
+        let rules = v["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), crate::rules::CATALOG.len());
+        let sqli = rules.iter().find(|r| r["id"] == "WSTG-INPV-05").unwrap();
+        assert_eq!(sqli["cwe"], 89);
+        assert!(sqli["help"]
+            .as_str()
+            .unwrap()
+            .ends_with("05-Testing_for_SQL_Injection"));
+        assert_eq!(rules.last().unwrap()["cwe"], serde_json::Value::Null);
     }
 
     #[tokio::test]

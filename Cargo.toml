@@ -30,6 +30,9 @@ hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# Findings: Kudzu's one set of finding types (SARIF 2.1.0 profile). spall
+# defines no Finding, Severity or Evidence of its own. Bump deliberately.
+flux = { git = "https://github.com/cschooley/flux", tag = "v0.1.0" }
 # Traffic log schema, owned by taphttp. Bump the tag deliberately.
 taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.6.1" }
 tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

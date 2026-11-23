@@ -14,6 +14,7 @@ pub mod lever;
 pub mod openapi;
 pub mod replay;
 pub mod roe;
+pub mod rules;
 pub mod scope_list;
 pub mod tailer;
 pub mod web;

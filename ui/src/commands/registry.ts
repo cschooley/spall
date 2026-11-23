@@ -6,6 +6,7 @@
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
 import type { HostListing } from "../lib/hosts.ts";
+import { ruleLine, searchRules, type Catalog } from "../lib/rules.ts";
 import type { CaInfo } from "../lib/ca.ts";
 import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
@@ -47,6 +48,8 @@ export interface Ctx {
   openSetup(): void;
   /** Hosts seen in traffic with their scope state (#39), or an error message. */
   hosts(): Promise<HostListing | string>;
+  /** The rule catalog (#41), or why not. */
+  rules(): Promise<Catalog | string>;
   /** Open the Engagement view's paste-a-scope-list panel (#38), or the OpenAPI import (#40). */
   openScopePaste(what?: "paste" | "import"): void;
   /** Where a URL or host stands in scope (#34), or an error message. */
@@ -491,6 +494,24 @@ export const COMMANDS: readonly Command[] = [
       }
       if (unknownOnly && l.counts.unknown) ctx.out("decide them in the Engagement view, or: scope add|exclude <host>", "sys");
       if (l.dropped) ctx.out(`${l.dropped} more hosts not tracked (table full)`, "sys");
+    },
+  },
+  {
+    name: "rules",
+    usage: "rules [text]",
+    desc: "the rule catalog (WSTG v4.2 tests, with CWE): every rule, or those matching text",
+    group: "app",
+    mcp: true,
+    risk: "read",
+    palette: { label: "Rule catalog (WSTG)", hint: "rules" },
+    run: async (args, ctx) => {
+      const c = await ctx.rules();
+      if (typeof c === "string") return ctx.out(`rules: ${c}`, "warn");
+      const text = args.join(" ");
+      const hits = searchRules(c.rules, text);
+      if (!hits.length) return ctx.out(`rules: nothing matches "${text}"`, "warn");
+      for (const r of hits) ctx.out(`  ${ruleLine(r)}`);
+      ctx.out(`${hits.length} of ${c.rules.length} rules · ${c.attribution}`, "sys");
     },
   },
   {

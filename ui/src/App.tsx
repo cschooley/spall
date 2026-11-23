@@ -36,6 +36,7 @@ import { useChain, useOriginal, useReplayHistory } from "./useReplays.ts";
 import { useSourceStatus } from "./useStatus.ts";
 import { useHosts } from "./useHosts.ts";
 import { asListing, stateLookup } from "./lib/hosts.ts";
+import { loadCatalog } from "./lib/rules.ts";
 import { asCaInfo } from "./lib/ca.ts";
 import { useTraffic, type Connection } from "./useTraffic.ts";
 
@@ -460,6 +461,7 @@ export function App() {
       openSetup: () => {
         window.location.hash = "engagement/ca";
       },
+      rules: loadCatalog,
       hosts: async () => {
         const body = await apiJson("/api/hosts");
         return typeof body === "string" ? body : (asListing(body) ?? "unexpected answer");

@@ -52,6 +52,15 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     openScopePaste: (what = "paste") => void calls.push(what),
     ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" }),
     openSetup: () => void calls.push("setup"),
+    rules: async () => ({
+      wstg: "4.2",
+      attribution: "OWASP WSTG v4.2 (CC BY-SA 4.0)",
+      rules: [
+        { id: "WSTG-INPV-05", title: "Testing for SQL Injection", cwe: 89, help: null },
+        { id: "WSTG-INPV-01", title: "Testing for Reflected Cross Site Scripting", cwe: 79, help: null },
+        { id: "spall/other", title: "Other (not in the catalog)", cwe: null, help: null },
+      ],
+    }),
     hosts: async () => ({
       hosts: [
         { host: "app.acme.test", count: 12, firstSeen: "", lastSeen: "", state: "in" as const, by: "*.acme.test" },
@@ -525,4 +534,22 @@ test("ca shows the CA's fingerprint and where to get it, and opens browser setup
   await execute("ca", off.ctx);
   assert.equal(off.lines.at(-1)![1], "warn");
   assert.equal(COMMANDS.find((c) => c.name === "ca")!.risk, "read");
+});
+
+test("rules lists the catalog, or what matches", async () => {
+  const { ctx, lines } = fakeCtx();
+  await execute("rules sql", ctx);
+  assert.deepEqual(lines.slice(1), [
+    ["  WSTG-INPV-05 Testing for SQL Injection (CWE-89)", "out"],
+    ["1 of 3 rules · OWASP WSTG v4.2 (CC BY-SA 4.0)", "sys"],
+  ]);
+  const all = fakeCtx();
+  await execute("rules", all.ctx);
+  assert.equal(all.lines.length, 5);
+  const none = fakeCtx();
+  await execute("rules nope", none.ctx);
+  assert.deepEqual(none.lines.slice(1), [['rules: nothing matches "nope"', "warn"]]);
+  const r = COMMANDS.find((c) => c.name === "rules")!;
+  assert.equal(r.mcp, true);
+  assert.equal(r.risk, "read");
 });
