@@ -1183,7 +1183,8 @@ mod tests {
 
     #[test]
     fn exports_are_valid_flux_redacted_or_marked() {
-        let mut c = candidate("c-1", "https://a.test/x?token=abcdef123456", Some("q"));
+        // A fake token, there to be redacted.
+        let mut c = candidate("c-1", "https://a.test/x?token=abcdef123456", Some("q")); // gitleaks:allow
         c.finding.properties.status = Some(Status::Confirmed);
         c.promoted = Some(NOW.into());
         let not_promoted = candidate("c-2", "https://a.test/y", None);
