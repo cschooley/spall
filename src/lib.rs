@@ -4,6 +4,7 @@
 
 pub mod audit;
 pub mod candidates;
+pub mod commands;
 pub mod config;
 pub mod confirm;
 pub mod csrf;

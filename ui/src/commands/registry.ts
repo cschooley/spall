@@ -1,7 +1,10 @@
 // One command registry (docs/ux.md, "The console and quad mode"): the
-// palette, the ` console and, from M5, the MCP server expose the same
-// commands with the same names and arguments. Pure: commands act through a
-// Ctx the app supplies, so this module is unit-tested without a browser.
+// palette, the ` console and the MCP server expose the same commands with
+// the same names and arguments. Names, usage, risk, `mcp` and argument
+// schemas come from the server's registry (src/commands.rs, generated into
+// specs.gen.ts, #53); this module adds how each runs in the browser.
+// Pure: commands act through a Ctx the app supplies, so this module is
+// unit-tested without a browser.
 
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
@@ -11,6 +14,7 @@ import { parseFlagArgs, stateOf, where, type Candidate, type FlagInput, type Fla
 import type { CaInfo } from "../lib/ca.ts";
 import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
+import { RISKS, SPECS } from "./specs.gen.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
 
@@ -206,27 +210,22 @@ function parseReplayArgs(args: string[]): { id?: string; yes: boolean; edit?: Re
   return { id, yes, edit: edited ? edit : undefined };
 }
 
-/**
- * What running a command can do (#22), for MCP grants and approvals (M6):
- * read (the UI or spall's state), record (changes spall's own records,
- * such as candidates; sends nothing), export (promotes findings or writes
- * them out of spall: never offered to an agent), sends-traffic (to a
- * target, through the gate), unsafe-method (could change state there),
- * destructive, policy (changes the rules of engagement: never offered to
- * an agent).
- */
-export type Risk = "read" | "record" | "export" | "sends-traffic" | "unsafe-method" | "destructive" | "policy";
+/** What running a command can do: the server's risk classes (src/commands.rs). */
+export type Risk = (typeof RISKS)[number];
 
-export interface Command {
-  /** Stable identifier, shared with MCP (M5). Never a UI label. */
+/**
+ * A command as the server's registry describes it (#53): stable name
+ * (shared with MCP), console usage, description, risk class, whether an
+ * agent may be offered it (`mcp`; the server refuses policy and export to
+ * agents whatever this says), and its arguments as JSON Schema.
+ */
+export type Spec = (typeof SPECS)[number];
+
+/** What only the UI knows about a command: where it sits and how it runs. */
+interface Impl {
+  /** A name from the server's registry. */
   name: string;
-  usage: string;
-  desc: string;
   group: "traffic" | "view" | "app";
-  /** May be offered to the agent over MCP. Never for export or promotion. */
-  mcp: boolean;
-  risk: Risk;
-  hidden?: boolean;
   /** Palette entry; commands that need arguments open the console prefilled. */
   palette?: { label: string; hint?: string; needsArgs?: boolean };
   /** Completions for the argument being typed. */
@@ -235,38 +234,35 @@ export interface Command {
   run(args: string[], ctx: Ctx, rest: string): void | Promise<void>;
 }
 
-const ID = /^[A-Za-z0-9_-]{1,128}$/;
-const VIEWS = ["engagement", "traffic", "surface", "tasks", "findings"] as const;
+export interface Command extends Impl {
+  usage: string;
+  desc: string;
+  mcp: boolean;
+  risk: Risk;
+  hidden: boolean;
+  args: Spec["args"];
+}
 
-export const COMMANDS: readonly Command[] = [
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+export const VIEWS = ["engagement", "traffic", "surface", "tasks", "findings"] as const;
+
+const IMPLS: readonly Impl[] = [
   {
     name: "help",
-    usage: "help",
-    desc: "this list",
     group: "app",
-    mcp: true,
-    risk: "read",
     run: (_a, ctx) => {
       for (const c of COMMANDS) if (!c.hidden) ctx.out(`  ${c.usage.padEnd(24)} ${c.desc}`);
     },
   },
   {
     name: "filter",
-    usage: "filter [query]",
-    desc: "filter traffic (host: method: status: text); empty clears",
     group: "traffic",
-    mcp: true,
-    risk: "read",
     palette: { label: "Filter traffic…", hint: "filter <query>", needsArgs: true },
     run: (_a, ctx, rest) => ctx.setFilter(rest),
   },
   {
     name: "open",
-    usage: "open <id>",
-    desc: "open an exchange in the inspector",
     group: "traffic",
-    mcp: true,
-    risk: "read",
     palette: { label: "Open exchange by id…", hint: "open <id>", needsArgs: true },
     run: async ([id], ctx) => {
       if (!id) return ctx.out("usage: open <id>", "warn");
@@ -276,11 +272,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "curl",
-    usage: "curl",
-    desc: "the selected exchange as a curl command (also copied)",
     group: "traffic",
-    mcp: true,
-    risk: "read",
     palette: { label: "Copy as curl", hint: "curl" },
     run: async (_a, ctx) => {
       const text = ctx.curlText();
@@ -291,13 +283,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "replay",
-    usage: "replay <id> [--yes]",
-    desc: "resend an exchange (edits: --method M --header 'N: v' --drop-header N --body B; unsafe methods: run twice, or --yes)",
     group: "traffic",
-    // Agents replay inside task constraints from M6; the gate holds them to
-    // the same scope, method policy and audit as a human.
-    mcp: true,
-    risk: "sends-traffic",
     palette: { label: "Replay exchange…", hint: "replay <id>", needsArgs: true },
     run: async (args, ctx) => {
       const parsed = parseReplayArgs(args);
@@ -310,13 +296,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "scope",
-    usage: "scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]",
-    desc: "hosts replay may send to; exclusions (!entry) win; changes last until restart",
     group: "traffic",
-    // Changing the scope changes the rules of engagement: humans only.
-    // (Agents will read scope through a separate read-only tool, M6.)
-    mcp: false,
-    risk: "policy",
     palette: { label: "Show scope", hint: "scope" },
     complete: (args) => (args.length <= 1 ? ["add", "exclude", "remove", "check", "paste", "import", "all"] : args[0] === "all" ? ["on", "off"] : []),
     run: async (args, ctx) => {
@@ -362,12 +342,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "engagement",
-    usage: "engagement [list | new <name> | use <id|name> | set <field> <value>]",
-    desc: "the engagement you're testing under: details, and switching between engagements",
     group: "traffic",
-    // Creating, switching and editing engagements set the rules: humans only.
-    mcp: false,
-    risk: "policy",
     palette: { label: "Show engagement", hint: "engagement" },
     complete: (args) =>
       args.length <= 1 ? ["list", "new", "use", "set"] : args[0] === "set" && args.length === 2 ? [...ENGAGEMENT_FIELDS] : [],
@@ -419,12 +394,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "roe",
-    usage: "roe [set <field> <value> | window add|remove|clear | blackout add|remove|clear]",
-    desc: "rules of engagement: methods, confirmation, rate, time zone, testing and no-test windows, agents",
     group: "traffic",
-    // The rules bound every action, a human's or an agent's: humans only.
-    mcp: false,
-    risk: "policy",
     palette: { label: "Rules of engagement", hint: "roe" },
     complete: (args) =>
       args.length <= 1
@@ -485,12 +455,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "hosts",
-    usage: "hosts [--unknown]",
-    desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",
     group: "traffic",
-    // Reading scope state is fine for an agent; changing it never is.
-    mcp: true,
-    risk: "read",
     palette: { label: "Hosts from traffic", hint: "hosts" },
     complete: () => ["--unknown"],
     run: async (args, ctx) => {
@@ -510,12 +475,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "flag",
-    usage: "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N]",
-    desc: "flag an exchange as a candidate finding (rules lists rule ids); it waits in Findings for triage",
     group: "traffic",
-    // Agents propose through propose_finding (M6), never flag.
-    mcp: false,
-    risk: "record",
     palette: { label: "Flag exchange as candidate…", hint: "flag", needsArgs: true },
     complete: (args) => (args.length >= 2 ? ["--rule", "--param", "--level", "--rank", "--message", "--replay", "--cwe"] : []),
     run: async (args, ctx) => {
@@ -535,11 +495,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "promote",
-    usage: "promote <candidate-id> [--undo]",
-    desc: "mark a confirmed candidate for export (a human's call), or take it out",
     group: "app",
-    mcp: false,
-    risk: "export",
     run: async (args, ctx) => {
       const [id, flag] = args;
       if (!id || id.startsWith("--") || (flag && flag !== "--undo") || args.length > 2) return ctx.out("usage: promote <candidate-id> [--undo]", "warn");
@@ -550,11 +506,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "export",
-    usage: "export [--unredacted]",
-    desc: "save the promoted findings as a flux (SARIF) report, redacted; --unredacted needs spall's --allow-unredacted-export",
     group: "app",
-    mcp: false,
-    risk: "export",
     palette: { label: "Export promoted findings (flux, redacted)", hint: "export" },
     complete: () => ["--unredacted"],
     run: async (args, ctx) => {
@@ -565,11 +517,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "rules",
-    usage: "rules [text]",
-    desc: "the rule catalog (WSTG v4.2 tests, with CWE): every rule, or those matching text",
     group: "app",
-    mcp: true,
-    risk: "read",
     palette: { label: "Rule catalog (WSTG)", hint: "rules" },
     run: async (args, ctx) => {
       const c = await ctx.rules();
@@ -583,12 +531,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "ca",
-    usage: "ca",
-    desc: "taphttp's CA certificate: fingerprint, download, and browser setup steps",
     group: "traffic",
-    // Browser setup is a human's job.
-    mcp: false,
-    risk: "read",
     palette: { label: "Set up a browser (CA certificate)", hint: "ca" },
     run: async (_args, ctx) => {
       const ca = await ctx.ca();
@@ -602,11 +545,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "audit",
-    usage: "audit [--last N]",
-    desc: "recent replay attempts, denials included",
     group: "traffic",
-    mcp: false,
-    risk: "read",
     palette: { label: "Audit log", hint: "audit" },
     run: async (args, ctx) => {
       let last = 20;
@@ -627,31 +566,19 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "newest",
-    usage: "newest",
-    desc: "jump to the newest exchange and follow",
     group: "traffic",
-    mcp: false,
-    risk: "read",
     palette: { label: "Jump to newest", hint: "newest" },
     run: (_a, ctx) => ctx.jumpToNewest(),
   },
   {
     name: "clear-table",
-    usage: "clear-table",
-    desc: "hide what's in the table; new traffic still arrives",
     group: "traffic",
-    mcp: false,
-    risk: "read",
     palette: { label: "Clear table", hint: "clear-table" },
     run: (_a, ctx) => ctx.clearTable(),
   },
   {
     name: "goto",
-    usage: "goto <view>",
-    desc: VIEWS.join(" | "),
     group: "view",
-    mcp: false,
-    risk: "read",
     complete: () => VIEWS,
     run: ([view], ctx) => {
       if (!(VIEWS as readonly string[]).includes(view ?? "")) return ctx.out(`goto: ${VIEWS.join(" | ")}`, "warn");
@@ -660,11 +587,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "theme",
-    usage: "theme <name>",
-    desc: THEMES.join(" | "),
     group: "app",
-    mcp: false,
-    risk: "read",
     palette: { label: "Theme…", hint: "theme <name>", needsArgs: true },
     complete: () => THEMES,
     run: ([name], ctx) => {
@@ -675,21 +598,13 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "keys",
-    usage: "keys",
-    desc: "keyboard shortcuts",
     group: "app",
-    mcp: false,
-    risk: "read",
     palette: { label: "Keyboard shortcuts", hint: "?" },
     run: (_a, ctx) => ctx.openKeys(),
   },
   {
     name: "console-key",
-    usage: "console-key <char>",
-    desc: "key that toggles this console (default `)",
     group: "app",
-    mcp: false,
-    risk: "read",
     run: ([key], ctx) => {
       if (!key || !ctx.setConsoleKey(key)) return ctx.out("usage: console-key <one character>", "warn");
       ctx.out(`console key is now ${key}`, "sys");
@@ -697,15 +612,20 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     name: "clear",
-    usage: "clear",
-    desc: "clear the console",
     group: "app",
-    mcp: false,
-    risk: "read",
     run: (_a, ctx) => ctx.clearConsole(),
   },
-  { name: "god", usage: "god", desc: "", group: "app", mcp: false, risk: "read", hidden: true, run: (_a, ctx) => ctx.out("no.") },
+  { name: "god", group: "app", run: (_a, ctx) => ctx.out("no.") },
 ];
+
+/** Names the UI implements and the server's registry doesn't (a test keeps this empty). */
+export const UNREGISTERED: readonly string[] = IMPLS.filter((i) => !SPECS.some((s) => s.name === i.name)).map((i) => i.name);
+
+/** Every command the server's registry lists and the UI implements, in the registry's order. */
+export const COMMANDS: readonly Command[] = SPECS.flatMap((s) => {
+  const impl = IMPLS.find((i) => i.name === s.name);
+  return impl ? [{ ...impl, usage: s.usage, desc: s.desc, mcp: s.mcp, risk: s.risk, hidden: s.hidden, args: s.args }] : [];
+});
 
 /** One audit record as a console line: time, outcome, method, target, why. */
 function auditLine(r: Record<string, unknown>): string {

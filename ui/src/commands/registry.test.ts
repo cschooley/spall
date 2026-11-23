@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { DEFAULT_RULES } from "../lib/roe.ts";
 import { asCandidate } from "../lib/candidates.ts";
 import { RAW } from "../lib/candidates.fixture.ts";
-import { COMMANDS, complete, execute, paletteItems, tokenize, type Ctx, type OutKind } from "./registry.ts";
+import { COMMANDS, UNREGISTERED, VIEWS, complete, execute, paletteItems, tokenize, type Ctx, type OutKind } from "./registry.ts";
+import { RISKS, SPECS } from "./specs.gen.ts";
+import { THEMES } from "../lib/theme.ts";
 
 const ENG = {
   id: "acme-q4-1a2b",
@@ -253,12 +255,11 @@ test("audit prints the newest attempts, one line each", async () => {
 });
 
 test("every command has a risk class; replay sends traffic and scope changes policy", () => {
-  const RISKS = ["read", "record", "export", "sends-traffic", "unsafe-method", "destructive", "policy"];
-  for (const c of COMMANDS) assert.ok(RISKS.includes(c.risk), c.name);
+  for (const c of COMMANDS) assert.ok((RISKS as readonly string[]).includes(c.risk), c.name);
   assert.deepEqual(
     COMMANDS.filter((c) => c.risk !== "read").map((c) => [c.name, c.risk]),
     [
-      ["replay", "sends-traffic"],
+      ["replay", "send"],
       ["scope", "policy"],
       ["engagement", "policy"],
       ["roe", "policy"],
@@ -607,4 +608,29 @@ test("promote and export are a human's: never MCP", async () => {
     ["usage: export [--unredacted]", "warn"],
   ]);
   for (const n of ["promote", "export", "flag"]) assert.equal(COMMANDS.find((c) => c.name === n)!.mcp, false, n);
+});
+
+test("the UI and the server's registry (#53) list the same commands, with the server's risk and mcp", () => {
+  assert.deepEqual(UNREGISTERED, [], "implemented here but not in src/commands.rs");
+  assert.deepEqual(
+    COMMANDS.map((c) => c.name),
+    SPECS.map((s) => s.name),
+    "in src/commands.rs but not implemented here",
+  );
+  for (const s of SPECS) {
+    const c = COMMANDS.find((c) => c.name === s.name)!;
+    assert.deepEqual([c.risk, c.mcp, c.hidden, c.usage, c.desc], [s.risk, s.mcp, s.hidden, s.usage, s.desc], s.name);
+  }
+  assert.deepEqual([...RISKS], ["read", "record", "send", "unsafe", "destructive", "policy", "export"]);
+  for (const c of COMMANDS.filter((c) => c.risk === "policy" || c.risk === "export")) assert.equal(c.mcp, false, c.name);
+});
+
+test("goto and theme take what the UI has (the server's list names them too)", () => {
+  const goto = COMMANDS.find((c) => c.name === "goto")!;
+  const theme = COMMANDS.find((c) => c.name === "theme")!;
+  assert.equal(goto.desc, VIEWS.join(" | "));
+  assert.equal(theme.desc, THEMES.join(" | "));
+  const enumOf = (c: (typeof COMMANDS)[number], k: string) => (c.args.properties as Record<string, { enum?: readonly string[] }>)[k]?.enum;
+  assert.deepEqual(enumOf(goto, "view"), [...VIEWS]);
+  assert.deepEqual(enumOf(theme, "name"), [...THEMES]);
 });

@@ -81,6 +81,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
+        .route("/api/commands", get(api_commands))
         .route(
             "/api/candidates",
             get(api_candidates).post(api_candidates_new),
@@ -556,6 +557,11 @@ async fn api_redaction() -> Response {
 }
 
 /// The rule catalog (#41): WSTG v4.2 ids, titles, CWE and help links.
+/// The command registry (#53): what the palette, console and MCP offer.
+async fn api_commands() -> Response {
+    axum::Json(crate::commands::specs()).into_response()
+}
+
 async fn api_rules() -> Response {
     let rules: Vec<serde_json::Value> = crate::rules::CATALOG
         .iter()

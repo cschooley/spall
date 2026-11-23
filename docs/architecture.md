@@ -62,7 +62,7 @@ Not supported: a model provider's API calling spall's MCP server remotely. That 
 
 Rules for both:
 
-- **One registry, one gate.** Palette, console, MCP tools and built-in agent tools are generated from the same command registry, and every state-changing call goes through the action gate (#22). No side doors.
+- **One registry, one gate.** Palette, console, MCP tools and built-in agent tools are generated from the same command registry (`src/commands.rs`, #53), and every state-changing call goes through the action gate (#22). No side doors. Each command's risk class maps onto the gate's (`send` and `unsafe` are sends, `destructive` is destructive); `policy` and `export` are refused to agents in the server, not only left unoffered.
 - **Chat plans, tasks act.** The intake produces plans; only human-approved tasks send traffic. Plans start from an engagement (#30); with no authorized engagement, the only thing the orchestrator can draft is one.
 - **Roles are least privilege.** Each role (Scoper, Mapper, Tester, Reporter; ux.md) maps to gate risk classes. A role cannot be handed work its class or the RoE forbids.
 - **MCP over HTTP gets the #17 treatment.** Validate `Origin`, require a token, bind 127.0.0.1 (DNS rebinding and cross-site requests apply to it exactly as to `/api/replay`). stdio is offered too.

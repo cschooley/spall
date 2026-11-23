@@ -2003,3 +2003,22 @@ async fn the_redaction_list_comes_from_flux() {
         assert!(headers.contains(&h), "{h}");
     }
 }
+
+#[tokio::test]
+async fn the_command_registry_is_served_from_the_server() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    let spall = start_spall(None, &token).await;
+    let v = body_json(&get_text(spall, "/api/commands").await);
+    assert_eq!(v, spall::commands::specs());
+    let cmds = v["commands"].as_array().unwrap();
+    let replay = cmds.iter().find(|c| c["name"] == "replay").unwrap();
+    assert_eq!(replay["risk"], "send");
+    assert_eq!(replay["mcp"], true);
+    assert_eq!(replay["args"]["required"], serde_json::json!(["id"]));
+    let roe = cmds.iter().find(|c| c["name"] == "roe").unwrap();
+    assert_eq!(
+        (roe["risk"].as_str(), roe["mcp"].as_bool()),
+        (Some("policy"), Some(false))
+    );
+}

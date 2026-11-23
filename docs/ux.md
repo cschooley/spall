@@ -152,7 +152,7 @@ Default output already includes evidence and a repro in every candidate; the but
 Quake-style drop-down console, the same in every suite app (verdigris component).
 
 - **Palette vs. console.** `⌘K` is for finding things you don't remember (fuzzy search). The console is for doing things you do remember: typed commands with arguments, history, tab completion, scrollback.
-- **One command registry.** Palette, console and MCP server expose the same commands with the same names and arguments. A command that exists in one exists in all three. It lives in `ui/src/commands/registry.ts`; each command declares whether it may be offered to the agent (`mcp`), and export or promotion never may.
+- **One command registry.** Palette, console and MCP server expose the same commands with the same names and arguments. A command that exists in one exists in all three. It lives on the server, in `src/commands.rs` (#53): name, usage, argument schema (JSON Schema, reused as the MCP `inputSchema`), description, risk class (`read`, `record`, `send`, `unsafe`, `destructive`, `policy`, `export`) and whether it may be offered to the agent (`mcp`). It is served at `GET /api/commands` and generated into the UI (`ui/src/commands/specs.gen.ts`), where `registry.ts` adds only how each command runs in the browser; tests fail if the two disagree. The server refuses `policy` and `export` commands (promotion included) to an agent whatever its `mcp` flag says, and audits the refusal.
 - **System output lands here:** agent messages, late OOB callbacks, warnings.
 - **Text only.** Console output is never rendered as HTML (see the "Traffic is never HTML" rule).
 - Toggle on backtick (configurable for non-US layouts). Never opens while typing in an input.

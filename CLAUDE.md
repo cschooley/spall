@@ -144,6 +144,16 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
+The command registry is server-side (#53, done): `src/commands.rs`
+holds name, usage, argument schema, risk class and `mcp` for every
+command, served at `GET /api/commands`. The UI's `registry.ts` adds
+only `run`/`complete`/palette and takes the rest from the generated
+`ui/src/commands/specs.gen.ts` (never edit it; regenerate with
+`SPALL_BLESS=1 cargo test --lib commands::tests::ui_specs_are_current`).
+A new command goes in both, or a test fails. Agents run commands only
+through `commands::admit` / `admit_audited`, which refuses `policy` and
+`export` whatever the `mcp` flag says.
+
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
 
