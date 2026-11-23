@@ -10,6 +10,11 @@
 
 use serde::Serialize;
 
+/// The flux crate spall is built with (its git tag in Cargo.toml) and the
+/// spec version that tag implements (docs/flux/SPEC.md), for the launcher's
+/// flux tile (#16).
+pub const FLUX_TAG: &str = "v0.1.0";
+pub const FLUX_SPEC: &str = "draft v0.4";
 pub const WSTG_VERSION: &str = "4.2";
 pub const ATTRIBUTION: &str = "Rule ids and titles: OWASP Web Security Testing Guide v4.2 (CC BY-SA 4.0). CWE mapping: spall.";
 pub const OTHER: &str = "spall/other";
@@ -203,6 +208,20 @@ mod tests {
         }
         assert!(CATALOG.len() > 50);
         assert_eq!(CATALOG.last().map(|e| e.id), Some(OTHER));
+    }
+
+    #[test]
+    fn flux_versions_match_the_build() {
+        let cargo = include_str!("../Cargo.toml");
+        assert!(
+            cargo.contains(&format!("cschooley/flux\", tag = \"{FLUX_TAG}\"")),
+            "FLUX_TAG matches Cargo.toml's flux tag"
+        );
+        let spec = include_str!("../docs/flux/SPEC.md");
+        assert!(
+            spec.contains(&format!("Status: {FLUX_SPEC}")),
+            "FLUX_SPEC matches the vendored spec"
+        );
     }
 
     #[test]

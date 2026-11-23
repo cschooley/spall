@@ -261,6 +261,11 @@ async fn api_status(State(state): State<AppState>) -> Response {
         .as_ref()
         .map(|r| r.testing_now())
         .unwrap_or(serde_json::Value::Null);
+    body["flux"] = serde_json::json!({
+        "crate": crate::rules::FLUX_TAG,
+        "spec": crate::rules::FLUX_SPEC,
+        "rules": format!("OWASP WSTG v{}", crate::rules::WSTG_VERSION),
+    });
     // Candidates waiting for a decision (#47): not yet confirmed, not
     // suppressed.
     body["to_triage"] = match &state.replayer {

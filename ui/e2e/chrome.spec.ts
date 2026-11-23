@@ -31,7 +31,8 @@ test("the rail shows all five views in order; Engagement and Traffic are live", 
   await expect(traffic).toHaveAttribute("aria-current", "page");
   await expect(traffic).toHaveAttribute("title", "Traffic (2)");
   await expect(page.getByRole("link", { name: "Engagement" })).toHaveAttribute("title", "Engagement (1)");
-  for (const [view, key] of [["surface", "3"], ["tasks", "4"], ["findings", "5"]] as const) {
+  await expect(page.getByRole("link", { name: "Findings" })).toHaveAttribute("title", "Findings (5)");
+  for (const [view, key] of [["surface", "3"], ["tasks", "4"]] as const) {
     const el = page.locator(`.rail [data-view='${view}']`);
     await expect(el).toHaveAttribute("aria-disabled", "true");
     await expect(el).toHaveClass(/todo/);
@@ -85,4 +86,33 @@ test("taphttp's light is off when spall tails a log file", async ({ page }) => {
   const taphttp = page.locator("[data-tool='taphttp']");
   await expect(taphttp.locator(".led")).toHaveClass("led");
   await expect(taphttp).toHaveAttribute("title", "taphttp: headless: status only · log file");
+});
+
+test("taphttp and flux tiles show their details in place (#16)", async ({ page }) => {
+  const P = `<img src=x onerror="window.__pwned=1">`;
+  await page.route("**/api/status", (r) =>
+    r.fulfill({ json: { source: "lever", connected: true, proxy: "127.0.0.1:8080", flux: { crate: "v0.1.0", spec: "draft v0.4", rules: "OWASP WSTG v4.2" } } }),
+  );
+  await page.route(/\/api\/exchanges\?/, (r) => r.fulfill({ json: [] }));
+  await page.route("**/api/ca", (r) =>
+    r.fulfill({ json: { sha256: "3F:9C:A1", subject: "CN=taphttp CA", not_after: "2036-11-01T00:00:00Z", taphttp_version: `0.6.1 ${P}`, proxy: "127.0.0.1:8080" } }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Switch tool" }).click();
+  const panel = page.getByRole("group", { name: "Suite tools" });
+  await panel.getByRole("button", { name: /taphttp/ }).click();
+  const tap = panel.getByRole("region", { name: "taphttp details" });
+  await expect(tap).toContainText("lever API, feed connected");
+  await expect(tap).toContainText("3F:9C:A1");
+  await expect(tap).toContainText(`0.6.1 ${P}`);
+  await expect(tap.getByRole("link", { name: "Set up a browser" })).toHaveAttribute("href", "#engagement/ca");
+  await panel.getByRole("button", { name: /flux/ }).click();
+  await expect(tap).toHaveCount(0);
+  const flux = panel.getByRole("region", { name: "flux details" });
+  await expect(flux).toContainText("v0.1.0");
+  await expect(flux).toContainText("draft v0.4");
+  await expect(flux).toContainText("OWASP WSTG v4.2");
+  await panel.getByRole("button", { name: /flux/ }).click();
+  await expect(flux).toHaveCount(0);
+  expect(await page.locator(".panel img").count()).toBe(0);
 });

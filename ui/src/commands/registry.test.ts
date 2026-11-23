@@ -52,8 +52,9 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     openScopePaste: (what = "paste") => void calls.push(what),
-    ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" }),
+    ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080", taphttpVersion: "0.6.1" }),
     openSetup: () => void calls.push("setup"),
+    goto: (v) => (calls.push(`goto:${v}`), ["engagement", "traffic", "findings"].includes(v)),
     flag: async (i) => {
       calls.push(`flag:${JSON.stringify(i)}`);
       return { kind: "created", candidate: asCandidate(RAW)! };
@@ -135,12 +136,15 @@ test("theme accepts the four verdigris themes only", async () => {
   assert.match(lines.at(-1)![0], /^theme: rust \| rust-light \| blued \| blued-light$/);
 });
 
-test("goto: traffic is here; unbuilt views say so", async () => {
-  const { ctx, lines } = fakeCtx();
-  await execute("goto traffic", ctx);
+test("goto shows a built view; unbuilt ones say so", async () => {
+  const { ctx, lines, calls } = fakeCtx();
   await execute("goto findings", ctx);
-  assert.equal(lines[1]![0], "already on traffic");
-  assert.deepEqual(lines[3], ["goto: findings is not built yet", "warn"]);
+  await execute("goto tasks", ctx);
+  await execute("goto nowhere", ctx);
+  assert.deepEqual(calls, ["goto:findings", "goto:tasks"]);
+  assert.equal(lines.length, 5, "a built view needs no reply");
+  assert.deepEqual(lines[2], ["goto: tasks is not built yet", "warn"]);
+  assert.equal(lines[4]![1], "warn");
 });
 
 test("curl needs a selected exchange", async () => {
@@ -336,7 +340,7 @@ test("scope exclude and scope check; exclusions are listed apart", async () => {
     setEngagement: async (f, v) => (calls.push(`set:${f}=${JSON.stringify(v)}`), { engagement: { ...ENG, [f]: v || null }, changed: true }),
     setRules: async (r) => (calls.push(`rules:${JSON.stringify(r)}`), { engagement: { ...ENG, rules: { ...DEFAULT_RULES, ...r } as typeof DEFAULT_RULES }, changed: true }),
     openScopePaste: (what = "paste") => void calls.push(what),
-    ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" }),
+    ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080", taphttpVersion: "0.6.1" }),
     openSetup: () => void calls.push("setup"),
     hosts: async () => ({
       hosts: [

@@ -20,9 +20,11 @@ export interface SourceStatus {
   testing: { allowed: boolean; reason: string | null } | null;
   /** Candidates waiting for a decision (#47); null without the lever API. */
   toTriage: number | null;
+  /** The flux crate and spec spall is built with (#16). */
+  flux: { crate: string; spec: string; rules: string } | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -42,7 +44,9 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           engagement?: { id?: unknown; name?: unknown } | null;
           testing?: unknown;
           to_triage?: unknown;
+          flux?: { crate?: unknown; spec?: unknown; rules?: unknown } | null;
         };
+        const fx = body.flux;
         const e = body.engagement;
         if (!live) return;
         setStatus({
@@ -55,6 +59,8 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           engagement: e && typeof e.id === "string" && typeof e.name === "string" ? { id: e.id, name: e.name } : null,
           testing: testingOf(body.testing),
           toTriage: typeof body.to_triage === "number" && Number.isInteger(body.to_triage) && body.to_triage >= 0 ? body.to_triage : null,
+          flux:
+            fx && typeof fx.crate === "string" && typeof fx.spec === "string" && typeof fx.rules === "string" ? { crate: fx.crate, spec: fx.spec, rules: fx.rules } : null,
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });

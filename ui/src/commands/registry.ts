@@ -49,6 +49,8 @@ export interface Ctx {
   openSetup(): void;
   /** Hosts seen in traffic with their scope state (#39), or an error message. */
   hosts(): Promise<HostListing | string>;
+  /** Show a view; false if it isn't built yet. */
+  goto(view: string): boolean;
   /** Flag an exchange as a candidate (#43). */
   flag(i: FlagInput): Promise<FlagResult>;
   /** The rule catalog (#41), or why not. */
@@ -616,9 +618,8 @@ export const COMMANDS: readonly Command[] = [
     risk: "read",
     complete: () => VIEWS,
     run: ([view], ctx) => {
-      if (view === "traffic") return ctx.out("already on traffic");
-      if ((VIEWS as readonly string[]).includes(view ?? "")) return ctx.out(`goto: ${view} is not built yet`, "warn");
-      ctx.out(`goto: ${VIEWS.join(" | ")}`, "warn");
+      if (!(VIEWS as readonly string[]).includes(view ?? "")) return ctx.out(`goto: ${VIEWS.join(" | ")}`, "warn");
+      if (!ctx.goto(view!)) ctx.out(`goto: ${view} is not built yet`, "warn");
     },
   },
   {

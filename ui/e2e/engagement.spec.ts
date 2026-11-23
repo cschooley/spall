@@ -119,7 +119,7 @@ test("switching and creating engagements; not testing now says why", async ({ pa
   await expect.poll(() => created).toEqual({ name: "Gamma" });
   // Unbuilt panels are dimmed and inert.
   const todo = page.locator(".todo-panels li");
-  await expect(todo).toHaveCount(3);
+  await expect(todo).toHaveCount(2);
   await expect(todo.first()).toHaveAttribute("aria-disabled", "true");
   expect(await todo.first().evaluate((e) => Number(getComputedStyle(e).opacity))).toBeLessThan(0.5);
 });

@@ -14,6 +14,7 @@ import type { EngagementInfo, ScopeVerdict } from "../commands/registry.ts";
 import { apiJson, expiryText } from "../lib/engagement.ts";
 import { daysText, parseDays, parseSpan, rulesFormOf, rulesPatchOf, type Rules, type RulesForm } from "../lib/roe.ts";
 import { useEngagement } from "../useEngagement.ts";
+import { listCandidates, stateOf, where, type Candidate } from "../lib/candidates.ts";
 
 type Result = string | null;
 
@@ -29,7 +30,10 @@ export function EngagementView({
   proxy,
   latestHttps,
   onChanged,
+  toTriage,
 }: {
+  /** The status bar's count; a change reloads the list (#47). */
+  toTriage: number | null;
   available: boolean;
   hosts: HostListing | null;
   proxy: string | null;
@@ -60,7 +64,7 @@ export function EngagementView({
         <ScopePanel e={e} onChanged={done} />
         <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
-        <Waiting />
+        <Waiting toTriage={toTriage} />
         <SetupSection proxy={proxy} latestHttps={latestHttps} />
       </div>
     </div>
@@ -646,14 +650,43 @@ function SetupSection({ proxy, latestHttps }: { proxy: string | null; latestHttp
 }
 
 /** Panels that grow later: dimmed and inert until they ship (docs/ux.md). */
-function Waiting() {
+/** Shown at most, oldest first; the rest are in Findings. */
+const WAITING_SHOWN = 5;
+
+function Waiting({ toTriage }: { toTriage: number | null }) {
+  const [list, setList] = useState<Candidate[] | string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void listCandidates().then((l) => live && setList(l));
+    return () => {
+      live = false;
+    };
+  }, [toTriage]);
+  const waiting = Array.isArray(list) ? list.filter((c) => stateOf(c) === "to triage").reverse() : [];
   const todo: [string, string][] = [
-    ["Candidates to triage", "M4"],
     ["Tasks waiting on approval", "M6"],
     ["Coverage: endpoints seen vs. tested", "Surface"],
   ];
   return (
     <Section title="Waiting on you">
+      <div className="waiting" role="group" aria-label="Candidates to triage">
+        <h4>
+          <a href="#findings">{`Candidates to triage · ${waiting.length}`}</a>
+        </h4>
+        {typeof list === "string" ? <p className="error">{list}</p> : null}
+        {Array.isArray(list) && waiting.length === 0 ? <p className="note">Nothing waiting: the queue is clear.</p> : null}
+        {waiting.length ? (
+          <ol className="entries">
+            {waiting.slice(0, WAITING_SHOWN).map((c) => (
+              <li key={c.id}>
+                <a href={`#findings/${encodeURIComponent(c.id)}`}>{`${c.id} · ${c.ruleId}`}</a>
+                <span className="note">{`${where(c)} · ${timeOf(c.created)}`}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        {waiting.length > WAITING_SHOWN ? <a href="#findings">{`and ${waiting.length - WAITING_SHOWN} more in Findings`}</a> : null}
+      </div>
       <ul className="todo-panels">
         {todo.map(([what, when]) => (
           <li key={what} className="todo" aria-disabled="true" title={`${what} · not built yet (${when})`}>

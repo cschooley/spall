@@ -95,11 +95,12 @@ export function expiryText(expires: string | null, today: string): { text: strin
   return { text: `authorization expires in ${days(n)}`, tone: n <= 3 ? "soon" : "ok" };
 }
 
-export type ViewId = "engagement" | "traffic";
+export type ViewId = "engagement" | "traffic" | "findings";
 
 /** The view a location hash names; Traffic by default. */
 export function viewFromHash(hash: string): ViewId {
-  return hash.replace(/^#/, "").split("/")[0] === "engagement" ? "engagement" : "traffic";
+  const v = hash.replace(/^#/, "").split("/")[0];
+  return v === "engagement" || v === "findings" ? v : "traffic";
 }
 
 /** One line of a scope-list preview (#38), as spall's scope engine read it. */

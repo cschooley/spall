@@ -13,6 +13,7 @@ import { toCurl } from "./lib/curl.ts";
 import { durationText, shortId, statusLine } from "./lib/format.ts";
 import { apiJson, asEngagement, asSummaries, viewFromHash, type ViewId } from "./lib/engagement.ts";
 import { EngagementView } from "./components/EngagementView.tsx";
+import { FindingsView } from "./components/FindingsView.tsx";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
 import { applyHeaderEdits, draftOf, replayBodyFor, type Draft } from "./lib/edit.ts";
 import { ARM_MS, armedFor, armLabel, postReplay, type Armed, type ReplayBody } from "./lib/replay.ts";
@@ -462,6 +463,11 @@ export function App() {
       openSetup: () => {
         window.location.hash = "engagement/ca";
       },
+      goto: (v) => {
+        if (!VIEWS.some((x) => x.id === v && x.built)) return false;
+        window.location.hash = v;
+        return true;
+      },
       rules: loadCatalog,
       flag: async (i) => {
         const r = await flagCandidate(i);
@@ -545,7 +551,7 @@ export function App() {
         // A focused button or tab takes Enter itself (the Replay button's
         // own click is the press); otherwise ⏎ replays the open exchange.
         if ((e.target as HTMLElement | null)?.closest("button, a, [role='tab']")) return;
-        if (selected && !sheet) {
+        if (selected && !sheet && view === "traffic") {
           e.preventDefault();
           void replay(selected.id, { yes: false });
         }
@@ -613,18 +619,30 @@ export function App() {
         <RateMeter live={store.items} />
         <span className="spacer" />
         <ThemePicker theme={theme} setTheme={setTheme} />
-        <Launcher taphttpConnected={status.source === "lever" ? status.connected : null} />
+        <Launcher status={{ taphttpConnected: status.source === "lever" ? status.connected : null, source: status.source, proxy: status.proxy, flux: status.flux }} />
       </header>
 
       <Rail current={view} />
 
-      {view === "engagement" ? (
+      {view === "findings" ? (
+        <main className="findings-main">
+          <FindingsView
+            available={status.replay}
+            onChanged={() => setStatusNonce((n) => n + 1)}
+            onOpenExchange={(id) => {
+              window.location.hash = "traffic";
+              void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
+            }}
+          />
+        </main>
+      ) : view === "engagement" ? (
         <main className="eng-main">
           <EngagementView
             available={status.replay}
             hosts={hosts.listing}
             proxy={status.proxy}
             latestHttps={latestHttps}
+            toTriage={status.toTriage}
             onChanged={() => setStatusNonce((n) => n + 1)}
           />
         </main>

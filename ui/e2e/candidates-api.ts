@@ -69,6 +69,11 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
     const all = [...state.entries.values()].filter((e) => (of ? e.replay_of === of : true));
     return r.fulfill({ json: q.get("before") ? [] : all.sort((a, b) => b.ts.localeCompare(a.ts)) });
   });
+  void page.route(/\/api\/exchanges\/[^/?]+$/, (r) => {
+    const id = decodeURIComponent(new URL(r.request().url()).pathname.split("/").pop()!);
+    const e = state.entries.get(id);
+    return e ? r.fulfill({ json: e }) : r.fulfill({ status: 404, json: { error: `no exchange ${id}` } });
+  });
   void page.route(/\/api\/candidates(\?.*)?$/, async (r: Route) => {
     const req = r.request();
     if (req.method() === "POST") {

@@ -65,15 +65,18 @@ export const test = base.extend<{ guard: void }>({
         const candidateAnswer =
           /^Failed to load resource: the server responded with a status of (400|409)\b/.test(m.text()) &&
           /\/api\/candidates(\/[^/?]+)?$/.test(m.location().url);
-        if (gateAnswer || refusedChange || candidateAnswer) return;
+        // Evidence that taphttp no longer has is a 404 on purpose (#45).
+        const goneEvidence =
+          /^Failed to load resource: the server responded with a status of 404\b/.test(m.text()) && /\/api\/exchanges\/[^/?]+$/.test(m.location().url);
+        if (gateAnswer || refusedChange || candidateAnswer || goneEvidence) return;
         if (m.type() === "error" || m.type() === "warning") problems.push(`console ${m.type()}: ${m.text()}`);
       });
       page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));
       // Tests that mock a lever-connected spall (replay: true) make the
-      // inspector ask for the exchange's candidates; spall in log mode has
-      // none. Tests that need candidates mock them (candidates-api.ts),
+      // inspector and the Engagement view ask for candidates; spall in log
+      // mode has none. Tests that need candidates mock them (candidates-api.ts),
       // which takes precedence over this.
-      await page.route(/\/api\/candidates\?exchange=/, (r) => r.fulfill({ json: { candidates: [] } }));
+      await page.route(/\/api\/candidates(\?.*)?$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { candidates: [] } }) : r.fallback()));
       page.on("dialog", async (d) => {
         problems.push(`dialog: ${d.type()} ${d.message()}`);
         await d.dismiss();
