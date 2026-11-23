@@ -21,7 +21,7 @@ test("selecting a row opens the inspector with request and response tabs", async
       res_body: "nope",
     }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await expect(page.locator(".inspector")).toHaveCount(0);
   await page.locator("tr.row").first().click();
@@ -64,7 +64,7 @@ test("copy as curl puts a shell-safe command on the clipboard", async ({ page })
       req_body: `{"q":"it's"}`,
     }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   await page.getByRole("button", { name: "Copy as curl" }).click();
@@ -78,7 +78,7 @@ test("save body downloads the exact captured bytes", async ({ page }) => {
   const t = token();
   const bytes = Buffer.from([0, 1, 2, 255, 0x3c, 0x62, 0x3e]);
   append(entry({ host: `${t}.example`, res_body: bytes.toString("base64"), res_body_encoding: "base64" }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   await expect(page.getByRole("button", { name: "Save request body" })).toBeDisabled();
@@ -104,7 +104,7 @@ test("a failed exchange shows why it got no response", async ({ page }) => {
       error: "connect error: Connection refused (os error 111)",
     }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   const row = page.locator("tr.row").first();
   await expect(row.locator("td.st-err")).toHaveText("ERR");

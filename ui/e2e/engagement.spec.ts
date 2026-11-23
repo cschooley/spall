@@ -3,9 +3,21 @@
 import { expect, test } from "./fixtures.ts";
 import { engagementApi } from "./engagement-api.ts";
 
-test("1 opens the Engagement view and 2 goes back; the rail marks the current view", async ({ page }) => {
+test("a bare URL opens Engagement, the home view; unbuilt views fall back to it (#71)", async ({ page }) => {
   engagementApi(page);
   await page.goto("/");
+  await expect(page.locator(".rail [data-view='engagement']")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("heading", { name: "ACME Q4" })).toBeVisible();
+  await expect(page.getByLabel("Filter")).toHaveCount(0);
+  await page.goto("/#surface");
+  await expect(page.locator(".rail [data-view='engagement']")).toHaveAttribute("aria-current", "page");
+  await page.goto("/#traffic");
+  await expect(page.getByLabel("Filter")).toBeVisible();
+});
+
+test("1 opens the Engagement view and 2 goes back; the rail marks the current view", async ({ page }) => {
+  engagementApi(page);
+  await page.goto("/#traffic");
   await expect(page.locator(".rail [data-view='traffic']")).toHaveAttribute("aria-current", "page");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("1");
@@ -174,7 +186,7 @@ test("paste a scope list: the server previews every line, one click applies (#38
       },
     });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   // `scope paste` in the console opens the panel in the Engagement view.
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
@@ -224,7 +236,7 @@ test("hosts from traffic: rows show their scope state, scope: filters, the Engag
     entry({ host: `www.tracker-${t}.com`, url: `http://www.tracker-${t}.com/p.gif` }),
     entry({ host: `pay.${t}.test`, url: `http://pay.${t}.test/x` }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   const { filterTo } = await import("./fixtures.ts");
   await filterTo(page, t);
   await expect(page.locator("tr.row")).toHaveCount(3);
@@ -295,7 +307,7 @@ test("browser setup: the CA's fingerprint and downloads, steps with the proxy, a
   await page.route("**/api/ca", (r) =>
     r.fulfill({ json: { sha256: "EB:6F:71:3A", subject: `CN=taphttp CA ${p}`, not_before: "2026-11-20T00:00:00Z", not_after: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080" } }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
   await page.getByLabel("Console command").fill("ca");

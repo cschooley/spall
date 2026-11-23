@@ -94,7 +94,7 @@ for (const [label, host] of [
 }
 
 test("control: spall's own page gets past the guard", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   const status = await page.evaluate(async () => {
     const res = await fetch("/api/replay", {
       method: "POST",

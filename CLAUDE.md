@@ -101,7 +101,7 @@ taphttp: v0.6.1 (`taphttp-types` 0.5.0, schema v5). `POST /replay` takes
 `{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
 `req_headers` is the whole ordered list; `meta` is attribution stored on
 the recorded replay, never sent upstream (spall sends `{"actor":
-"human"}`; M6 agents add a task id). A failed attempt is recorded with
+"human"}`; M6a agents add a task id). A failed attempt is recorded with
 `error` and returned as a 502; a 400 means nothing was sent. `GET
 /exchanges?replay_of=<id>` lists replays. `GET /info`, `/ca.pem`,
 `/ca.der` give the public CA. Recorded `req_headers` are what went on
@@ -129,21 +129,23 @@ redacted, validated flux report (`POST /api/export`,
 and an explicit ask, marked `flux/redacted: false`. The inspector's
 credential highlighting comes from flux (`/api/redaction`).
 
-## Current milestone: M6 "agent"
+## Current milestone: M6a "agent over MCP"
 
-Not started. Read docs/architecture.md (M6) and docs/ux.md (Tasks,
-intake, roles) first: MCP server (read traffic, replay through the gate,
-`propose_finding`; never promote or export), Tasks view, approval gates,
-e-stop, attribution (taphttp `meta` / `source`). Filed: umbrella #68,
-three phases. Phase 1 (agent over MCP): #53 server-side registry
-(first: the UI registry is TS-only), #54 tasks, #55 gate for agents,
-#56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
-#60 `propose_finding`, #61 Tasks view, #62 attribution. Phase 2 (spall
-as host): #63 host, #64 roles, #65 intake, #66 quad, #67 buttons.
-Phase 3 (sensors): #13, #1, #2.
+M6 is split in three (2026-11-23), lettered so M7 onward keep their
+numbers. Read docs/architecture.md (agent sections) and docs/ux.md
+(Tasks, intake, roles) first.
 
-Open questions to raise, not decide alone: making Engagement the home
-view now that "waiting on you" has content (docs/ux.md).
+- **M6a agent over MCP** (#68, current): #53 server-side registry
+  (first: the UI registry is TS-only), #54 tasks, #55 gate for agents,
+  #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
+  #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
+  `meta`). Never promote or export over MCP.
+- **M6b agent host** (#69): #63 host, #64 roles, #65 intake, #66 quad,
+  #67 buttons.
+- **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
+
+Engagement is the home view (#71, done in M6a): a bare URL opens it.
+Browser tests that exercise Traffic open `/#traffic`.
 
 ## Testing
 

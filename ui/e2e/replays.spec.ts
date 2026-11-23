@@ -20,7 +20,7 @@ test("the Replays tab counts and lists replays live, and links both ways", async
   const t = token();
   const orig = entry({ method: "POST", host: `${t}.example`, url: `http://${t}.example/orig`, req_body: "{}" });
   append(orig);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await open(page, "/orig");
   await expect(tab(page)).toHaveText("replays0");
@@ -64,7 +64,7 @@ test("a replay of a replay shows the chain back to the first original", async ({
   const r1 = entry({ ...orig, id: `${orig.id}-r1`, ts: later(orig, 1), replay_of: orig.id });
   const r2 = entry({ ...orig, id: `${orig.id}-r2`, ts: later(orig, 2), replay_of: r1.id });
   append(orig, r1, r2);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").last().click(); // oldest first: the last row is r2
   const chain = page.getByLabel("Replay chain");
@@ -95,7 +95,7 @@ test("with the lever API, the list comes from taphttp's replay_of history", asyn
     asked.push(q.get("replay_of") ?? "");
     return r.fulfill({ json: q.get("replay_of") === orig.id ? [old] : [] });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await open(page, "/hist");
   await expect(tab(page)).toHaveText("replays1");
@@ -111,7 +111,7 @@ test("replay:yes and replay:no filter the table", async ({ page }) => {
   const orig = entry({ host: `${t}.example`, url: `http://${t}.example/f-orig` });
   const r1 = entry({ ...orig, id: `${orig.id}-r`, url: `http://${t}.example/f-rep`, ts: later(orig, 1), replay_of: orig.id });
   append(orig, r1);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `${t} replay:yes`);
   await expect(page.locator("tr.row")).toHaveCount(1);
   await expect(page.locator("tr.row")).toContainText("/f-rep");
@@ -126,7 +126,7 @@ test("hostile replay fields stay text in the list", async ({ page }) => {
   const orig = entry({ host: `${t}.example`, url: `http://${t}.example/h` });
   const r1 = entry({ ...orig, id: `${orig.id}-r`, ts: later(orig, 1), replay_of: orig.id, status: null, error: payload, meta: { actor: payload } });
   append(orig, r1);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `${t} replay:no`);
   await open(page, "/h");
   await tab(page).click();

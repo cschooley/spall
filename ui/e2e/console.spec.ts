@@ -3,7 +3,7 @@ import { append, entry, expect, filterTo, test, token } from "./fixtures.ts";
 
 test("new log lines appear live, with the connection shown as live", async ({ page }) => {
   const t = token();
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".conn")).toHaveText("live");
   await filterTo(page, t);
   await expect(page.locator("tr.row")).toHaveCount(0);
@@ -26,7 +26,7 @@ test("filter syntax: host:, method:, status: (exact and class), free text", asyn
     entry({ host: `${t}.a`, method: "GET", url: `http://${t}.a/one`, status: 200 }),
     entry({ host: `${t}.b`, method: "DELETE", url: `http://${t}.b/two`, status: 503 }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   for (const [q, n] of [
     [t, 2],
     [`host:${t}.b`, 1],
@@ -48,7 +48,7 @@ test("filter syntax: host:, method:, status: (exact and class), free text", asyn
 test("clear empties the table and new traffic still arrives", async ({ page }) => {
   const t = token();
   append(entry({ host: `${t}.before` }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await expect(page.locator("tr.row")).toHaveCount(1);
   await page.getByRole("button", { name: "clear", exact: true }).click();
@@ -61,7 +61,7 @@ test("clear empties the table and new traffic still arrives", async ({ page }) =
 test("scrolling up stops follow; scrolling to the bottom resumes it", async ({ page }) => {
   const t = token();
   append(...Array.from({ length: 150 }, (_, i) => entry({ host: `${t}.example`, url: `http://${t}.example/${i}` })));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   const follow = page.getByLabel("follow");
   await expect(follow).toBeChecked();
@@ -79,7 +79,7 @@ test("scrolling up stops follow; scrolling to the bottom resumes it", async ({ p
 test("the table is virtualized: thousands of rows, a bounded DOM", async ({ page }) => {
   const t = token();
   append(...Array.from({ length: 3000 }, (_, i) => entry({ host: `${t}.bulk`, url: `http://${t}.bulk/${i}` })));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await expect(page.locator(".statusbar")).toContainText("3000 exchanges");
   expect(await page.locator("tr.row").count()).toBeLessThan(150);

@@ -28,7 +28,7 @@ test("5 opens Findings: a keyboard triage queue that clears", async ({ page }) =
   const s = seed(t);
   append(...s.entries);
   const api = candidatesApi(page, { entries: s.entries, seed: s.list });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".statusbar .to-triage")).toHaveText("3 to triage");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("5");
@@ -137,7 +137,7 @@ test("the inspector's candidate links open it in Findings", async ({ page }) => 
   const s = seed(t);
   append(...s.entries);
   candidatesApi(page, { entries: s.entries, seed: s.list });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator("tr.row", { hasText: `${t}.test` }).filter({ hasText: "/o/7" }).click();
   await page.getByRole("list", { name: "Candidates for this exchange" }).getByRole("link", { name: /c-00000003/ }).click();
   await expect(page).toHaveURL(/#findings\/c-00000003$/);

@@ -5,7 +5,7 @@
 
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
-**Status:** pre-alpha, v0.6.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement), M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types) and M5 (redacted flux export). Next: M6 (the agent, over MCP). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
+**Status:** pre-alpha, v0.6.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement), M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types) and M5 (redacted flux export). Next: M6a (the agent, over MCP). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
@@ -43,7 +43,7 @@ Screenshots use fixture traffic and a sample engagement; regenerate them with `n
 
 Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
 
-**Traffic.** Still to come: attribution on every exchange (you or the agent, M6).
+**Traffic.** Still to come: attribution on every exchange (you or the agent, M6a).
 
 ![Mockup: Traffic view](docs/screenshots/mockup-traffic.png)
 
@@ -51,7 +51,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 
 ![Mockup: Tasks view](docs/screenshots/mockup-tasks.png)
 
-**Findings.** The agent proposes (M6), a human confirms, rejects or marks duplicate, with evidence and a redacted export preview (M5).
+**Findings.** The agent proposes (M6a), a human confirms, rejects or marks duplicate, with evidence and a redacted export preview (M5).
 
 ![Mockup: Findings view](docs/screenshots/mockup-findings.png)
 
@@ -132,7 +132,7 @@ curl -x http://127.0.0.1:8080 -k https://example.com
 
 ## Using it
 
-Three views are built so far: **Engagement** (`1`), **Traffic** (`2`) and **Findings** (`5`), on the left rail. spall opens on Traffic.
+Three views are built so far: **Engagement** (`1`), **Traffic** (`2`) and **Findings** (`5`), on the left rail. spall opens on Engagement.
 
 - **Engagement view** (`1`): the active engagement. You can edit its details (dates, authorization expiry with a countdown, notes) and its scope: add, exclude, remove, a note per target, a check box for any URL or host, and "paste a list". Paste a list reads hosts, wildcards, CIDRs and URLs one per line, ignoring bullets and comments; `!`, `-` or an "Out of scope:" heading excludes. It previews each line and applies them in one change. **Import OpenAPI** reads an OpenAPI 3 or Swagger 2 file, JSON or YAML, without following any `$ref` or fetching anything. It previews the servers the same way, then adds their hosts. The spec's paths are kept on the engagement for Surface. A relative server, or a server variable without a default, is noted rather than guessed. Its rules of engagement are there too: methods, confirmation, rate, time zone, testing and no-test windows, agents. A chip says whether testing is allowed right now, and why not. You can also switch engagements or start a new one. Every change goes through the same audited API as the console. **Hosts from traffic** lists every host seen that no scope entry decides yet: the third-party CDN, the analytics beacon, the SSO provider. Each one is a click away from add, exclude, or exclude its parent domain (`*.google-analytics.com`). Traffic rows carry a dot for their host's state: in, excluded or undecided. `hosts [--unknown]` in the console lists them too. Hosts come from recent history (the `--history` backfill) and live traffic; full history needs taphttp#21. **Set up a browser** offers the CA certificate download, the steps, and a live check. Panels for later milestones (candidates, tasks, coverage) are shown dimmed.
 - **Filter** (`/`): `host:example.com`, `method:POST`, `status:404` or `status:4xx`, `replay:yes` / `replay:no`, `scope:in` / `scope:out` / `scope:unknown`, plus free text matched against URL and host. Filters search taphttp's full history, not just what's on screen; scroll to the top for older pages.
@@ -218,7 +218,7 @@ The engagement is what you're testing under: a name, the client, start and end d
 
 ### Rules of engagement
 
-Each engagement carries rules that the gate enforces on every replay. Agents will be held to the same rules (M6). A task can narrow them but never widen them.
+Each engagement carries rules that the gate enforces on every replay. Agents will be held to the same rules (M6a). A task can narrow them but never widen them.
 
 | Rule | Default | Console |
 |---|---|---|
@@ -306,7 +306,9 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 | M3 engagement | The engagement as root object: scope with exclusions, rules of engagement the gate enforces (windows, rate, methods), paste a scope list, hosts from traffic, OpenAPI import, browser setup with the CA; Engagement view | done, `v0.4.0` |
 | M4 candidates | Flag candidates, keyboard triage, evidence, suppressions, on [flux](https://github.com/cschooley/flux) crate types; WSTG v4.2 rule ids (#48) | done, `v0.5.0` |
 | M5 export | Promotion, redacted flux export (redaction in the flux crate), redaction preview | done, `v0.6.0` |
-| M6 agent | Agent tasks over MCP: read traffic, replay, propose findings (never promote); e-stop, quad; execution sandbox and OOB listener | next |
+| M6a agent over MCP | Agent tasks driven by an outside MCP client: read traffic, replay through the gate, propose findings (never promote); approvals, e-stop, Tasks view, attribution | next |
+| M6b agent host | spall runs the agent: your own model key, roles, intake chat and plans, quad, agent buttons | |
+| M6c sensors | Execution sandbox, OOB listener, disposable inboxes | |
 | M7 intercept | Pause and modify requests via taphttp | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses; route maps (Surface) | |
 | M9 academy | Capstone: hands-on exercises on shared WSTG/ASVS skills; content packs from repos, licenses shown; ready-to-go lab | |

@@ -18,7 +18,7 @@ for (const [width, inspector] of [
       entry({ host: `${t}.example`, status: null, duration_ms: null }),
     );
     await page.setViewportSize({ width, height: 800 });
-    await page.goto("/");
+    await page.goto("/#traffic");
     await filterTo(page, t);
     await expect(page.locator("tr.row")).toHaveCount(2);
     if (inspector) await page.locator("tr.row").first().click();

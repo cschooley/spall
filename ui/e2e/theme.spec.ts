@@ -17,7 +17,7 @@ const bodyBg = (page: import("@playwright/test").Page) =>
   page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
 test("dark rust is the default, with no data-theme attribute", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   expect(await page.evaluate(() => document.documentElement.getAttribute("data-theme"))).toBeNull();
   expect(await bodyBg(page)).toBe(bgBase("rust"));
   await expect(page.getByRole("group", { name: "Metal" }).getByRole("button", { name: "Rust" })).toHaveAttribute(
@@ -27,7 +27,7 @@ test("dark rust is the default, with no data-theme attribute", async ({ page }) 
 });
 
 test("the picker reaches all four themes, each with its own tokens, and is remembered", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   const brand = page.getByRole("group", { name: "Metal" });
   const mode = page.getByRole("group", { name: "Brightness" });
   for (const [b, m, theme] of [
@@ -51,7 +51,7 @@ test("the picker reaches all four themes, each with its own tokens, and is remem
 });
 
 test("IBM Plex is bundled and loads under the CSP", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => document.fonts.check('13px "IBM Plex Mono"'))).toBe(true);
   expect(await page.evaluate(() => document.fonts.check('500 11px "IBM Plex Sans"'))).toBe(true);

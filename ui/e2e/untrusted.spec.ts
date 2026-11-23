@@ -42,7 +42,7 @@ test("traffic is rendered as text in every field, and nothing executes", async (
   });
   append(e, jsonEntry);
 
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   const rows = page.locator("tr.row");
   await expect(rows).toHaveCount(2);

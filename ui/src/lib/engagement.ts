@@ -97,10 +97,10 @@ export function expiryText(expires: string | null, today: string): { text: strin
 
 export type ViewId = "engagement" | "traffic" | "findings";
 
-/** The view a location hash names; Traffic by default. */
+/** The view a location hash names; Engagement (home) by default (#71). */
 export function viewFromHash(hash: string): ViewId {
   const v = hash.replace(/^#/, "").split("/")[0];
-  return v === "engagement" || v === "findings" ? v : "traffic";
+  return v === "traffic" || v === "findings" ? v : "engagement";
 }
 
 /** One line of a scope-list preview (#38), as spall's scope engine read it. */

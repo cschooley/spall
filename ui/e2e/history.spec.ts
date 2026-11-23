@@ -36,7 +36,7 @@ async function fakeHistory(page: Page, all: TrafficEntry[]) {
 test("filters become API parameters, status classes included; replay: stays client-side", async ({ page }) => {
   const t = token();
   const requests = await fakeHistory(page, []);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `host:${t} method:post status:4xx login`);
   await expect.poll(() => requests.at(-1)?.toString()).toBe(`host=${t}&method=POST&status=4xx&q=login&limit=200`);
   await filterTo(page, `replay:yes ${t}`);
@@ -49,7 +49,7 @@ test("history pages in oldest-first and scrolling to the top loads older pages",
   const t = token();
   const all = series(t, 250);
   const requests = await fakeHistory(page, all);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `host:${t}`);
 
   await expect(page.locator(".statusbar")).toContainText("200 exchanges");
@@ -68,7 +68,7 @@ test("history pages in oldest-first and scrolling to the top loads older pages",
 });
 
 test("without a history API (log-file mode) the view says live only", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".note")).toHaveText("live only (log-file mode: no history API)");
   await expect(page.locator(".statusbar")).toContainText("taphttp ● log file");
 });
@@ -79,7 +79,7 @@ test("status bar shows taphttp's connection and proxy address in lever mode", as
   await page.route("**/api/status", (r) =>
     r.fulfill({ json: { source: "lever", connected: true, proxy: "127.0.0.1:18080" } }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".statusbar .ok")).toHaveText("● connected");
   await expect(page.locator(".statusbar .addr")).toHaveText(" 127.0.0.1:18080");
 });

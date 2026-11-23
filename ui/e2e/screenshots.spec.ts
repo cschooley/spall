@@ -142,7 +142,7 @@ test("traffic view", async ({ page }) => {
   await midEngagement(page, rows);
   append(...rows);
   await page.setViewportSize({ width: 1440, height: 820 });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator("tr.row")).toHaveCount(14);
   await page.evaluate(() => document.fonts.ready);
   await page.locator("tr.row").nth(2).click();
@@ -174,7 +174,7 @@ test("replay compared with its original", async ({ page }) => {
   await midEngagement(page, [...rows, replay]);
   append(...rows, replay);
   await page.setViewportSize({ width: 1440, height: 820 });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator("tr.row")).toHaveCount(15);
   await page.evaluate(() => document.fonts.ready);
   await page.locator("tr.row").filter({ hasText: "/api/v2/session" }).filter({ hasText: "401" }).first().click();

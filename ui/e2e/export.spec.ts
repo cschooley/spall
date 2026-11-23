@@ -96,7 +96,7 @@ test("the console's promote and export", async ({ page }) => {
   const s = seed(t);
   append(s.e);
   candidatesApi(page, { entries: [s.e], seed: s.list });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
   const run = async (line: string) => {
@@ -120,7 +120,7 @@ test("the inspector highlights what flux redacts, x-api-key included", async ({ 
   const t = token();
   const long = "k".repeat(40);
   append(entry({ host: `${t}.test`, url: `https://${t}.test/x`, req_headers: [["x-api-key", long], ["x-request-id", long]] }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   const dd = page.locator(".inspector .kv dd");

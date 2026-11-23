@@ -25,7 +25,7 @@ test("Compare from the Replays list: verdict, headers and a collapsed body diff"
     res_body: body("ok"),
   });
   append(orig, rep);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `${t} replay:no`);
   await page.locator("tr.row").first().click();
   await page.getByRole("tab", { name: /replays/ }).click();
@@ -60,7 +60,7 @@ test("Compare is only for replays, and says when the original is gone", async ({
   const orig = entry({ host: `${t}.example`, url: `http://${t}.example/solo` });
   const orphan = entry({ host: `${t}.example`, url: `http://${t}.example/orphan`, ts: later(orig, 1), replay_of: `${t}-gone` });
   append(orig, orphan);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").filter({ hasText: "/solo" }).click();
   await expect(page.getByRole("tab", { name: "compare" })).toHaveCount(0);
@@ -82,7 +82,7 @@ test("hostile bodies and headers stay text inside a diff", async ({ page }) => {
     res_body: `<p>a</p>\n${p}`,
   });
   append(orig, rep);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `${t} replay:yes`);
   await page.locator("tr.row").first().click();
   await page.getByRole("tab", { name: "compare" }).click();

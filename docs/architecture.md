@@ -164,7 +164,7 @@ spall holds raw captured traffic: session tokens, credentials, PII. Treat it as 
 
 GitHub milestones are the tracker; this table is the narrative. Each milestone **lights up a rail icon** (unbuilt views stay dimmed placeholders until then). Issues also carry a view label (`view:engagement`, `view:traffic`, `view:surface`, `view:tasks`, `view:findings`) or `cross-cutting` for work that belongs to no single view (the action gate, sensors, CI). Issue numbers are spall issues unless noted.
 
-Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3/M4/M5/M6/M7 now means M4/M5/M6/M7/M8.
+Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3/M4/M5/M6/M7 now means M4/M5/M6/M7/M8. Split 2026-11-23: M6 became M6a, M6b and M6c (letters, so M7 onward keep their numbers); older text saying M6 means one of them.
 
 | | Scope | Lights up | Issues |
 |---|---|---|---|
@@ -174,10 +174,12 @@ Renumbered 2026-11-21: M3 engagement was inserted, so older issue text saying M3
 | **M3 engagement** (done, `v0.4.0`) | The engagement as the root object: targets, scope (incl. explicit out-of-scope), rules of engagement as data that the gate reads; build scope from traffic; paste a scope list; OpenAPI import; CA setup in the UI; Engagement home view. | **Engagement** | #30 (#32, #34-#40) |
 | **M4 candidates** (done, `v0.5.0`) | Candidate model on flux crate types (cschooley/flux v0.1.0), WSTG v4.2 rule ids mapped to CWE, manual "flag as candidate", keyboard triage, evidence, suppressions. | **Findings** | #48 (#41-#47), #16 |
 | **M5 export** (done, `v0.6.0`) | Promotion, flux export with redaction (flux v0.2.1) and fingerprints; redaction preview. | Findings | #52 (#49-#51) |
-| M6 agent ("geogaddi": long, a little scary, campfire headphase on the other side) | Intake, orchestrator and role agents (chat plans, tasks act); MCP server (read traffic, replay, `propose_finding`; no promotion), Tasks view, approval gates on the action gate, e-stop, quad, attribution. Agent tools: execution sandbox and OOB listener. Disposable inboxes. | **Tasks** | #68 (#53-#67, #13, #1, #2) |
+| M6a agent over MCP | An outside MCP client drives spall: server-side command registry, tasks, the gate for agents, approval gates, e-stop, MCP server (read traffic, replay, `propose_finding`; no promotion), untrusted tool output, Tasks view, attribution. Engagement becomes the home view. | **Tasks** | #68 (#53-#62, #71) |
+| M6b agent host | spall runs the loop: bring-your-own key, roles, intake and orchestrator plans (chat plans, tasks act), quad, agent buttons. | Tasks | #69 (#63-#67) |
+| M6c sensors | Agent tools outside spall on the shared sensor kit: execution sandbox, OOB listener, disposable inboxes. | Tasks | #70 (#13, #1, #2) |
 | M7 intercept | Pause/modify via taphttp `--intercept-socket`. | Traffic | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypothesis correlation; route maps ("source maps for the backend"). | **Surface** | #14 |
-| M9 academy (capstone) | A separate Kudzu tool: graduated exercises on vulnerable targets in the sandbox, graded by spall + flux; WSTG/ASVS skills shared by humans and agents; content packs loaded from repos at runtime with their licenses shown; `--profile academy` ready-to-go lab. The content-pack loader is shared with M6 agent skills. | (its own launcher tile) | #31 |
+| M9 academy (capstone) | A separate Kudzu tool: graduated exercises on vulnerable targets in the sandbox, graded by spall + flux; WSTG/ASVS skills shared by humans and agents; content packs loaded from repos at runtime with their licenses shown; `--profile academy` ready-to-go lab. The content-pack loader is shared with M6b agent skills (#64). | (its own launcher tile) | #31 |
 | Later | Wanted, not scheduled (label `later`). | | #15 |
 
 Traffic history (decided Nov 2026, spall#4): spall reads history from taphttp's lever API rather than keeping its own copy of the traffic. One store, and M2 replay goes through the same API. spall has its own store only for what it owns: engagements (M3) and candidates (M4). Built on taphttp v0.3.0 (taphttp#7: token file outside the CA volume, sqlite-backed paging and search, `/feed?since=`): spall backfills from `/exchanges`, follows `/feed`, and proxies history to the browser as `/api/exchanges`. Tailing `--log-file` remains as a fallback when no API is configured. The API port stays on the compose network and is never published to the host.

@@ -13,7 +13,7 @@ const run = async (page: import("@playwright/test").Page, line: string) => {
 };
 
 test("` opens and closes the console, but not while typing in the filter", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.getByLabel("Filter").click();
   await page.keyboard.press("`");
   await expect(page.getByLabel("Filter")).toHaveValue("`");
@@ -35,7 +35,7 @@ test("` opens and closes the console, but not while typing in the filter", async
 test("console commands drive the same actions as the UI", async ({ page }) => {
   const t = token();
   append(entry({ id: `${t}-one`, host: `${t}.a`, url: `http://${t}.a/one` }), entry({ host: `${t}.b` }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await openConsole(page);
 
   await run(page, `filter host:${t}.a`);
@@ -60,7 +60,7 @@ test("console commands drive the same actions as the UI", async ({ page }) => {
 });
 
 test("history (up/down) and tab completion", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await openConsole(page);
   const input = page.getByLabel("Console command");
   await run(page, "goto traffic");
@@ -85,7 +85,7 @@ test("history (up/down) and tab completion", async ({ page }) => {
 
 test("system messages while closed show an unread count in the status bar", async ({ page }) => {
   const t = token();
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".con-unread")).toHaveCount(0);
   await filterTo(page, `by:agent ${t}`);
   const badge = page.locator(".con-unread");
@@ -97,7 +97,7 @@ test("system messages while closed show an unread count in the status bar", asyn
 });
 
 test("the toggle key is configurable (non-US layouts)", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await openConsole(page);
   await run(page, "console-key \\");
   await expect(page.locator(".con-log .l-sys").last()).toHaveText("console key is now \\");
@@ -112,7 +112,7 @@ test("the toggle key is configurable (non-US layouts)", async ({ page }) => {
 });
 
 test("? opens the shortcut sheet (working keys only); Esc closes", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("?");
   const sheet = page.getByRole("dialog", { name: "Keyboard shortcuts" });
@@ -128,7 +128,7 @@ test("? opens the shortcut sheet (working keys only); Esc closes", async ({ page
 });
 
 test("rules lists the WSTG catalog from the server (#41)", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await openConsole(page);
   await run(page, "rules sql injection");
   await expect(page.locator(".con-log")).toContainText("WSTG-INPV-05 Testing for SQL Injection (CWE-89)");

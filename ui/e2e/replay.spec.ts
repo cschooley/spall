@@ -33,7 +33,7 @@ function replayOf(original: TrafficEntry, over: Partial<TrafficEntry> = {}): Tra
 }
 
 async function openOnly(page: Page, e: TrafficEntry, t: string) {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").filter({ hasText: e.url.split("/").pop()! }).first().click();
   await expect(page.locator(".inspector")).toBeVisible();
@@ -177,7 +177,7 @@ test("the console's replay matches the button, and --yes confirms in one step", 
       ? { status: 200, json: replayOf(orig) }
       : { status: 428, json: { decision: "needs_confirmation", error: "PUT can change state", confirm: "tok-y" } },
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
@@ -244,7 +244,7 @@ test("scope add and scope all on|off from the console; the status bar warns whil
     if (c.op === "all") state.all = c.on!;
     await r.fulfill({ json: { scope: [...state.scope, ...(state.all ? ["*"] : [])], all: state.all, changed: true } });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
   const input = page.getByLabel("Console command");
@@ -287,7 +287,7 @@ test("scope exclude and scope check from the console (#34); hostile hosts stay t
     if (target.includes("sso")) await r.fulfill({ json: { host: "sso.a.test", state: "out", by: "!sso.a.test" } });
     else await r.fulfill({ json: { host: p, state: "unknown", by: null } });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
   const input = page.getByLabel("Console command");
@@ -330,7 +330,7 @@ test("engagement commands from the console (#35); the status bar names the engag
     }
     return r.fulfill({ json: eng() });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".statusbar .engagement-name")).toHaveText(name);
   expect(await page.locator(".statusbar img").count()).toBe(0);
 
@@ -368,7 +368,7 @@ test("roe from the console (#36); the status bar says when testing isn't allowed
     }
     return r.fulfill({ json: eng });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await expect(page.locator(".statusbar .engagement-name")).toHaveText("E");
   await expect(page.locator(".statusbar .testing-closed")).toHaveCount(0);
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });

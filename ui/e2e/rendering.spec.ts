@@ -4,7 +4,7 @@ import { append, entry, expect, filterTo, test, token } from "./fixtures.ts";
 import type { Page } from "@playwright/test";
 
 async function openResponse(page: Page, t: string) {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   await page.getByRole("tab", { name: "response" }).click();

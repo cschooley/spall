@@ -7,7 +7,7 @@ test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 test("j/k move the selection, Esc closes, / focuses the filter, t toggles light/dark", async ({ page }) => {
   const t = token();
   append(...[0, 1, 2].map((i) => entry({ host: `${t}.example`, url: `http://${t}.example/${i}` })));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await expect(page.locator("tr.row")).toHaveCount(3);
   await page.locator(".tablewrap").click({ position: { x: 5, y: 200 } });
@@ -39,7 +39,7 @@ test("j/k move the selection, Esc closes, / focuses the filter, t toggles light/
 test("Ctrl+K palette: filter commands, run with Enter, Esc closes", async ({ page }) => {
   const t = token();
   append(entry({ host: `${t}.example`, url: `https://${t}.example/p` }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
 
@@ -68,7 +68,7 @@ test("palette: commands that need arguments open the console prefilled (open by 
   await page.route("**/api/status", (r) => r.fulfill({ json: { source: "lever", connected: true } }));
   await page.route(/\/api\/exchanges\?/, (r) => r.fulfill({ json: [] }));
   await page.route(`**/api/exchanges/${t}-remote`, (r) => r.fulfill({ json: remote }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.keyboard.press("Control+k");
   await page.keyboard.type("open exchange");
   await page.keyboard.press("Enter");

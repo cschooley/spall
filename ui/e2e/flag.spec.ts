@@ -11,7 +11,7 @@ test("f opens the flag form; a rule, a parameter, and it's filed with this excha
   const r = entry({ id: `${e.id}-r`, host: e.host, url: e.url, ts: new Date(Date.parse(e.ts) + 1000).toISOString(), replay_of: e.id, status: 500 });
   append(e, r);
   const api = candidatesApi(page, { entries: [e, r] });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, `${t} replay:no`);
   await page.locator("tr.row").first().click();
   await expect(page.locator(".inspector [data-action='flag']")).toBeEnabled();
@@ -55,7 +55,7 @@ test("flagging the same thing again offers to add evidence instead", async ({ pa
     entries: [a, b],
     seed: [{ id: "c-00000009", created: "", updated: "", flagged_by: "human", finding: findingFor("WSTG-ATHZ-04", a, "id") }],
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row", { hasText: "id=2" }).click();
   await page.locator(".inspector [data-action='flag']").click();
@@ -88,7 +88,7 @@ test("a rejected match is badged with its reason, as text, and can be reopened (
       },
     ],
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   await page.locator(".inspector [data-action='flag']").click();
@@ -110,7 +110,7 @@ test("Esc cancels the form; Flag is off without the lever API", async ({ page })
   const t = token();
   const e = entry({ host: `${t}.test`, url: `https://${t}.test/x` });
   append(e);
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   await expect(page.locator(".inspector [data-action='flag']")).toBeDisabled();
@@ -131,7 +131,7 @@ test("the console's flag files one and reports a match", async ({ page }) => {
   const e = entry({ host: `${t}.test`, url: `https://${t}.test/p?sort=1` });
   append(e);
   const api = candidatesApi(page, { entries: [e] });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("`");
   const run = async (line: string) => {

@@ -17,7 +17,7 @@ async function setup(page: Page, e: TrafficEntry, t: string, answer?: (b: Sent) 
     const a = answer?.(b) ?? { status: 200, json: entry({ ...e, id: `${e.id}-r${bodies.length}`, replay_of: e.id }) };
     await r.fulfill({ status: a.status, json: a.json });
   });
-  await page.goto("/");
+  await page.goto("/#traffic");
   await filterTo(page, t);
   await page.locator("tr.row").first().click();
   await expect(page.locator(".inspector")).toBeVisible();

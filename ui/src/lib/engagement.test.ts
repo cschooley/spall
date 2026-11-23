@@ -42,8 +42,12 @@ test("the authorization countdown", async () => {
   assert.equal(todayIn("America/Chicago", now), "2026-11-22");
   assert.equal(todayIn("Mars/Olympus", now), "2026-11-22", "unknown zones fall back to UTC");
   assert.equal(viewFromHash("#engagement"), "engagement");
-  assert.equal(viewFromHash(""), "traffic");
-  assert.equal(viewFromHash("#surface"), "traffic", "unbuilt views fall back");
+  assert.equal(viewFromHash(""), "engagement", "Engagement is home (#71)");
+  assert.equal(viewFromHash("#"), "engagement");
+  assert.equal(viewFromHash("#traffic"), "traffic");
+  assert.equal(viewFromHash("#findings/c-1"), "findings");
+  assert.equal(viewFromHash("#surface"), "engagement", "unbuilt views fall back to home");
+  assert.equal(viewFromHash("#nonsense"), "engagement");
   assert.equal(viewFromHash("#engagement/paste"), "engagement");
 });
 

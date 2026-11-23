@@ -4,7 +4,7 @@
 import { expect, test } from "./fixtures.ts";
 
 test("the brand shows the spall mark from verdigris", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   const mark = page.locator(".brand svg[data-icon='icons/spall']");
   await expect(mark).toBeVisible();
   expect(await mark.locator("path").count()).toBe(2);
@@ -12,7 +12,7 @@ test("the brand shows the spall mark from verdigris", async ({ page }) => {
 });
 
 test("the rail shows all five views in order; Engagement and Traffic are live", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   const items = page.locator(".rail > *");
   await expect(items).toHaveCount(5);
   expect(await items.evaluateAll((els) => els.map((e) => e.getAttribute("data-view")))).toEqual([
@@ -48,7 +48,7 @@ test("the rail shows all five views in order; Engagement and Traffic are live", 
 test("the launcher lists the suite; placeholders are off and disabled", async ({ page }) => {
   await page.route("**/api/status", (r) => r.fulfill({ json: { source: "lever", connected: true } }));
   await page.route(/\/api\/exchanges\?/, (r) => r.fulfill({ json: [] }));
-  await page.goto("/");
+  await page.goto("/#traffic");
   const button = page.getByRole("button", { name: "Switch tool" });
   await expect(button).toHaveAttribute("aria-expanded", "false");
   await button.click();
@@ -81,7 +81,7 @@ test("the launcher lists the suite; placeholders are off and disabled", async ({
 });
 
 test("taphttp's light is off when spall tails a log file", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.getByRole("button", { name: "Switch tool" }).click();
   const taphttp = page.locator("[data-tool='taphttp']");
   await expect(taphttp.locator(".led")).toHaveClass("led");
@@ -97,7 +97,7 @@ test("taphttp and flux tiles show their details in place (#16)", async ({ page }
   await page.route("**/api/ca", (r) =>
     r.fulfill({ json: { sha256: "3F:9C:A1", subject: "CN=taphttp CA", not_after: "2036-11-01T00:00:00Z", taphttp_version: `0.6.1 ${P}`, proxy: "127.0.0.1:8080" } }),
   );
-  await page.goto("/");
+  await page.goto("/#traffic");
   await page.getByRole("button", { name: "Switch tool" }).click();
   const panel = page.getByRole("group", { name: "Suite tools" });
   await panel.getByRole("button", { name: /taphttp/ }).click();

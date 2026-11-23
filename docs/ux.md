@@ -32,11 +32,11 @@ Not a stats dashboard. A **"what needs me now"** page.
 - **Coverage at a glance:** endpoints seen vs. endpoints actually tested
 - **Activity timeline:** yours and the agent's, interleaved
 
-Built thin first in M3 (#37): the engagement's details, scope (with exclusions, target notes and a check box), rules of engagement, a "testing now" chip and an expiry countdown, engagement switching, and dimmed placeholders for the panels above that later milestones fill. Traffic stays the default view for now, though "waiting on you" has content since M4 (making Engagement the home is open); `1` and `2` switch, and the location hash (`#engagement`) remembers the view. verdigris has no Engagement mockup yet; the view borrows the tasks and findings mockups' sections, `dl` grids and chips.
+Built thin first in M3 (#37): the engagement's details, scope (with exclusions, target notes and a check box), rules of engagement, a "testing now" chip and an expiry countdown, engagement switching, and dimmed placeholders for the panels above that later milestones fill. Engagement is the home view (decided 2026-11-23, #71): a bare URL, or one naming a view that isn't built, opens it. `1` to `5` switch, and the location hash (`#traffic`, `#engagement/...`) remembers the view. verdigris has no Engagement mockup yet; the view borrows the tasks and findings mockups' sections, `dl` grids and chips.
 
 ### 2. Traffic
 
-The M0 console, grown up: live stream plus history, filters, inspector. Actions on an exchange (copy as curl and save body in M1; replay in M2; Flag candidate in M4; task the agent in M6) live in the inspector, not on rows. Candidates go to the Findings view, never a panel beside Traffic.
+The M0 console, grown up: live stream plus history, filters, inspector. Actions on an exchange (copy as curl and save body in M1; replay in M2; Flag candidate in M4; task the agent in M6a) live in the inspector, not on rows. Candidates go to the Findings view, never a panel beside Traffic.
 
 ### 3. Surface
 
@@ -114,7 +114,7 @@ The agent can only *propose*. Promotion is a human action. See `architecture.md`
 - **One inspector.** The right-hand detail pane behaves the same in every view.
 - **Headers are shown in wire order, repeats kept.** Never merge repeated headers or comma-join them (`Set-Cookie` cannot be comma-joined). Repeats get a group rule and an `n/N` counter. Requires taphttp to store headers as an ordered list, not a map (taphttp#5).
 - **Binary bodies get a placeholder, not garbage.** Show type, size and hash; offer hex view (8 bytes per row, paged), preview for images, and save. Never render raw binary as text.
-- **Replay lives in the inspector.** Edit the request, send, see original and replay side by side. Repeater stops being a destination. A replay is a real request carrying the captured credentials, so unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`) take two presses: the first arms ("press again to send POST to <host>"), the second sends. Arming expires after a few seconds or on any other action. Safe methods send at once. The two presses are the UI's way of satisfying the server's rule (#22), not the rule itself: the first press gets a single-use token from the action gate, bound to that exact request, and the second sends it back. The console's `replay <id> --yes` does both in one step; an agent (M6) gets the token only through an approval. Denials (out of scope) show their reason in the inspector and the console. **Edit & replay** (`e`, #19) turns the Request tab into a form: method, the ordered header list (edit, add, remove, reorder) and a text body, with changes marked against the original and the limits stated in place (the URL is fixed; binary bodies go as captured; repeats split by other headers are sent grouped; a `Host` unlike the URL's is flagged). Side-by-side comparison is #20. The inspector's **Replays N** tab (#21) lists an exchange's replays (history via `replay_of`, plus live), each with what it changed; a replay of a replay shows its chain back to the first original. **Compare** (#20) sets a replay against its original: a verdict line, then header and body diffs from `ui/src/lib/diff.ts`, the same comparison M4's evidence pane and M8's retests reuse.
+- **Replay lives in the inspector.** Edit the request, send, see original and replay side by side. Repeater stops being a destination. A replay is a real request carrying the captured credentials, so unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`) take two presses: the first arms ("press again to send POST to <host>"), the second sends. Arming expires after a few seconds or on any other action. Safe methods send at once. The two presses are the UI's way of satisfying the server's rule (#22), not the rule itself: the first press gets a single-use token from the action gate, bound to that exact request, and the second sends it back. The console's `replay <id> --yes` does both in one step; an agent (M6a) gets the token only through an approval. Denials (out of scope) show their reason in the inspector and the console. **Edit & replay** (`e`, #19) turns the Request tab into a form: method, the ordered header list (edit, add, remove, reorder) and a text body, with changes marked against the original and the limits stated in place (the URL is fixed; binary bodies go as captured; repeats split by other headers are sent grouped; a `Host` unlike the URL's is flagged). Side-by-side comparison is #20. The inspector's **Replays N** tab (#21) lists an exchange's replays (history via `replay_of`, plus live), each with what it changed; a replay of a replay shows its chain back to the first original. **Compare** (#20) sets a replay against its original: a verdict line, then header and body diffs from `ui/src/lib/diff.ts`, the same comparison M4's evidence pane and M8's retests reuse.
 - **Everything links.** Finding → evidence exchanges → producing task → endpoint in Surface, and back.
 - **Command palette (`⌘K` / `Ctrl+K`)** instead of right-click menus: "replay this", "task agent on this endpoint", "flag". Keyboard first, discoverable.
 - **Attribution everywhere.** Every exchange and candidate shows who created it: `you`, `agent · T-3`, or `scurf`. Agent-originated items carry a distinct glyph (◆), never color alone.
@@ -198,10 +198,10 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 | Replay in inspector | M2 (done) |
 | Findings (manual flagging, triage, suppressions) | M4 (done) |
 | Flux export with redaction preview | M5 (done) |
-| Tasks + MCP, e-stop, approval gates | M6 |
-| Intake chat, orchestrator plans, roles | M6 |
-| Agent buttons (PoC, Escalate impact, Find variants, Retest, Explain for devs, Test for…, Map auth, Why is this interesting) | M6; Find variants uses route maps fully from M8; Retest closes Kudzu tickets from M8 |
-| Surface (coverage) | M6–M8: needs task and check attribution (M6); seeded from route maps (M8) |
-| Engagement home, targets, scope, rules of engagement | M3 (done) |
+| Tasks + MCP, e-stop, approval gates | M6a |
+| Intake chat, orchestrator plans, roles | M6b |
+| Agent buttons (PoC, Escalate impact, Find variants, Retest, Explain for devs, Test for…, Map auth, Why is this interesting) | M6b (PoC needs the M6c sandbox); Find variants uses route maps fully from M8; Retest closes Kudzu tickets from M8 |
+| Surface (coverage) | M6a–M8: needs task and check attribution (M6a); seeded from route maps (M8) |
+| Engagement home, targets, scope, rules of engagement | M3 (done); home view since M6a (#71) |
 | Command palette and `` ` `` console (one registry) | M1, grows with each milestone |
-| Quad mode | M6, with agent tasks |
+| Quad mode | M6b, with the agent host |
