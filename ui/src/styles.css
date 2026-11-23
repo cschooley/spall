@@ -614,3 +614,18 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 }
 .halt-banner b { color: var(--vg-control-stop); letter-spacing: .1em; }
 .halt-banner .spacer { flex: 1; }
+
+/* Approvals (#56): tasks waiting on a human */
+.eng .approvals { display: grid; gap: var(--vg-space-3); }
+.eng .approvals h4 { color: var(--vg-accent-rust); }
+.approval { display: grid; gap: var(--vg-space-2); padding: var(--vg-space-3); border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm); background: var(--vg-bg-base); }
+.approval header { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--vg-space-3); font: var(--vg-text-sm) var(--vg-font-sans); }
+.approval header b { font-family: var(--vg-font-mono); }
+.approval .goal { color: var(--vg-text-primary); overflow-wrap: anywhere; }
+.approval .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--vg-space-1) var(--vg-space-3); margin: 0; font: var(--vg-text-xs) var(--vg-font-mono); }
+.approval .kv dt { color: var(--vg-text-tertiary); }
+.approval .kv dd { margin: 0; overflow-wrap: anywhere; }
+.approval .req .method { font-weight: 600; color: var(--vg-accent-rust); }
+.approval .row-actions { flex-wrap: wrap; }
+.approval .deny { display: flex; gap: var(--vg-space-2); }
+.approval .deny input { flex: 1; min-width: 0; }

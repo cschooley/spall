@@ -63,7 +63,7 @@ The question it answers is the one that matters in an assessment: *what haven't 
 
 Steering chat lives *inside* a task, as a side panel. A chat window is a poor audit trail; a task with a goal, constraints and a linked request log is a good one, and that matters when a client asks what the AI did to their production app.
 
-Approval gates: actions outside a task's constraints (a new method, more budget, a new host) pause the task as **waiting on approval** until a human says yes.
+Approval gates: actions outside a task's constraints (a new method, more budget, a new host, a send it must ask for) pause the task as **waiting on approval** until a human answers, on a card in Waiting on you that shows exactly what would be sent. **Approve once** lets that exact request through one time (within 10 minutes; the agent never holds the approval). **Approve for the task** widens the task for what was asked, never past the rules of engagement (something the RoE wants confirmed can only be approved once). **Deny** takes a reason, and the task carries on with it so the agent can try another way. Outside the engagement's scope or RoE is a plain denial: no approval can widen the engagement.
 
 #### Chat is the front door, tasks are the engine
 

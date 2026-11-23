@@ -295,6 +295,11 @@ async fn api_status(State(state): State<AppState>) -> Response {
             .into(),
         None => serde_json::Value::Null,
     };
+    // Tasks waiting on a human's approval (#56).
+    body["waiting_approval"] = match &state.replayer {
+        Some(r) => r.tasks.waiting(&r.engagements.active().id).into(),
+        None => serde_json::Value::Null,
+    };
     // The agent e-stop (#57): null, or {since, by, reason}.
     body["estop"] = match &state.replayer {
         Some(r) => serde_json::to_value(r.tasks.estop()).unwrap_or_default(),
@@ -597,7 +602,9 @@ async fn api_task(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     }
 }
 
-/// A human's change to a task: `{"op": "approve" | "halt" | "edit", ...}`.
+/// A human's change to a task: `{"op": "approve" | "halt" | "edit", ...}`,
+/// or an answer to its paused request: `{"op": "approve_once" |
+/// "approve_for_task" | "deny", "reason"?}` (#56).
 async fn api_task_patch(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -606,9 +613,15 @@ async fn api_task_patch(
     let Some(r) = &state.replayer else {
         return no_tasks();
     };
-    match serde_json::from_slice::<crate::tasks::Op>(&body) {
-        Ok(op) => r.task_op(&id, op),
-        Err(e) => json_error(StatusCode::BAD_REQUEST, &format!("not a task change: {e}")),
+    if let Ok(op) = serde_json::from_slice::<crate::tasks::Op>(&body) {
+        return r.task_op(&id, op);
+    }
+    match serde_json::from_slice::<crate::tasks::Decision>(&body) {
+        Ok(d) => r.task_decide(&id, d),
+        Err(e) => json_error(
+            StatusCode::BAD_REQUEST,
+            &format!("not a task change (approve, edit, halt, approve_once, approve_for_task, deny): {e}"),
+        ),
     }
 }
 

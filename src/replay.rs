@@ -237,6 +237,11 @@ fn task_error(e: &crate::tasks::Error) -> Response {
     error(st, &e.to_string())
 }
 
+/// Lowercase hex, for fingerprints.
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
 /// Whether a failed charge was the budget running out (rather than the
 /// task leaving `running`).
 fn task_of_budget(e: &crate::tasks::Error) -> bool {
@@ -729,35 +734,34 @@ impl Replayer {
         scope: &Scope,
         eff: &Effective,
         decision: &Decision,
-    ) -> Option<String> {
+    ) -> Option<(crate::tasks::Ask, String)> {
+        use crate::tasks::Ask;
         let c = &t.constraints;
         let id = &t.id;
         let hosts = std::iter::once(gate::url_host(&eff.url).unwrap_or_default())
             .chain(eff.host_header.clone());
         for h in hosts {
             if !c.allows_host(scope, &h) {
-                return Some(format!(
-                    "{} isn't one of {id}'s hosts ({})",
-                    scope.explain(&h).host,
-                    c.hosts.join(", ")
-                ));
+                let host = scope.explain(&h).host;
+                let why = format!("{host} isn't one of {id}'s hosts ({})", c.hosts.join(", "));
+                return Some((Ask::Host { host }, why));
             }
         }
         let layer = c.layer(&self.engagements.active().rules);
+        let method = eff.method.clone();
         if let Err(e) = layer.check_action(Actor::Agent, Class::Send, &eff.method) {
-            return Some(format!(
+            let why = format!(
                 "{id}: {}",
                 e.replace("the rules of engagement", "the task's constraints")
-            ));
-        }
-        if !layer.is_safe(&eff.method) {
-            return Some(format!(
-                "{id} sends {} only with a human's approval",
-                eff.method
-            ));
+            );
+            return Some((Ask::Method { method }, why));
         }
         if let Decision::NeedsConfirmation(r) = decision {
-            return Some(r.clone());
+            return Some((Ask::Confirm, r.clone()));
+        }
+        if !layer.is_safe(&eff.method) {
+            let why = format!("{id} sends {method} only with a human's approval");
+            return Some((Ask::Unsafe { method }, why));
         }
         if let Some(started) = t
             .started
@@ -766,19 +770,63 @@ impl Replayer {
         {
             let limit = jiff::SignedDuration::from_mins(i64::from(c.time_limit_minutes));
             if jiff::Timestamp::now().duration_since(started) >= limit {
-                return Some(format!(
+                let why = format!(
                     "{id} has used its time limit ({} min)",
                     c.time_limit_minutes
-                ));
+                );
+                return Some((Ask::Time, why));
             }
         }
         if t.spent >= c.budget {
-            return Some(format!(
-                "{id} has spent its budget of {} requests",
-                c.budget
-            ));
+            let why = format!("{id} has spent its budget of {} requests", c.budget);
+            return Some((Ask::Budget, why));
         }
         None
+    }
+
+    /// A human's answer to the request task `id` is waiting on (#56).
+    /// Audited with what was asked and what was decided.
+    pub fn task_decide(&self, id: &str, d: crate::tasks::Decision) -> Response {
+        use crate::tasks::{Context, Decision};
+        let e = self.engagements.active();
+        let scope = self.engagements.scope();
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut rec = Record::new("task", "", Outcome::TaskChanged);
+        rec.result_id = Some(id.to_string());
+        let asked = self
+            .tasks
+            .get(&e.id, id)
+            .and_then(|t| t.pending)
+            .map(|p| format!("{} {}", p.method, p.target))
+            .unwrap_or_default();
+        rec.reason = Some(match &d {
+            Decision::Deny { reason } => format!("deny {id} {}: {}", short(&asked), short(reason)),
+            other => format!("{} {id} {}", other.name(), short(&asked)),
+        });
+        let cx = Context {
+            rules: &e.rules,
+            scope: &scope,
+            now: &now,
+        };
+        match self.tasks.decide(&e.id, id, &d, &cx) {
+            Ok((before, after)) => {
+                rec.changes = Some(serde_json::json!({
+                    "status": { "before": before.status, "after": after.status },
+                    "constraints": if before.constraints == after.constraints {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::json!({ "before": before.constraints, "after": after.constraints })
+                    },
+                }));
+                self.audit(&rec);
+                axum::Json(after).into_response()
+            }
+            Err(err) => {
+                rec.error = Some(err.to_string());
+                self.audit(&rec);
+                task_error(&err)
+            }
+        }
     }
 
     /// Engage the agent e-stop (#57): every task in every engagement
@@ -856,12 +904,14 @@ impl Replayer {
         id: &str,
         eff: &Effective,
         body: &[u8],
-        reason: String,
+        (ask, reason): (crate::tasks::Ask, String),
     ) -> Response {
         let pending = crate::tasks::Pending {
             method: eff.method.clone(),
             target: eff.url.clone(),
             host_header: eff.host_header.clone(),
+            fingerprint: hex(&fingerprint(body)),
+            ask,
             request: serde_json::from_slice(body).unwrap_or_default(),
             reason: reason.clone(),
             asked: taphttp_types::Timestamp::now().to_string(),
@@ -1102,10 +1152,25 @@ impl Replayer {
                 (t.id.clone(), ev)
             })
         };
+        // An "approve once" for this exact request (#56) lets it past the
+        // task's own constraints, never past the engagement's (a denial
+        // above still stands). It's used up when charged, below.
+        let fp = hex(&fingerprint(&body));
+        let now_text = taphttp_types::Timestamp::now().to_string();
+        let granted = task.as_ref().is_some_and(|t| {
+            t.grant.as_ref().is_some_and(|g| {
+                g.fingerprint == fp
+                    && g.expires.parse::<jiff::Timestamp>().ok()
+                        > now_text.parse::<jiff::Timestamp>().ok()
+            })
+        });
+        if granted {
+            rec.confirmed = true;
+        }
         // The task's own layer: outside it, the task pauses for a human.
-        if let (Some(t), false) = (&task, matches!(decision, Decision::Deny(_))) {
-            if let Some(reason) = self.outside_task(t, &scope, &eff, &decision) {
-                return self.pause(&mut rec, &engagement.id, &t.id, &eff, &body, reason);
+        if let (Some(t), false, false) = (&task, matches!(decision, Decision::Deny(_)), granted) {
+            if let Some(ask) = self.outside_task(t, &scope, &eff, &decision) {
+                return self.pause(&mut rec, &engagement.id, &t.id, &eff, &body, ask);
             }
         }
         match &decision {
@@ -1120,6 +1185,8 @@ impl Replayer {
             }
             // An agent's send that needs confirmation paused above; should
             // that ever change, it is refused here, never sent.
+            // An approval (above) is the human's confirmation.
+            Decision::NeedsConfirmation(_) if granted => {}
             Decision::NeedsConfirmation(reason) if task.is_some() => {
                 rec.outcome = Outcome::Denied;
                 self.audit(&rec);
@@ -1226,18 +1293,21 @@ impl Replayer {
         // Charged last, under the task store's lock: racing sends can't
         // overspend, and a task halted meanwhile sends nothing.
         if let Some(t) = &task {
-            if let Err(e) = self.tasks.charge(
-                &engagement.id,
-                &t.id,
-                &taphttp_types::Timestamp::now().to_string(),
-            ) {
+            let now = taphttp_types::Timestamp::now().to_string();
+            let charged = if granted {
+                self.tasks.charge_granted(&engagement.id, &t.id, &now, &fp)
+            } else {
+                self.tasks.charge(&engagement.id, &t.id, &now)
+            };
+            if let Err(e) = charged {
                 // Spent by a racing send since the check above: ask for more.
                 if task_of_budget(&e) {
                     let reason = format!(
                         "{} has spent its budget of {} requests",
                         t.id, t.constraints.budget
                     );
-                    return self.pause(&mut rec, &engagement.id, &t.id, &eff, &body, reason);
+                    let ask = (crate::tasks::Ask::Budget, reason);
+                    return self.pause(&mut rec, &engagement.id, &t.id, &eff, &body, ask);
                 }
                 rec.outcome = Outcome::Denied;
                 rec.decision = Some("deny");

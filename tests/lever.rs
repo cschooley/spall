@@ -2747,3 +2747,168 @@ async fn nothing_uncharged_is_sent_after_the_e_stop() {
 fn stub_addr(stub: &Stub) -> SocketAddr {
     stub.0.addr.lock().unwrap().unwrap()
 }
+
+#[tokio::test]
+async fn approve_once_lets_that_exact_request_through_once() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let post = r#"{"id":"e1","method":"POST","body":"a=1"}"#;
+    let (status, body) = agent_send(&r, "T-1", post).await;
+    assert_eq!(status, 202, "the RoE wants POST confirmed: {body}");
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["waiting_approval"],
+        1
+    );
+    let t = task_of(&r, "T-1");
+    assert_eq!(
+        serde_json::to_value(&t.pending.unwrap().ask).unwrap(),
+        serde_json::json!({"kind": "confirm"})
+    );
+
+    // Only once can lift an RoE confirmation.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_for_task"}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 400") && res.contains("approve it once"),
+        "{res}"
+    );
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_once"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let after = body_json(&res);
+    assert_eq!(after["status"], "running");
+    assert!(after["grant"]["expires"].is_string());
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["waiting_approval"],
+        0
+    );
+
+    // A different request isn't approved: it pauses again, nothing sent.
+    let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1","method":"POST","body":"a=2"}"#).await;
+    assert_eq!(status, 202);
+    assert!(stub.replays().is_empty());
+    send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"deny","reason":"not that one"}"#,
+        None,
+    )
+    .await;
+
+    // The approved one goes, attributed to the agent and charged.
+    let (status, body) = agent_send(&r, "T-1", post).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(stub.replays().len(), 1);
+    assert_eq!(stub.replays()[0]["meta"]["task"], "T-1");
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.spent, 1);
+    assert!(t.grant.is_none(), "used up");
+
+    // Once means once.
+    let (status, _) = agent_send(&r, "T-1", post).await;
+    assert_eq!(status, 202);
+    assert_eq!(stub.replays().len(), 1);
+
+    let reasons: Vec<String> = audit_records(&dir.path().join("api-token"))
+        .iter()
+        .filter(|r| r["action"] == "task")
+        .map(|r| r["reason"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r == "approve_once T-1 POST http://example.com/e1"),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r == "deny T-1 POST http://example.com/e1: not that one"),
+        "{reasons:?}"
+    );
+    let sent = audit_records(&dir.path().join("api-token"))
+        .into_iter()
+        .find(|r| r["action"] == "replay" && r["outcome"] == "sent")
+        .unwrap();
+    assert_eq!(sent["confirmed"], true, "sent on a human's approval");
+}
+
+#[tokio::test]
+async fn approve_for_the_task_widens_it_and_deny_lets_it_try_another_way() {
+    let (_dir, stub, spall, r) = agent_setup(r#"{"methods":["GET"]}"#).await;
+    let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1","method":"HEAD"}"#).await;
+    assert_eq!(status, 202);
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_for_task"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert_eq!(
+        body_json(&res)["constraints"]["methods"],
+        serde_json::json!(["GET", "HEAD"])
+    );
+    for _ in 0..2 {
+        let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1","method":"HEAD"}"#).await;
+        assert_eq!(status, 200, "HEAD is the task's now");
+    }
+
+    let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1","method":"OPTIONS"}"#).await;
+    assert_eq!(status, 202);
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"deny","reason":"use GET"}"#,
+        None,
+    )
+    .await;
+    let t = body_json(&res);
+    assert_eq!(
+        (t["status"].as_str(), t["reason"].as_str()),
+        (
+            Some("running"),
+            Some("OPTIONS http://example.com/e1 was denied: use GET")
+        )
+    );
+    let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 200, "another way works");
+    assert_eq!(stub.replays().len(), 3);
+
+    // Nothing to decide now; and never after a halt.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_once"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    agent_send(&r, "T-1", r#"{"id":"e1","method":"OPTIONS"}"#).await;
+    send_text(spall, "PATCH", "/api/tasks/T-1", r#"{"op":"halt"}"#, None).await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_once"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+}

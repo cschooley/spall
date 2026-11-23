@@ -3,6 +3,7 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
+import { Approvals } from "./Approvals.tsx";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ScopePaste } from "./ScopePaste.tsx";
 import { OpenApiImport } from "./OpenApiImport.tsx";
@@ -31,9 +32,12 @@ export function EngagementView({
   latestHttps,
   onChanged,
   toTriage,
+  waitingApproval,
 }: {
   /** The status bar's count; a change reloads the list (#47). */
   toTriage: number | null;
+  /** Tasks waiting on approval (#56); a change reloads them. */
+  waitingApproval: number | null;
   available: boolean;
   hosts: HostListing | null;
   proxy: string | null;
@@ -64,7 +68,7 @@ export function EngagementView({
         <ScopePanel e={e} onChanged={done} />
         <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
-        <Waiting toTriage={toTriage} />
+        <Waiting toTriage={toTriage} waitingApproval={waitingApproval} onChanged={onChanged} />
         <SetupSection proxy={proxy} latestHttps={latestHttps} />
       </div>
     </div>
@@ -653,7 +657,7 @@ function SetupSection({ proxy, latestHttps }: { proxy: string | null; latestHttp
 /** Shown at most, oldest first; the rest are in Findings. */
 const WAITING_SHOWN = 5;
 
-function Waiting({ toTriage }: { toTriage: number | null }) {
+function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | null; waitingApproval: number | null; onChanged(): void }) {
   const [list, setList] = useState<Candidate[] | string | null>(null);
   useEffect(() => {
     let live = true;
@@ -663,10 +667,7 @@ function Waiting({ toTriage }: { toTriage: number | null }) {
     };
   }, [toTriage]);
   const waiting = Array.isArray(list) ? list.filter((c) => stateOf(c) === "to triage").reverse() : [];
-  const todo: [string, string][] = [
-    ["Tasks waiting on approval", "M6"],
-    ["Coverage: endpoints seen vs. tested", "Surface"],
-  ];
+  const todo: [string, string][] = [["Coverage: endpoints seen vs. tested", "Surface"]];
   return (
     <Section title="Waiting on you">
       <div className="waiting" role="group" aria-label="Candidates to triage">
@@ -687,6 +688,7 @@ function Waiting({ toTriage }: { toTriage: number | null }) {
         ) : null}
         {waiting.length > WAITING_SHOWN ? <a href="#findings">{`and ${waiting.length - WAITING_SHOWN} more in Findings`}</a> : null}
       </div>
+      <Approvals count={waitingApproval} onChanged={onChanged} />
       <ul className="todo-panels">
         {todo.map(([what, when]) => (
           <li key={what} className="todo" aria-disabled="true" title={`${what} · not built yet (${when})`}>

@@ -68,7 +68,10 @@ export const test = base.extend<{ guard: void }>({
         // Evidence that taphttp no longer has is a 404 on purpose (#45).
         const goneEvidence =
           /^Failed to load resource: the server responded with a status of 404\b/.test(m.text()) && /\/api\/exchanges\/[^/?]+$/.test(m.location().url);
-        if (gateAnswer || refusedChange || candidateAnswer || goneEvidence) return;
+        // A refused approval (nothing to decide, past the RoE) is on purpose.
+        const taskAnswer =
+          /^Failed to load resource: the server responded with a status of (400|409)\b/.test(m.text()) && /\/api\/tasks\/[^/?]+$/.test(m.location().url);
+        if (gateAnswer || refusedChange || candidateAnswer || goneEvidence || taskAnswer) return;
         if (m.type() === "error" || m.type() === "warning") problems.push(`console ${m.type()}: ${m.text()}`);
       });
       page.on("pageerror", (e) => problems.push(`page error: ${e.message}`));
@@ -77,6 +80,8 @@ export const test = base.extend<{ guard: void }>({
       // mode has none. Tests that need candidates mock them (candidates-api.ts),
       // which takes precedence over this.
       await page.route(/\/api\/candidates(\?.*)?$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { candidates: [] } }) : r.fallback()));
+      // The same for the tasks waiting on approval (#56).
+      await page.route(/\/api\/tasks$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { tasks: [] } }) : r.fallback()));
       page.on("dialog", async (d) => {
         problems.push(`dialog: ${d.type()} ${d.message()}`);
         await d.dismiss();

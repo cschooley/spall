@@ -187,6 +187,16 @@ banner, console `estop [reason] | estop clear`. `/api/estop`,
 `/api/estop/clear`, `estop` in `/api/status`. #63 (model loops), #13
 (sandboxes) and #66 (quad) must stop when `Store::estop()` is set.
 
+Approvals (#56, done): a paused task holds `Pending { ask, fingerprint }`
+(SHA-256 of taphttp's replay body). `PATCH /api/tasks/{id}` takes
+`approve_once` (a `Grant` for that fingerprint, 10 min, used up by
+`charge_granted` under the lock; never given to the agent),
+`approve_for_task` (`Constraints::widened` then `resolve`: never past the
+RoE; an RoE confirmation is once only) and `deny {reason}` (resumes the
+task with the reason). Grants die with a finished task. UI: approval
+cards in Engagement's Waiting on you, `N waiting on approval` in the
+status bar (`waiting_approval` in `/api/status`).
+
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
 

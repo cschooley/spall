@@ -427,6 +427,9 @@ pub struct Task {
     /// for the approval to show and bind its token to (#56).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending: Option<Pending>,
+    /// An "approve once" not yet used (#56).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<Grant>,
 }
 
 /// A request a task paused on, exactly as it would be sent.
@@ -438,9 +441,121 @@ pub struct Pending {
     pub host_header: Option<String>,
     /// taphttp's `POST /replay` body, attribution included.
     pub request: serde_json::Value,
+    /// SHA-256 of that body's canonical bytes (hex): what an approval binds to.
+    pub fingerprint: String,
+    /// What it needs, which decides what "approve for this task" widens.
+    pub ask: Ask,
     /// Why it needs a human.
     pub reason: String,
     pub asked: String,
+}
+
+/// What a paused request asks for (#56).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Ask {
+    /// A host the task wasn't given.
+    Host { host: String },
+    /// A method the task wasn't given.
+    Method { method: String },
+    /// A method the task sends only with approval.
+    Unsafe { method: String },
+    /// The rules of engagement want this confirmed: only "once" can.
+    Confirm,
+    /// The task's time limit is used up.
+    Time,
+    /// The task's budget is spent.
+    Budget,
+}
+
+/// "Approve once" (#56): the one request with this fingerprint may be sent
+/// once, before `expires`, past the task's own constraints (never the
+/// engagement's). Held by spall, never given to the agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Grant {
+    pub fingerprint: String,
+    pub expires: String,
+}
+
+/// How long an "approve once" waits for the agent's retry.
+pub const GRANT_MINUTES: i64 = 10;
+
+/// A human's answer to a paused request.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Decision {
+    /// This exact request, once.
+    ApproveOnce,
+    /// Widen the task for what was asked (within the RoE).
+    ApproveForTask,
+    /// No; the task goes on, told why, and can try another way.
+    Deny { reason: String },
+}
+
+impl Decision {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Decision::ApproveOnce => "approve_once",
+            Decision::ApproveForTask => "approve_for_task",
+            Decision::Deny { .. } => "deny",
+        }
+    }
+}
+
+impl Constraints {
+    /// These constraints, as a request to resolve again.
+    fn requested(&self) -> Requested {
+        Requested {
+            hosts: Some(self.hosts.clone()),
+            methods: if self.methods.is_empty() {
+                None
+            } else {
+                Some(self.methods.clone())
+            },
+            safe_methods: Some(self.safe_methods.clone()),
+            rate_limit: self.rate_limit,
+            destructive: Some(self.destructive),
+            budget: Some(self.budget),
+            time_limit_minutes: Some(self.time_limit_minutes),
+            stop: Some(self.stop.clone()),
+        }
+    }
+
+    /// What "approve for this task" asks to change, before the RoE has its
+    /// say (`resolve` refuses anything past it). Budget and time double.
+    /// A method added to the task is sent without asking only if the RoE
+    /// already treats it as safe.
+    pub fn widened(&self, ask: &Ask, rules: &Rules) -> Result<Requested, String> {
+        let mut r = self.requested();
+        fn add(list: &mut Option<Vec<String>>, v: &str) {
+            let l = list.get_or_insert_with(Vec::new);
+            if !l.iter().any(|x| x.eq_ignore_ascii_case(v)) {
+                l.push(v.to_string());
+            }
+        }
+        match ask {
+            Ask::Host { host } => add(&mut r.hosts, host),
+            Ask::Method { method } => {
+                if r.methods.is_some() {
+                    add(&mut r.methods, method);
+                }
+                if rules.is_safe(method) {
+                    add(&mut r.safe_methods, method);
+                }
+            }
+            Ask::Unsafe { method } => add(&mut r.safe_methods, method),
+            Ask::Confirm => {
+                return Err("only the rules of engagement can lift that: approve it once".into())
+            }
+            Ask::Time => {
+                r.time_limit_minutes =
+                    Some(self.time_limit_minutes.saturating_mul(2).min(MAX_MINUTES));
+            }
+            Ask::Budget => r.budget = Some(self.budget.saturating_mul(2).min(MAX_BUDGET)),
+        }
+        Ok(r)
+    }
 }
 
 impl Task {
@@ -817,6 +932,7 @@ impl Store {
                 ended: None,
                 log: Vec::new(),
                 pending: None,
+                grant: None,
             };
             book.next += 1;
             book.tasks.push(t.clone());
@@ -987,10 +1103,134 @@ impl Store {
         })
     }
 
+    /// A human's answer to the request task `id` paused on (#56). Approving
+    /// resumes it with a grant for that one request (once) or with wider
+    /// constraints (for the task, never past the RoE); denying resumes it
+    /// with the reason, so the agent can try another way.
+    pub fn decide(
+        &self,
+        engagement: &str,
+        id: &str,
+        d: &Decision,
+        cx: &Context,
+    ) -> Result<(Task, Task), Error> {
+        self.change(engagement, |book| {
+            let t = find(book, id)?;
+            let before = t.clone();
+            let p = match (&t.status, &t.pending) {
+                (Status::WaitingOnApproval, Some(p)) => p.clone(),
+                _ => {
+                    return Err(Error::Conflict(format!(
+                        "{} isn't waiting on approval (it is {})",
+                        t.id,
+                        t.status.as_str()
+                    )))
+                }
+            };
+            let what = format!("{} {}", p.method, p.target);
+            match d {
+                Decision::ApproveOnce => {
+                    self.stopped()?;
+                    authorize_rules(cx)?;
+                    let expires = cx
+                        .now
+                        .parse::<jiff::Timestamp>()
+                        .ok()
+                        .and_then(|n| {
+                            n.checked_add(jiff::SignedDuration::from_mins(GRANT_MINUTES))
+                                .ok()
+                        })
+                        .map(|t| t.to_string())
+                        .ok_or_else(|| Error::Invalid(format!("bad time {:?}", cx.now)))?;
+                    let ev = Event::Approval {
+                        what,
+                        outcome: "approved once".into(),
+                    };
+                    push(t, ev, cx.now)?;
+                    move_to(t, Status::Running, None, cx.now)?;
+                    t.grant = Some(Grant {
+                        fingerprint: p.fingerprint.clone(),
+                        expires,
+                    });
+                }
+                Decision::ApproveForTask => {
+                    self.stopped()?;
+                    authorize_rules(cx)?;
+                    let req = t
+                        .constraints
+                        .widened(&p.ask, cx.rules)
+                        .map_err(Error::Invalid)?;
+                    t.constraints = resolve(&req, cx.rules, cx.scope).map_err(|e| {
+                        Error::Invalid(format!("not within the rules of engagement: {e}"))
+                    })?;
+                    let ev = Event::Approval {
+                        what,
+                        outcome: "approved for the task".into(),
+                    };
+                    push(t, ev, cx.now)?;
+                    move_to(t, Status::Running, None, cx.now)?;
+                }
+                Decision::Deny { reason } => {
+                    let r = reason.trim();
+                    if r.is_empty() {
+                        return Err(Error::Invalid(
+                            "deny: say why, so the agent can try another way".into(),
+                        ));
+                    }
+                    check_text("reason", r, MAX_NOTE, false).map_err(Error::Invalid)?;
+                    let ev = Event::Approval {
+                        what: what.clone(),
+                        outcome: format!("denied: {r}"),
+                    };
+                    push(t, ev, cx.now)?;
+                    let why = format!("{what} was denied: {r}");
+                    move_to(t, Status::Running, Some(why), cx.now)?;
+                }
+            }
+            Ok((before, t.clone()))
+        })
+    }
+
+    /// How many of the engagement's tasks wait on a human.
+    pub fn waiting(&self, engagement: &str) -> usize {
+        self.lock()
+            .get(engagement)
+            .map(|b| {
+                b.tasks
+                    .iter()
+                    .filter(|t| t.status == Status::WaitingOnApproval)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Charge one request to task `id`: only while it runs and has budget
     /// left. Checked and counted under one lock, so racing sends can't
     /// overspend.
     pub fn charge(&self, engagement: &str, id: &str, now: &str) -> Result<u32, Error> {
+        self.charge_as(engagement, id, now, None)
+    }
+
+    /// [`Store::charge`] for a request sent on an "approve once": the
+    /// grant must be there, for this fingerprint, unexpired, and is used
+    /// up here, under the same lock. It may go past the budget.
+    pub fn charge_granted(
+        &self,
+        engagement: &str,
+        id: &str,
+        now: &str,
+        fingerprint: &str,
+    ) -> Result<u32, Error> {
+        self.charge_as(engagement, id, now, Some(fingerprint))
+    }
+
+    fn charge_as(
+        &self,
+        engagement: &str,
+        id: &str,
+        now: &str,
+        granted: Option<&str>,
+    ) -> Result<u32, Error> {
         self.change(engagement, |book| {
             self.stopped()?;
             let t = find(book, id)?;
@@ -1000,6 +1240,22 @@ impl Store {
                     t.id,
                     t.status.as_str()
                 )));
+            }
+            if let Some(fp) = granted {
+                let good = t
+                    .grant
+                    .as_ref()
+                    .is_some_and(|g| g.fingerprint == fp && !expired(&g.expires, now));
+                if !good {
+                    return Err(Error::Conflict(format!(
+                        "{}: no approval for this request (used, expired, or for another one)",
+                        t.id
+                    )));
+                }
+                t.grant = None;
+                t.spent += 1;
+                t.updated = now.into();
+                return Ok(t.constraints.budget.saturating_sub(t.spent));
             }
             if t.spent >= t.constraints.budget {
                 return Err(Error::Spent {
@@ -1011,6 +1267,18 @@ impl Store {
             t.updated = now.into();
             Ok(t.constraints.budget - t.spent)
         })
+    }
+}
+
+/// Whether `expires` is at or before `now` (both RFC 3339); unreadable
+/// counts as expired.
+fn expired(expires: &str, now: &str) -> bool {
+    match (
+        expires.parse::<jiff::Timestamp>(),
+        now.parse::<jiff::Timestamp>(),
+    ) {
+        (Ok(e), Ok(n)) => e <= n,
+        _ => true,
     }
 }
 
@@ -1058,6 +1326,10 @@ fn move_to(t: &mut Task, to: Status, reason: Option<String>, now: &str) -> Resul
     // approval can never outlive it.
     if to != Status::WaitingOnApproval {
         t.pending = None;
+    }
+    // A finished task's approvals die with it.
+    if to.finished() {
+        t.grant = None;
     }
     if to == Status::Running && t.started.is_none() {
         t.started = Some(now.into());
@@ -1874,14 +2146,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
         running(&store, Requested::default());
-        let p = Pending {
+        let p = pending(Ask::Unsafe {
             method: "POST".into(),
-            target: "https://app.test/x".into(),
-            host_header: None,
-            request: serde_json::json!({"id": "e1", "method": "POST"}),
-            reason: "T-1 sends POST only with a human's approval".into(),
-            asked: NOW.into(),
-        };
+        });
         let t = store.pause("e", "T-1", p.clone()).unwrap();
         assert_eq!(
             (t.status, t.pending.as_ref()),
@@ -2094,5 +2361,276 @@ mod tests {
         let (r, s) = (rules(), scope());
         store.create("e", &new("t"), "human", &cx(&r, &s)).unwrap();
         assert!(store.apply("e", "T-1", &Op::Approve, &cx(&r, &s)).is_err());
+    }
+
+    fn pending(ask: Ask) -> Pending {
+        Pending {
+            method: "POST".into(),
+            target: "https://app.test/x".into(),
+            host_header: None,
+            request: serde_json::json!({"id": "e1", "method": "POST"}),
+            fingerprint: "f1".repeat(32),
+            ask,
+            reason: "T-1 sends POST only with a human's approval".into(),
+            asked: NOW.into(),
+        }
+    }
+
+    /// A store with T-1 running under `c`, paused on `ask`.
+    fn paused(c: Requested, ask: Ask) -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(&store, c);
+        store.pause("e", "T-1", pending(ask)).unwrap();
+        (dir, store)
+    }
+
+    const LATER: &str = "2026-11-23T15:05:00Z";
+    const MUCH_LATER: &str = "2026-11-23T15:11:00Z";
+
+    #[test]
+    fn approve_once_grants_that_request_once_until_it_expires() {
+        let (r, sc) = (rules(), scope());
+        let (_d, store) = paused(
+            Requested {
+                budget: Some(1),
+                ..Default::default()
+            },
+            Ask::Unsafe {
+                method: "POST".into(),
+            },
+        );
+        let (before, after) = store
+            .decide("e", "T-1", &Decision::ApproveOnce, &cx(&r, &sc))
+            .unwrap();
+        assert_eq!(
+            (before.status, after.status),
+            (Status::WaitingOnApproval, Status::Running)
+        );
+        assert!(after.pending.is_none());
+        let g = after.grant.clone().unwrap();
+        assert_eq!(
+            (g.fingerprint.as_str(), g.expires.as_str()),
+            ("f1".repeat(32).as_str(), "2026-11-23T15:10:00Z")
+        );
+        assert_eq!(
+            after.constraints, before.constraints,
+            "once changes nothing else"
+        );
+
+        // Another request's fingerprint: no.
+        assert!(matches!(
+            store.charge_granted("e", "T-1", LATER, &"00".repeat(32)),
+            Err(Error::Conflict(_))
+        ));
+        // This one: yes, once (past the budget of 1 is fine: it was approved).
+        store.charge("e", "T-1", LATER).unwrap();
+        store
+            .charge_granted("e", "T-1", LATER, &"f1".repeat(32))
+            .unwrap();
+        assert_eq!(store.get("e", "T-1").unwrap().spent, 2);
+        assert!(
+            matches!(store.charge_granted("e", "T-1", LATER, &"f1".repeat(32)), Err(Error::Conflict(m)) if m.contains("no approval")),
+            "used"
+        );
+
+        // Expired.
+        let (_d, store) = paused(Requested::default(), Ask::Confirm);
+        store
+            .decide("e", "T-1", &Decision::ApproveOnce, &cx(&r, &sc))
+            .unwrap();
+        assert!(store
+            .charge_granted("e", "T-1", MUCH_LATER, &"f1".repeat(32))
+            .is_err());
+
+        // Halted: the grant dies with the task.
+        let (_d, store) = paused(Requested::default(), Ask::Confirm);
+        store
+            .decide("e", "T-1", &Decision::ApproveOnce, &cx(&r, &sc))
+            .unwrap();
+        store
+            .apply(
+                "e",
+                "T-1",
+                &Op::Halt {
+                    reason: String::new(),
+                },
+                &cx(&r, &sc),
+            )
+            .unwrap();
+        assert!(store.get("e", "T-1").unwrap().grant.is_none());
+        assert!(store
+            .charge_granted("e", "T-1", LATER, &"f1".repeat(32))
+            .is_err());
+    }
+
+    #[test]
+    fn approve_for_the_task_widens_it_within_the_roe() {
+        let (r, sc) = (rules(), scope());
+        let decide = |c: Requested, ask: Ask| {
+            let (_d, store) = paused(c, ask);
+            store
+                .decide("e", "T-1", &Decision::ApproveForTask, &cx(&r, &sc))
+                .map(|(_, a)| a.constraints)
+        };
+        let c = decide(
+            Requested {
+                hosts: Some(vec!["app.test".into()]),
+                ..Default::default()
+            },
+            Ask::Host {
+                host: "v1.api.test".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(c.hosts, ["app.test", "v1.api.test"]);
+        let c = decide(
+            Requested {
+                methods: Some(vec!["GET".into()]),
+                ..Default::default()
+            },
+            Ask::Method {
+                method: "POST".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(c.methods, ["GET", "POST"]);
+        assert_eq!(
+            c.safe_methods,
+            ["GET"],
+            "the RoE wants POST confirmed: still asks"
+        );
+        let c = decide(
+            Requested {
+                budget: Some(30),
+                time_limit_minutes: Some(20),
+                ..Default::default()
+            },
+            Ask::Budget,
+        )
+        .unwrap();
+        assert_eq!(c.budget, 60);
+        let c = decide(
+            Requested {
+                time_limit_minutes: Some(20),
+                ..Default::default()
+            },
+            Ask::Time,
+        )
+        .unwrap();
+        assert_eq!(c.time_limit_minutes, 40);
+        let c = decide(
+            Requested {
+                safe_methods: Some(vec![]),
+                ..Default::default()
+            },
+            Ask::Unsafe {
+                method: "GET".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(c.safe_methods, ["GET"]);
+
+        // Never past the RoE: it wants POST confirmed, DELETE isn't allowed,
+        // evil.test isn't in scope, and an RoE confirmation is only "once".
+        for (ask, why) in [
+            (
+                Ask::Unsafe {
+                    method: "POST".into(),
+                },
+                "want POST confirmed",
+            ),
+            (
+                Ask::Method {
+                    method: "DELETE".into(),
+                },
+                "DELETE isn't allowed",
+            ),
+            (
+                Ask::Host {
+                    host: "evil.test".into(),
+                },
+                "isn't in the engagement's scope",
+            ),
+            (Ask::Confirm, "approve it once"),
+        ] {
+            let c = Requested {
+                methods: Some(vec!["GET".into()]),
+                hosts: Some(vec!["app.test".into()]),
+                ..Default::default()
+            };
+            let e = decide(c, ask).unwrap_err().to_string();
+            assert!(e.contains(why), "{why}: {e}");
+        }
+        let (_d, store) = paused(Requested::default(), Ask::Confirm);
+        assert!(store
+            .decide("e", "T-1", &Decision::ApproveForTask, &cx(&r, &sc))
+            .is_err());
+        assert_eq!(
+            store.get("e", "T-1").unwrap().status,
+            Status::WaitingOnApproval,
+            "a refused approval changes nothing"
+        );
+    }
+
+    #[test]
+    fn deny_resumes_the_task_with_the_reason() {
+        let (r, sc) = (rules(), scope());
+        let (_d, store) = paused(
+            Requested::default(),
+            Ask::Unsafe {
+                method: "POST".into(),
+            },
+        );
+        assert!(matches!(
+            store.decide(
+                "e",
+                "T-1",
+                &Decision::Deny { reason: " ".into() },
+                &cx(&r, &sc)
+            ),
+            Err(Error::Invalid(_))
+        ));
+        let (_, t) = store
+            .decide(
+                "e",
+                "T-1",
+                &Decision::Deny {
+                    reason: "not on prod".into(),
+                },
+                &cx(&r, &sc),
+            )
+            .unwrap();
+        assert_eq!(t.status, Status::Running);
+        assert_eq!(
+            t.reason.as_deref(),
+            Some("POST https://app.test/x was denied: not on prod")
+        );
+        assert!(t.pending.is_none() && t.grant.is_none());
+        let logged = serde_json::to_value(&t.log[t.log.len() - 2]).unwrap();
+        assert_eq!(logged["outcome"], "denied: not on prod");
+        assert!(
+            matches!(store.decide("e", "T-1", &Decision::ApproveOnce, &cx(&r, &sc)), Err(Error::Conflict(m)) if m.contains("isn't waiting"))
+        );
+    }
+
+    #[test]
+    fn no_approval_while_stopped_or_once_agents_are_not_allowed() {
+        let (r, sc) = (rules(), scope());
+        let (_d, store) = paused(Requested::default(), Ask::Confirm);
+        let no_agents = Rules {
+            agents_allowed: false,
+            ..rules()
+        };
+        assert!(store
+            .decide("e", "T-1", &Decision::ApproveOnce, &cx(&no_agents, &sc))
+            .is_err());
+        store.engage("human", "stop", NOW);
+        assert!(
+            store
+                .decide("e", "T-1", &Decision::ApproveOnce, &cx(&r, &sc))
+                .is_err(),
+            "halted by the stop"
+        );
     }
 }

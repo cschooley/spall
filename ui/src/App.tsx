@@ -694,6 +694,7 @@ export function App() {
             proxy={status.proxy}
             latestHttps={latestHttps}
             toTriage={status.toTriage}
+            waitingApproval={status.waitingApproval}
             onChanged={() => setStatusNonce((n) => n + 1)}
           />
         </main>
@@ -799,6 +800,11 @@ export function App() {
         {status.toTriage ? (
           <a className="to-triage" href="#findings" title="Candidates waiting for your decision (Findings, 5)">
             {`${status.toTriage} to triage`}
+          </a>
+        ) : null}
+        {status.waitingApproval ? (
+          <a className="to-triage" href="#engagement" title="Agent tasks waiting for your approval (Engagement, 1)">
+            {`${status.waitingApproval} waiting on approval`}
           </a>
         ) : null}
         {status.testing && !status.testing.allowed ? (
