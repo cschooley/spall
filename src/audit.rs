@@ -34,6 +34,8 @@ pub enum Outcome {
     RateLimited,
     /// The engagement's details changed, or another one became active.
     EngagementChanged,
+    /// A candidate was flagged, triaged or edited (#42).
+    CandidateChanged,
 }
 
 #[derive(Debug, Clone, Serialize)]

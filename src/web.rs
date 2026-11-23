@@ -81,6 +81,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
+        .route(
+            "/api/candidates",
+            get(api_candidates).post(api_candidates_new),
+        )
+        .route(
+            "/api/candidates/{id}",
+            axum::routing::patch(api_candidate_patch),
+        )
         .route("/api/ca", get(api_ca))
         .route("/api/ca.pem", get(api_ca_pem))
         .route("/api/ca.der", get(api_ca_der))
@@ -253,6 +261,17 @@ async fn api_status(State(state): State<AppState>) -> Response {
         .as_ref()
         .map(|r| r.testing_now())
         .unwrap_or(serde_json::Value::Null);
+    // Candidates waiting for a decision (#47): not yet confirmed, not
+    // suppressed.
+    body["to_triage"] = match &state.replayer {
+        Some(r) => r
+            .candidates(None)
+            .iter()
+            .filter(|c| crate::candidates::to_triage(c))
+            .count()
+            .into(),
+        None => serde_json::Value::Null,
+    };
     axum::Json(body).into_response()
 }
 
@@ -421,6 +440,63 @@ async fn api_openapi_parse(State(state): State<AppState>, body: axum::body::Byte
 /// Hosts seen in traffic with their scope state (#39), most seen first.
 /// `?state=in|out|unknown` narrows the list (counts cover every host).
 /// Without the lever API there's no engagement, so every host is unknown.
+fn no_candidates() -> Response {
+    json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "candidates need taphttp's lever API (start spall with --taphttp-api)",
+    )
+}
+
+/// The active engagement's candidates (#42), newest first;
+/// `?exchange=<id>` for those an exchange backs.
+async fn api_candidates(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_candidates();
+    };
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(raw.as_deref().unwrap_or("")).unwrap_or_default();
+    let exchange = pairs
+        .iter()
+        .find(|(k, _)| k == "exchange")
+        .map(|(_, v)| v.as_str());
+    axum::Json(serde_json::json!({ "candidates": r.candidates(exchange) })).into_response()
+}
+
+/// Flag an exchange as a candidate (#42, #43).
+async fn api_candidates_new(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_candidates();
+    };
+    match serde_json::from_slice::<crate::candidates::Flag>(&body) {
+        Ok(flag) => r.flag(flag).await,
+        Err(e) => json_error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                r#"want {{"exchange", "rule", "parameter"?, "level"?, "rank"?, "message"?, "replays"?, "cwe"?}}: {e}"#
+            ),
+        ),
+    }
+}
+
+/// Triage or edit a candidate: `{"op": "confirm" | "reject" | "accept" |
+/// "duplicate" | "reopen" | "edit" | "evidence", ...}` (#42, #44).
+async fn api_candidate_patch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_candidates();
+    };
+    match serde_json::from_slice::<crate::candidates::Op>(&body) {
+        Ok(op) => r.triage(&id, op).await,
+        Err(e) => json_error(
+            StatusCode::BAD_REQUEST,
+            &format!("not a candidate change: {e}"),
+        ),
+    }
+}
+
 /// The rule catalog (#41): WSTG v4.2 ids, titles, CWE and help links.
 async fn api_rules() -> Response {
     let rules: Vec<serde_json::Value> = crate::rules::CATALOG
@@ -1056,7 +1132,13 @@ mod tests {
 
     #[tokio::test]
     async fn cross_site_posts_are_refused_on_every_route() {
-        for path in ["/api/replay", "/api/exchanges", "/", "/nope"] {
+        for path in [
+            "/api/replay",
+            "/api/exchanges",
+            "/api/candidates",
+            "/",
+            "/nope",
+        ] {
             for headers in [
                 &[
                     ("content-type", "text/plain"),
@@ -1075,6 +1157,32 @@ mod tests {
                 assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path} {headers:?}");
                 assert!(res.headers().get("access-control-allow-origin").is_none());
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidates_need_the_lever_api() {
+        let res = app(Arc::new(Hub::new(1)))
+            .oneshot(get_req("/api/candidates", "127.0.0.1:3000"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(body_string(res).await.contains("lever API"));
+    }
+
+    #[tokio::test]
+    async fn cross_site_patches_are_refused_too() {
+        for headers in [
+            &[
+                ("content-type", "application/json"),
+                ("origin", "http://evil.example"),
+            ][..],
+            &[("content-type", "application/json")][..],
+        ] {
+            let mut req = post_req("/api/candidates/c-1", headers);
+            *req.method_mut() = axum::http::Method::PATCH;
+            let res = app(Arc::new(Hub::new(1))).oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::FORBIDDEN, "{headers:?}");
         }
     }
 

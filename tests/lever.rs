@@ -1654,3 +1654,180 @@ async fn the_public_ca_certificate_is_offered_for_download_with_its_fingerprint(
         .await
         .starts_with("HTTP/1.1 503"));
 }
+
+#[tokio::test]
+async fn candidates_are_flagged_triaged_audited_and_kept_across_a_restart() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    for id in ["e1", "e2", "e3"] {
+        stub.push(id);
+    }
+    let spall = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+
+    // Flag e1: rule from the catalog, the exchange as evidence.
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"e1","rule":"WSTG-INPV-05","parameter":"id","level":"error","replays":["e2"]}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let c = body_json(&res);
+    let id = c["id"].as_str().unwrap().to_string();
+    let f = &c["finding"];
+    assert_eq!(f["ruleId"], "WSTG-INPV-05");
+    assert_eq!(f["level"], "error");
+    assert_eq!(f["properties"]["flux/status"], "candidate");
+    assert_eq!(
+        f["properties"]["flux/replayIds"],
+        serde_json::json!(["e1", "e2"])
+    );
+    assert_eq!(f["taxa"][0]["id"], "89");
+    assert_eq!(
+        f["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+        "http://example.com/e1"
+    );
+    assert_eq!(
+        f["fingerprints"]["flux/dast/v1"].as_str().unwrap().len(),
+        64
+    );
+    assert_eq!(c["flagged_by"], "human");
+
+    // The same endpoint, parameter and rule again: 409 with the existing one.
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"e1","rule":"WSTG-INPV-05","parameter":"id"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    assert_eq!(body_json(&res)["existing"]["id"], id.as_str());
+
+    // Bad input: unknown rule, unknown or malformed exchange, unknown field.
+    for (body, want) in [
+        (r#"{"exchange":"e1","rule":"WSTG-NOPE-01"}"#, "400"),
+        (r#"{"exchange":"missing","rule":"WSTG-INPV-05"}"#, "404"),
+        (r#"{"exchange":"../x","rule":"WSTG-INPV-05"}"#, "400"),
+        (
+            r#"{"exchange":"e1","rule":"WSTG-INPV-05","replays":["missing"]}"#,
+            "404",
+        ),
+        (
+            r#"{"exchange":"e1","rule":"WSTG-INPV-05","sneaky":true}"#,
+            "400",
+        ),
+    ] {
+        let res = post_text(spall, "/api/candidates", body, None).await;
+        assert!(
+            res.starts_with(&format!("HTTP/1.1 {want}")),
+            "{body}: {res}"
+        );
+    }
+
+    // A second one, then triage.
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"e3","rule":"WSTG-INPV-01","parameter":"q"}"#,
+        None,
+    )
+    .await;
+    let id2 = body_json(&res)["id"].as_str().unwrap().to_string();
+    let patch = |cid: &str, body: &str| {
+        let (cid, body) = (cid.to_string(), body.to_string());
+        async move {
+            send_text(
+                spall,
+                "PATCH",
+                &format!("/api/candidates/{cid}"),
+                &body,
+                None,
+            )
+            .await
+        }
+    };
+    let res = patch(&id, r#"{"op":"confirm"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let guid = body_json(&res)["finding"]["correlationGuid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = patch(
+        &id2,
+        &format!(r#"{{"op":"duplicate","of":"{id}","justification":"same handler"}}"#),
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let dup = body_json(&res);
+    assert_eq!(
+        dup["finding"]["suppressions"][0]["properties"]["flux/duplicateOf"],
+        guid.as_str()
+    );
+    let res = patch(&id2, r#"{"op":"reject","justification":" "}"#).await;
+    assert!(res.starts_with("HTTP/1.1 400"), "{res}");
+    let res = patch("c-00000000", r#"{"op":"confirm"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 404"), "{res}");
+    let res = patch(&id, r#"{"op":"evidence","exchanges":["e3"]}"#).await;
+    assert_eq!(
+        body_json(&res)["finding"]["properties"]["flux/replayIds"],
+        serde_json::json!(["e1", "e2", "e3"])
+    );
+
+    // Listing: newest first; by exchange.
+    let list = body_json(&get_text(spall, "/api/candidates").await);
+    let ids: Vec<&str> = list["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [id2.as_str(), id.as_str()]);
+    let by = body_json(&get_text(spall, "/api/candidates?exchange=e2").await);
+    assert_eq!(by["candidates"].as_array().unwrap().len(), 1);
+
+    // Audited: who, what, which candidate.
+    let recs: Vec<serde_json::Value> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "candidate")
+        .collect();
+    let reasons: Vec<&str> = recs.iter().map(|r| r["reason"].as_str().unwrap()).collect();
+    assert!(
+        reasons.contains(&format!("flag {id} as WSTG-INPV-05").as_str()),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons.contains(&format!("duplicate {id2}: same handler").as_str()),
+        "{reasons:?}"
+    );
+    let conf = recs
+        .iter()
+        .find(|r| r["reason"] == format!("confirm {id}"))
+        .unwrap();
+    assert_eq!(conf["outcome"], "candidate_changed");
+    assert_eq!(
+        conf["changes"]["status"],
+        serde_json::json!({"before": "candidate", "after": "confirmed"})
+    );
+    assert_eq!(conf["exchange_id"], "e1");
+    assert!(
+        recs.iter().any(|r| r["error"].is_string()),
+        "refused steps are audited too"
+    );
+
+    // id is confirmed, id2 a duplicate: nothing waits for triage.
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["to_triage"],
+        0
+    );
+
+    // A restart on the same data keeps them.
+    let again = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    eventually("second backfill", || stub.exchange_queries().len() >= 2).await;
+    let list2 = body_json(&get_text(again, "/api/candidates").await);
+    assert_eq!(list2, list);
+}

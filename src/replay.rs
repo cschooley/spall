@@ -181,6 +181,8 @@ pub struct Replayer {
     pub limiter: Mutex<Limiter>,
     pub confirmations: Confirmations,
     pub audit: AuditLog,
+    /// Candidates flagged in each engagement (#42).
+    pub candidates: crate::candidates::Store,
 }
 
 fn json(status: StatusCode, body: serde_json::Value) -> Response {
@@ -325,6 +327,156 @@ impl Replayer {
         }));
         rec.scope_after = Some(e.scope.clone());
         self.audit(&rec);
+    }
+
+    /// One exchange from taphttp's history, or the response to give.
+    async fn exchange(&self, id: &str) -> Result<TrafficEntry, Response> {
+        if !crate::web::valid_exchange_id(id) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                &format!("not an exchange id: {id}"),
+            ));
+        }
+        match self.lever.get_bytes(&format!("/exchanges/{id}")).await {
+            Ok((StatusCode::OK, body)) => {
+                serde_json::from_slice::<TrafficEntry>(&body).map_err(|_| {
+                    error(
+                        StatusCode::BAD_GATEWAY,
+                        "taphttp returned an unreadable exchange",
+                    )
+                })
+            }
+            Ok((StatusCode::NOT_FOUND, _)) => {
+                Err(error(StatusCode::NOT_FOUND, &format!("no exchange {id}")))
+            }
+            Ok((st, _)) => Err(error(
+                StatusCode::BAD_GATEWAY,
+                &format!("taphttp answered {st}"),
+            )),
+            Err(e) => Err(error(StatusCode::BAD_GATEWAY, &format!("taphttp: {e:#}"))),
+        }
+    }
+
+    /// The active engagement's candidates, newest first; only those backed
+    /// by `exchange` when given.
+    pub fn candidates(&self, exchange: Option<&str>) -> Vec<crate::candidates::Candidate> {
+        let mut list = self.candidates.list(&self.engagements.active().id);
+        if let Some(x) = exchange {
+            list.retain(|c| c.exchanges().iter().any(|e| e == x));
+        }
+        list
+    }
+
+    /// Flag an exchange as a candidate (#42, #43). 201 with the candidate;
+    /// 409 with the existing one when a candidate shares its fingerprint
+    /// (add evidence to it, or reopen it, instead). Audited.
+    pub async fn flag(&self, flag: crate::candidates::Flag) -> Response {
+        use crate::candidates::{finding_for, new_id, Candidate};
+        if let Err(m) = flag.validate() {
+            return error(StatusCode::BAD_REQUEST, &m);
+        }
+        let Some(rule) = crate::rules::find(&flag.rule) else {
+            return error(
+                StatusCode::BAD_REQUEST,
+                &format!("no rule {} (see `rules`)", flag.rule),
+            );
+        };
+        let entry = match self.exchange(&flag.exchange).await {
+            Ok(e) => e,
+            Err(r) => return r,
+        };
+        for x in &flag.replays {
+            if let Err(r) = self.exchange(x).await {
+                return r;
+            }
+        }
+        let now = taphttp_types::Timestamp::now().to_string();
+        let finding = finding_for(rule, &flag, &entry, &now);
+        let eng = self.engagements.active().id;
+        if let Some(existing) = self.candidates.matching(&eng, &finding) {
+            return json(
+                StatusCode::CONFLICT,
+                serde_json::json!({
+                    "error": format!("already flagged as {} (same endpoint, parameter and rule)", existing.id),
+                    "existing": existing,
+                }),
+            );
+        }
+        let c = Candidate {
+            id: new_id(),
+            created: now.clone(),
+            updated: now,
+            flagged_by: "human".into(),
+            finding,
+        };
+        let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
+        rec.method = Some(entry.method.clone());
+        rec.target = Some(entry.url.clone());
+        rec.reason = Some(format!("flag {} as {}", c.id, rule.id));
+        rec.result_id = Some(c.id.clone());
+        match self.candidates.add(&eng, c) {
+            Ok(c) => {
+                self.audit(&rec);
+                (StatusCode::CREATED, axum::Json(c)).into_response()
+            }
+            Err(e) => {
+                rec.error = Some(e.to_string());
+                self.audit(&rec);
+                error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            }
+        }
+    }
+
+    /// Triage or edit candidate `id` (#42, #44). Audited with before/after.
+    pub async fn triage(&self, id: &str, op: crate::candidates::Op) -> Response {
+        use crate::candidates::{new_guid, Error as CErr, Op};
+        if let Op::Evidence { exchanges } = &op {
+            for x in exchanges {
+                if let Err(r) = self.exchange(x).await {
+                    return r;
+                }
+            }
+        }
+        let eng = self.engagements.active().id;
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut guid = new_guid;
+        let first = self
+            .candidates
+            .get(&eng, id)
+            .and_then(|c| c.exchanges().first().cloned())
+            .unwrap_or_default();
+        let mut rec = Record::new("candidate", &first, Outcome::CandidateChanged);
+        rec.result_id = Some(id.to_string());
+        let why = match &op {
+            Op::Reject { justification }
+            | Op::Accept { justification }
+            | Op::Duplicate { justification, .. } => {
+                format!(": {justification}")
+            }
+            _ => String::new(),
+        };
+        rec.reason = Some(format!("{} {id}{why}", op.name()));
+        match self.candidates.apply(&eng, id, &op, &now, &mut guid) {
+            Ok((before, after)) => {
+                rec.changes = Some(serde_json::json!({
+                    "status": { "before": before.finding.status(), "after": after.finding.status() },
+                    "suppressed": { "before": before.finding.is_suppressed(), "after": after.finding.is_suppressed() },
+                }));
+                self.audit(&rec);
+                axum::Json(after).into_response()
+            }
+            Err(e) => {
+                rec.error = Some(e.to_string());
+                self.audit(&rec);
+                let st = match e {
+                    CErr::NotFound(_) => StatusCode::NOT_FOUND,
+                    CErr::Invalid(_) => StatusCode::BAD_REQUEST,
+                    CErr::Full => StatusCode::CONFLICT,
+                    CErr::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                error(st, &e.to_string())
+            }
+        }
     }
 
     fn audit(&self, rec: &Record) {

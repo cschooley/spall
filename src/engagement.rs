@@ -664,7 +664,7 @@ fn save(dir: &Path, e: &Engagement) -> anyhow::Result<()> {
     write_atomic(&dir.join(format!("{}.json", e.id)), &body)
 }
 
-fn create_dir_private(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn create_dir_private(dir: &Path) -> std::io::Result<()> {
     let mut b = fs::DirBuilder::new();
     b.recursive(true);
     #[cfg(unix)]
@@ -677,7 +677,7 @@ fn create_dir_private(dir: &Path) -> std::io::Result<()> {
 
 /// Write to a temp file beside `path`, fsync, rename over it, fsync the
 /// directory: a crash leaves the old file or the new one, never half.
-fn write_atomic(path: &Path, body: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn write_atomic(path: &Path, body: &[u8]) -> anyhow::Result<()> {
     use anyhow::Context;
     let dir = path.parent().context("no parent directory")?;
     let name = path

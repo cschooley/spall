@@ -3,6 +3,7 @@
 //! tailing its `--log-file`.
 
 pub mod audit;
+pub mod candidates;
 pub mod config;
 pub mod confirm;
 pub mod csrf;
@@ -205,6 +206,9 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 tracing::info!("replay scope: {}", scope.entries().join(", "));
             }
             tracing::info!("audit log: {}", config.audit_log.display());
+            let candidates_dir = config.engagements.join("candidates");
+            let candidates = candidates::Store::open(&candidates_dir)
+                .with_context(|| format!("loading candidates from {}", candidates_dir.display()))?;
             Some(Arc::new(replay::Replayer {
                 lever: lever.clone(),
                 engagements,
@@ -212,6 +216,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 limiter: std::sync::Mutex::new(roe::Limiter::default()),
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,
+                candidates,
             }))
         }
         None => None,
