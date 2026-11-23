@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { asWaiting, costText, decide, forTaskText } from "./tasks.ts";
+import { asWaiting, costText, decide, forTaskText, taskLines, taskListLines } from "./tasks.ts";
 
 const P = `<img src=x onerror="window.__pwned=1">`;
 
@@ -55,5 +55,26 @@ test("decide sends the op; the server's refusal comes back as text", async () =>
   assert.deepEqual(sent, [
     ["/api/tasks/T-1", '{"op":"approve_once"}'],
     ["/api/tasks/T%2F1", '{"op":"deny","reason":""}'],
+  ]);
+});
+
+test("console lines for tasks", () => {
+  assert.deepEqual(taskListLines({ tasks: [] }), ["no tasks in this engagement"]);
+  assert.deepEqual(taskListLines({ tasks: [{ id: "T-1", status: "running", role: "mapper", spent: 2, constraints: { budget: 10 }, goal: P }] }), [
+    `T-1    running             mapper   2/10  ${P}`,
+  ]);
+  const lines = taskLines({
+    id: "T-2", status: "waiting_on_approval", role: "tester", asked_by: "human", goal: "g", spent: 1, note: "my boss said",
+    constraints: { budget: 5, time_limit_minutes: 60, hosts: [], methods: ["GET"], safe_methods: [] },
+    pending: { method: "POST", target: "https://a.test/", reason: "asks" }, log: [{}, {}],
+  });
+  assert.deepEqual(lines, [
+    "T-2 · waiting_on_approval · tester · asked by human",
+    "goal: g",
+    "spent 1 of 5 requests · time limit 60 min",
+    "hosts: the engagement's scope · methods: GET · without asking: none",
+    "note: my boss said",
+    "waiting on approval: POST https://a.test/ (asks)",
+    "log: 2 entries",
   ]);
 });

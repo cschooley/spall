@@ -44,6 +44,8 @@ pub enum Outcome {
     Paused,
     /// The agent e-stop was engaged or cleared (#57).
     EStop,
+    /// An MCP session started, ended or was refused (#58).
+    McpSession,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -57,6 +57,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     ca: async () => ({ sha256: "EB:6F:71", subject: "CN=taphttp CA", notBefore: null, notAfter: "2036-11-20T00:00:00Z", proxy: "127.0.0.1:8080", taphttpVersion: "0.6.1" }),
     openSetup: () => void calls.push("setup"),
     promote: async (id, undo) => (calls.push(`promote:${id}${undo ? ":undo" : ""}`), id === "c-1" ? { ...asCandidate(RAW)!, id, promoted: undo ? null : "now" } : `no candidate ${id}`),
+    task: async (id) => (calls.push(`task:${id ?? ""}`), id === "T-9" ? "no such task" : [`${id ?? "all"} line`]),
     estop: async (a, reason) => (calls.push(`estop:${a}:${reason ?? ""}`), { ok: true, text: a === "clear" ? "cleared" : "engaged" }),
     exportFindings: async (u) => (calls.push(`export:${u}`), u ? { ok: false, text: "an unredacted export needs spall started with --allow-unredacted-export" } : { ok: true, text: "exported spall-x.sarif (redacted)" }),
     goto: (v) => (calls.push(`goto:${v}`), ["engagement", "traffic", "findings"].includes(v)),
@@ -616,10 +617,10 @@ test("the UI and the server's registry (#53) list the same commands, with the se
   assert.deepEqual(UNREGISTERED, [], "implemented here but not in src/commands.rs");
   assert.deepEqual(
     COMMANDS.map((c) => c.name),
-    SPECS.map((s) => s.name),
+    SPECS.filter((s) => s.ui).map((s) => s.name),
     "in src/commands.rs but not implemented here",
   );
-  for (const s of SPECS) {
+  for (const s of SPECS.filter((s) => s.ui)) {
     const c = COMMANDS.find((c) => c.name === s.name)!;
     assert.deepEqual([c.risk, c.mcp, c.hidden, c.usage, c.desc], [s.risk, s.mcp, s.hidden, s.usage, s.desc], s.name);
   }
@@ -652,4 +653,25 @@ test("estop engages with a reason, clear clears; an agent is never offered it", 
   const e = COMMANDS.find((c) => c.name === "estop")!;
   assert.equal(e.mcp, false);
   assert.ok(paletteItems().some((i) => i.command === "estop" && !i.prefill), "one press from the palette");
+});
+
+test("task lists tasks or shows one; propose_finding is the agent's, not the console's", async () => {
+  const { ctx, lines, calls } = fakeCtx();
+  await execute("task", ctx);
+  await execute("task T-3", ctx);
+  await execute("task T-9", ctx);
+  await execute("task nope", ctx);
+  await execute("propose_finding", ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("task")), ["task:", "task:T-3", "task:T-9"]);
+  assert.deepEqual(
+    lines.filter(([, k]) => k !== "cmd"),
+    [
+      ["all line", "out"],
+      ["T-3 line", "out"],
+      ["task: no such task", "warn"],
+      ["usage: task [T-n]", "warn"],
+      ["unknown command: propose_finding. try help", "warn"],
+    ],
+  );
+  assert.ok(SPECS.some((s) => s.name === "propose_finding" && s.mcp && !s.ui));
 });

@@ -150,6 +150,29 @@ Three views are built so far: **Engagement** (`1`), **Traffic** (`2`) and **Find
 
 Everything shown comes from captured traffic, so it's treated as hostile: rendered as text only, never as HTML, under a strict Content-Security-Policy.
 
+## Connect an agent (MCP)
+
+spall has an MCP server, so an MCP client such as Claude Code or Claude Desktop can work an engagement under a task you approve. The client runs the agent loop; spall never holds a model key. Over MCP an agent can list and read traffic (`filter`, `open`), replay through the same gate you use (`replay`), see hosts and their scope state (`hosts`), search the rule catalog (`rules`), see its own task (`task`) and propose findings (`propose_finding`). It can't change scope, the rules or engagements, can't confirm its own sends, and can't promote or export anything.
+
+1. Let agents act on the engagement: `roe set agents yes` in the console.
+2. Make a task and approve it (or let the client's first connection make a draft and approve that). Until a task is approved and running, nothing the agent does sends anything.
+3. Connect the client over stdio, through the container:
+
+```sh
+claude mcp add spall -- docker compose -f /path/to/spall/docker-compose.yml exec -T spall /spall mcp --task T-1
+```
+
+   Without `--task`, `--goal "map the API" --role mapper` makes a draft for you to approve. Or use streamable HTTP directly: `http://127.0.0.1:3000/mcp?task=T-1` with `Authorization: Bearer <token>`, where the token is the contents of `/data/mcp-token` in the container (`docker compose cp spall:/data/mcp-token .` copies it out).
+
+What it can't get around:
+
+- **Every session is bound to a task.** The task's constraints (hosts, methods, budget, time, what it sends without asking) only narrow the rules of engagement. Anything outside the task pauses it, and the request waits in **Waiting on you** on the Engagement view: approve it once, approve it for the task (within the rules of engagement), or deny it with a reason the agent reads. Anything outside the engagement's scope or rules is simply refused.
+- **Traffic comes back as untrusted data.** Every exchange handed to the agent is wrapped in markers with a random id, labeled as data rather than instructions, truncated (4 KiB of body by default), and has its credentials masked: the agent sees *that* there is a session cookie, not its value. It doesn't need the value: a replay is by exchange id, and taphttp sends the captured headers.
+- **It proposes, you decide.** A proposed finding needs evidence the task actually sent or read, is attributed to the task (`agent:T-1`), and waits in Findings like one you flagged. A task can propose at most 20.
+- **STOP AGENTS** in the top bar (or `Shift+Esc`) halts every task at once, for good.
+
+Everything an agent does, or is refused, is in the audit log with its task.
+
 ## Configuration
 
 ### Where traffic comes from
@@ -239,7 +262,7 @@ Each engagement carries rules that the gate enforces on every replay. Agents wil
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`, `replay_of`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
-- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null, "testing": {"allowed", "reason"} | null, "to_triage": n | null, "export": {"promoted", "unredacted_allowed"} | null, "flux": {"crate", "spec", "rules"}}` for the status bar
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null, "testing": {"allowed", "reason"} | null, "to_triage": n | null, "export": {"promoted", "unredacted_allowed"} | null, "waiting_approval": n | null, "estop": {"since", "by", "reason"} | null, "flux": {"crate", "spec", "rules"}}` for the status bar
 - `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope or outside the rules of engagement; 429 over the rate ceiling (`Retry-After`); 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
 - `POST /api/scope`: `{"op": "add" | "exclude" | "remove", "entry": "..."}` or `{"op": "all", "on": bool}`. Same-origin JSON only; audited with the entries before and after; entries are saved on the active engagement, `all` lasts until restart. Returns `{"scope": [...], "all": bool, "changed": bool}`; exclusions are listed as `!entry`
 - `POST /api/scope/parse`: `{"text"}` previews a pasted list without changing anything: `{"items": [{"line", "source", "entry", "exclude", "error", "notes", "present"}], "add": [...], "exclude": [...]}`. `{"op": "apply", "add": [...], "exclude": [...]}` on `/api/scope` then applies them as one audited, all-or-nothing change
@@ -256,6 +279,10 @@ Each engagement carries rules that the gate enforces on every replay. Agents wil
 - `GET /api/scope/check?target=<url or host>`: `{"host", "state": "in" | "out" | "unknown", "by": entry | null}`
 - `GET /api/engagement`: the active engagement, with `testing_now: {allowed, reason}`. `PATCH /api/engagement`: change any of `name`, `client`, `starts`, `ends`, `expires`, `contacts`, `notes`, `target_notes`, `api_specs` and `rules` (any of `methods`, `safe_methods`, `rate_limit` (0 is off), `time_zone`, `windows`, `blackouts`, `agents_allowed`, `destructive_allowed`), but not `scope`: use `/api/scope`. Returns `{"engagement", "changed"}`
 - `GET /api/engagements`: `[{"id", "name", "client", "active"}]`. `POST /api/engagements`: `{"name", "client"?, "scope"?: [...]}` creates one and makes it active (201). `POST /api/engagements/active`: `{"id": id or name}` switches. All same-origin JSON, audited; 400 bad input, 404 no such engagement, 503 without `--taphttp-api`
+- `GET /api/commands`: the command registry the palette, console and MCP server share: `{"risks": [...], "commands": [{"name", "usage", "desc", "risk", "mcp", "hidden", "ui", "args"}]}`
+- `GET /api/tasks`: the active engagement's agent tasks, newest first, without logs. `POST /api/tasks`: `{"goal", "role": "scoper" | "mapper" | "tester" | "reporter", "constraints"?: {"hosts"?, "methods"?, "safe_methods"?, "rate_limit"?, "destructive"?, "budget"?, "time_limit_minutes"?, "stop"?}, "plan"?: [...], "note"?}` makes a draft (201); constraints default to the rules of engagement and anything wider is refused. `GET /api/tasks/{id}`: one, with its log. `PATCH /api/tasks/{id}`: `{"op": "approve"}`, `{"op": "edit", ...}` (drafts only), `{"op": "halt", "reason"?}` (for good), or, for a task waiting on approval, `{"op": "approve_once"}`, `{"op": "approve_for_task"}` or `{"op": "deny", "reason"}`. Same-origin JSON, audited; 409 when the task can't do that from where it stands
+- `POST /api/estop`: `{"reason"?}` halts every agent task in every engagement, for good, and revokes every confirmation token; it holds across restarts. `POST /api/estop/clear` lets new tasks run. `estop` in `/api/status` shows it
+- `POST /mcp`: the MCP server (streamable HTTP, JSON responses; protocol 2025-06-18 or 2025-03-26). Needs `Authorization: Bearer <the token in --mcp-token-file>`; the session is bound to `?task=T-n` or a new draft (`?goal=...&role=...`). `DELETE /mcp` ends a session. See [Connect an agent](#connect-an-agent-mcp)
 - `GET /api/audit?last=N`: the newest replay attempts from the audit log, oldest first (default 20, at most 500). 503 without `--taphttp-api`
 - `GET /healthz`: `ok`
 

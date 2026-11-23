@@ -21,9 +21,10 @@ export const SPECS = [
     },
     "desc": "this list",
     "hidden": false,
-    "mcp": true,
+    "mcp": false,
     "name": "help",
     "risk": "read",
+    "ui": true,
     "usage": "help"
   },
   {
@@ -43,12 +44,24 @@ export const SPECS = [
     "mcp": true,
     "name": "filter",
     "risk": "read",
+    "ui": true,
     "usage": "filter [query]"
   },
   {
     "args": {
       "additionalProperties": false,
       "properties": {
+        "body_length": {
+          "description": "agents: how many body bytes to show",
+          "maximum": 65536,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "body_offset": {
+          "description": "agents: the first body byte to show (bodies show 4 KiB by default)",
+          "minimum": 0,
+          "type": "integer"
+        },
         "id": {
           "description": "the exchange id",
           "pattern": "^[A-Za-z0-9_-]{1,128}$",
@@ -65,6 +78,7 @@ export const SPECS = [
     "mcp": true,
     "name": "open",
     "risk": "read",
+    "ui": true,
     "usage": "open <id>"
   },
   {
@@ -82,9 +96,10 @@ export const SPECS = [
     },
     "desc": "the selected exchange as a curl command (also copied)",
     "hidden": false,
-    "mcp": true,
+    "mcp": false,
     "name": "curl",
     "risk": "read",
+    "ui": true,
     "usage": "curl"
   },
   {
@@ -148,6 +163,7 @@ export const SPECS = [
     "mcp": true,
     "name": "replay",
     "risk": "send",
+    "ui": true,
     "usage": "replay <id> [--yes]"
   },
   {
@@ -185,6 +201,7 @@ export const SPECS = [
     "mcp": false,
     "name": "scope",
     "risk": "policy",
+    "ui": true,
     "usage": "scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]"
   },
   {
@@ -235,6 +252,7 @@ export const SPECS = [
     "mcp": false,
     "name": "engagement",
     "risk": "policy",
+    "ui": true,
     "usage": "engagement [list | new <name> | use <id|name> | set <field> <value>]"
   },
   {
@@ -310,6 +328,7 @@ export const SPECS = [
     "mcp": false,
     "name": "roe",
     "risk": "policy",
+    "ui": true,
     "usage": "roe [set <field> <value> | window add|remove|clear | blackout add|remove|clear]"
   },
   {
@@ -333,6 +352,7 @@ export const SPECS = [
     "mcp": false,
     "name": "estop",
     "risk": "policy",
+    "ui": true,
     "usage": "estop [reason] | estop clear"
   },
   {
@@ -352,6 +372,7 @@ export const SPECS = [
     "mcp": true,
     "name": "hosts",
     "risk": "read",
+    "ui": true,
     "usage": "hosts [--unknown]"
   },
   {
@@ -417,6 +438,7 @@ export const SPECS = [
     "mcp": false,
     "name": "flag",
     "risk": "record",
+    "ui": true,
     "usage": "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N]"
   },
   {
@@ -443,6 +465,7 @@ export const SPECS = [
     "mcp": false,
     "name": "promote",
     "risk": "export",
+    "ui": true,
     "usage": "promote <candidate-id> [--undo]"
   },
   {
@@ -462,6 +485,7 @@ export const SPECS = [
     "mcp": false,
     "name": "export",
     "risk": "export",
+    "ui": true,
     "usage": "export [--unredacted]"
   },
   {
@@ -481,7 +505,84 @@ export const SPECS = [
     "mcp": true,
     "name": "rules",
     "risk": "read",
+    "ui": true,
     "usage": "rules [text]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the task, like T-3; an agent's default and only choice is its own",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "a task: goal, status, constraints, spend, and what it waits on (an agent sees only its own)",
+    "hidden": false,
+    "mcp": true,
+    "name": "task",
+    "risk": "read",
+    "ui": true,
+    "usage": "task [id]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "description": "more exchanges (replays) backing it: ones this task sent or read",
+          "items": {
+            "description": "an exchange",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "exchange_id": {
+          "description": "the exchange that shows it: one this task sent or read",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        },
+        "level": {
+          "description": "SARIF level",
+          "enum": [
+            "error",
+            "warning",
+            "note",
+            "none"
+          ],
+          "type": "string"
+        },
+        "message": {
+          "description": "what was found, for the tester",
+          "type": "string"
+        },
+        "parameter": {
+          "description": "the parameter or location, if any",
+          "type": "string"
+        },
+        "rule": {
+          "description": "a rule id from rules, like WSTG-INPV-05",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exchange_id",
+        "rule",
+        "message"
+      ],
+      "type": "object"
+    },
+    "desc": "propose a candidate finding with evidence from this task's own traffic; a human triages and promotes it",
+    "hidden": false,
+    "mcp": true,
+    "name": "propose_finding",
+    "risk": "record",
+    "ui": false,
+    "usage": "propose_finding"
   },
   {
     "args": {
@@ -495,6 +596,7 @@ export const SPECS = [
     "mcp": false,
     "name": "ca",
     "risk": "read",
+    "ui": true,
     "usage": "ca"
   },
   {
@@ -515,6 +617,7 @@ export const SPECS = [
     "mcp": false,
     "name": "audit",
     "risk": "read",
+    "ui": true,
     "usage": "audit [--last N]"
   },
   {
@@ -529,6 +632,7 @@ export const SPECS = [
     "mcp": false,
     "name": "newest",
     "risk": "read",
+    "ui": true,
     "usage": "newest"
   },
   {
@@ -543,6 +647,7 @@ export const SPECS = [
     "mcp": false,
     "name": "clear-table",
     "risk": "read",
+    "ui": true,
     "usage": "clear-table"
   },
   {
@@ -571,6 +676,7 @@ export const SPECS = [
     "mcp": false,
     "name": "goto",
     "risk": "read",
+    "ui": true,
     "usage": "goto <view>"
   },
   {
@@ -598,6 +704,7 @@ export const SPECS = [
     "mcp": false,
     "name": "theme",
     "risk": "read",
+    "ui": true,
     "usage": "theme <name>"
   },
   {
@@ -612,6 +719,7 @@ export const SPECS = [
     "mcp": false,
     "name": "keys",
     "risk": "read",
+    "ui": true,
     "usage": "keys"
   },
   {
@@ -635,6 +743,7 @@ export const SPECS = [
     "mcp": false,
     "name": "console-key",
     "risk": "read",
+    "ui": true,
     "usage": "console-key <char>"
   },
   {
@@ -649,6 +758,7 @@ export const SPECS = [
     "mcp": false,
     "name": "clear",
     "risk": "read",
+    "ui": true,
     "usage": "clear"
   },
   {
@@ -663,6 +773,7 @@ export const SPECS = [
     "mcp": false,
     "name": "god",
     "risk": "read",
+    "ui": true,
     "usage": "god"
   }
 ] as const;

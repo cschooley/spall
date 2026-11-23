@@ -35,7 +35,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 flux = { git = "https://github.com/cschooley/flux", tag = "v0.2.1" }
 # Traffic log schema, owned by taphttp. Bump the tag deliberately.
 taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.6.1" }
-tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["io-std", "io-util", "fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 serde_urlencoded = "0.7"
@@ -46,6 +46,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 axum = { version = "0.8", features = ["ws"] }
-tokio = { version = "1", features = ["io-util"] }
+tokio = { version = "1", features = ["io-util", "process"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

@@ -59,6 +59,8 @@ export interface Ctx {
   promote(id: string, undo: boolean): Promise<Candidate | string>;
   /** Export the promoted candidates as a flux report and save it (#51); what happened. */
   exportFindings(unredacted: boolean): Promise<{ ok: boolean; text: string }>;
+  /** A task's details as console lines, or every task's one-liner with no id (#54); or why not. */
+  task(id?: string): Promise<string[] | string>;
   /** Engage the agent e-stop, or clear it (#57); what happened. */
   estop(action: "engage" | "clear", reason?: string): Promise<{ ok: boolean; text: string }>;
   /** Flag an exchange as a candidate (#43). */
@@ -546,6 +548,18 @@ const IMPLS: readonly Impl[] = [
     },
   },
   {
+    name: "task",
+    group: "app",
+    palette: { label: "Tasks", hint: "task [id]" },
+    run: async (args, ctx) => {
+      const [id, ...extra] = args;
+      if (extra.length || (id !== undefined && !/^T-\d{1,9}$/.test(id))) return ctx.out("usage: task [T-n]", "warn");
+      const r = await ctx.task(id);
+      if (typeof r === "string") return ctx.out(`task: ${r}`, "warn");
+      for (const line of r) ctx.out(line);
+    },
+  },
+  {
     name: "ca",
     group: "traffic",
     palette: { label: "Set up a browser (CA certificate)", hint: "ca" },
@@ -635,10 +649,10 @@ const IMPLS: readonly Impl[] = [
 ];
 
 /** Names the UI implements and the server's registry doesn't (a test keeps this empty). */
-export const UNREGISTERED: readonly string[] = IMPLS.filter((i) => !SPECS.some((s) => s.name === i.name)).map((i) => i.name);
+export const UNREGISTERED: readonly string[] = IMPLS.filter((i) => !SPECS.some((s) => s.name === i.name && s.ui)).map((i) => i.name);
 
 /** Every command the server's registry lists and the UI implements, in the registry's order. */
-export const COMMANDS: readonly Command[] = SPECS.flatMap((s) => {
+export const COMMANDS: readonly Command[] = SPECS.filter((s) => s.ui).flatMap((s) => {
   const impl = IMPLS.find((i) => i.name === s.name);
   return impl ? [{ ...impl, usage: s.usage, desc: s.desc, mcp: s.mcp, risk: s.risk, hidden: s.hidden, args: s.args }] : [];
 });

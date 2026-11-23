@@ -10,7 +10,22 @@ async fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
+
+    // `spall mcp`: the stdio bridge to a running spall's MCP server (#58).
+    // Its logs go to stderr; stdout carries only JSON-RPC.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("mcp") {
+        let args = match spall::mcp_bridge::parse(&argv[2..], |k| std::env::var(k).ok()) {
+            Ok(a) => a,
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(2);
+            }
+        };
+        return spall::mcp_bridge::run(args).await;
+    }
 
     let config = Config::parse();
     let listener = tokio::net::TcpListener::bind(config.listen)

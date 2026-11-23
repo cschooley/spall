@@ -23,8 +23,26 @@ pub type Refusal = &'static str;
 /// `Ok(())` if the request may proceed. GET and HEAD always may: they
 /// must not change state, and the guard is for the routes that do.
 pub fn check(method: &Method, headers: &HeaderMap) -> Result<(), Refusal> {
+    check_as(method, headers, false)
+}
+
+/// [`check`] for `/mcp` (#58): a client that isn't a browser (no `Origin`,
+/// no `Sec-Fetch-Site`) is allowed, because the route needs a bearer token
+/// no web page can know; a browser's cross-site request is still refused,
+/// and so is anything but JSON (a `DELETE` ending a session has no body).
+pub fn check_mcp(method: &Method, headers: &HeaderMap) -> Result<(), Refusal> {
+    check_as(method, headers, true)
+}
+
+fn check_as(method: &Method, headers: &HeaderMap, headless_ok: bool) -> Result<(), Refusal> {
     if method == Method::GET || method == Method::HEAD {
         return Ok(());
+    }
+    if headless_ok && method == Method::DELETE {
+        let browser = headers.contains_key("origin") || headers.contains_key("sec-fetch-site");
+        if !browser {
+            return Ok(());
+        }
     }
     let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
 
@@ -49,7 +67,7 @@ pub fn check(method: &Method, headers: &HeaderMap) -> Result<(), Refusal> {
         }
     }
 
-    if fetch_site.is_none() && origin.is_none() {
+    if fetch_site.is_none() && origin.is_none() && !headless_ok {
         return Err("request has no Origin or Sec-Fetch-Site; refused");
     }
     Ok(())
@@ -73,6 +91,33 @@ mod tests {
     }
 
     const JSON: (&str, &str) = ("content-type", "application/json");
+
+    #[test]
+    fn mcp_allows_a_headless_client_and_still_refuses_a_browser_cross_site() {
+        let post = Method::POST;
+        assert!(
+            check(&post, &headers(&[JSON])).is_err(),
+            "the UI's routes want a browser's headers"
+        );
+        assert!(
+            check_mcp(&post, &headers(&[JSON])).is_ok(),
+            "an MCP client (the token is checked after)"
+        );
+        assert!(check_mcp(&post, &headers(&[])).is_err(), "JSON only");
+        assert!(check_mcp(&post, &headers(&[JSON, ("origin", "http://evil.test")])).is_err());
+        assert!(check_mcp(&post, &headers(&[JSON, ("sec-fetch-site", "cross-site")])).is_err());
+        assert!(check_mcp(
+            &post,
+            &headers(&[JSON, ("origin", "http://127.0.0.1:3000")])
+        )
+        .is_ok());
+        assert!(
+            check_mcp(&Method::DELETE, &headers(&[])).is_ok(),
+            "ending a session has no body"
+        );
+        assert!(check_mcp(&Method::DELETE, &headers(&[("origin", "http://evil.test")])).is_err());
+        assert!(check(&Method::DELETE, &headers(&[])).is_err());
+    }
     const SAME_SITE: (&str, &str) = ("sec-fetch-site", "same-origin");
     const OWN_ORIGIN: (&str, &str) = ("origin", "http://127.0.0.1:3000");
 

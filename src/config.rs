@@ -85,6 +85,11 @@ pub struct Config {
     #[arg(long, env = "SPALL_ALLOW_UNREDACTED_EXPORT")]
     pub allow_unredacted_export: bool,
 
+    /// Bearer token for the MCP server at /mcp (#58); created (0600) on
+    /// first start. `spall mcp` reads the same file.
+    #[arg(long, env = "SPALL_MCP_TOKEN_FILE", default_value = "/data/mcp-token")]
+    pub mcp_token_file: PathBuf,
+
     /// How often to check the log file for new data, in milliseconds
     #[arg(long, env = "SPALL_POLL_MS", default_value_t = 250, value_parser = clap::value_parser!(u64).range(10..))]
     pub poll_ms: u64,

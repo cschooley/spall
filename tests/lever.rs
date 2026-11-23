@@ -307,6 +307,16 @@ fn spall_config(
                 .into(),
         );
     }
+    if !extra.contains(&"--mcp-token-file") {
+        args.push("--mcp-token-file".into());
+        args.push(
+            token_file
+                .with_file_name("mcp-token")
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+    }
     args.extend(extra.iter().map(|s| s.to_string()));
     spall::config::Config::try_parse_from(args).unwrap()
 }
@@ -2911,4 +2921,652 @@ async fn approve_for_the_task_widens_it_and_deny_lets_it_try_another_way() {
     )
     .await;
     assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+}
+
+/// An MCP client over spall's streamable HTTP (#58).
+struct Mcp {
+    addr: SocketAddr,
+    token: String,
+    session: Option<String>,
+    next: u64,
+}
+
+impl Mcp {
+    fn new(addr: SocketAddr, token_file: &FsPath) -> Self {
+        let token = std::fs::read_to_string(token_file.with_file_name("mcp-token"))
+            .unwrap()
+            .trim()
+            .to_string();
+        Mcp {
+            addr,
+            token,
+            session: None,
+            next: 0,
+        }
+    }
+
+    fn headers(&self) -> String {
+        let mut h = format!("Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\nAuthorization: Bearer {}\r\n", self.token);
+        if let Some(s) = &self.session {
+            h.push_str(&format!("Mcp-Session-Id: {s}\r\n"));
+        }
+        h
+    }
+
+    async fn raw(&self, path: &str, msg: &serde_json::Value) -> String {
+        send_text(
+            self.addr,
+            "POST",
+            path,
+            &msg.to_string(),
+            Some(&self.headers()),
+        )
+        .await
+    }
+
+    async fn initialize(&mut self, query: &str) -> String {
+        let res = self
+            .raw(
+                &format!("/mcp{query}"),
+                &serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "claude-code", "version": "1"}}}),
+            )
+            .await;
+        self.session = res.lines().find_map(|l| {
+            l.to_ascii_lowercase()
+                .strip_prefix("mcp-session-id: ")
+                .map(|s| s.trim().to_string())
+        });
+        res
+    }
+
+    async fn rpc(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
+        self.next += 1;
+        let res = self
+            .raw("/mcp", &serde_json::json!({"jsonrpc": "2.0", "id": self.next, "method": method, "params": params}))
+            .await;
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+        body_json(&res)
+    }
+
+    /// A tool call: (text, is_error).
+    async fn call(&mut self, name: &str, args: serde_json::Value) -> (String, bool) {
+        let v = self
+            .rpc(
+                "tools/call",
+                serde_json::json!({"name": name, "arguments": args}),
+            )
+            .await;
+        let r = &v["result"];
+        (
+            r["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            r["isError"] == true,
+        )
+    }
+}
+
+#[tokio::test]
+async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let token = dir.path().join("api-token");
+    let mut m = Mcp::new(spall, &token);
+
+    // No token, a wrong one, or no session: refused.
+    let init = serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}});
+    let res = send_text(
+        spall,
+        "POST",
+        "/mcp?task=T-1",
+        &init.to_string(),
+        Some("Content-Type: application/json\r\n"),
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 401"), "{res}");
+    let res = send_text(
+        spall,
+        "POST",
+        "/mcp?task=T-1",
+        &init.to_string(),
+        Some("Content-Type: application/json\r\nAuthorization: Bearer nope\r\n"),
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 401"), "{res}");
+    let res = m
+        .raw(
+            "/mcp",
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .await;
+    assert!(res.starts_with("HTTP/1.1 404"), "{res}");
+
+    let res = m.initialize("?task=T-1").await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let v = body_json(&res);
+    assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
+    assert!(v["result"]["instructions"]
+        .as_str()
+        .unwrap()
+        .contains("task T-1 (now running)"));
+    assert!(m.session.is_some());
+
+    let tools = m.rpc("tools/list", serde_json::json!({})).await;
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "filter",
+            "open",
+            "replay",
+            "hosts",
+            "rules",
+            "task",
+            "propose_finding"
+        ]
+    );
+
+    // Reads come back wrapped as untrusted, and are logged as reads.
+    let (text, is_err) = m.call("open", serde_json::json!({"id": "e1"})).await;
+    assert!(!is_err, "{text}");
+    assert!(
+        text.contains("<untrusted-") && text.contains("\"id\": \"e1\""),
+        "{text}"
+    );
+    let (text, _) = m
+        .call(
+            "filter",
+            serde_json::json!({"query": "host:example.com status:2xx"}),
+        )
+        .await;
+    assert!(text.contains("exchange(s)"), "{text}");
+    assert!(
+        stub.exchange_queries()
+            .iter()
+            .any(|q| q.contains("host=example.com") && q.contains("status=2xx")),
+        "{:?}",
+        stub.exchange_queries()
+    );
+
+    // A safe replay inside scope goes; an unsafe one stops at approval.
+    let (text, is_err) = m.call("replay", serde_json::json!({"id": "e1"})).await;
+    assert!(
+        !is_err && text.starts_with("sent: replay r-e1 of e1"),
+        "{text}"
+    );
+    assert_eq!(
+        stub.replays()[0]["meta"],
+        serde_json::json!({"actor": "agent", "task": "T-1"})
+    );
+    let (text, is_err) = m
+        .call(
+            "replay",
+            serde_json::json!({"id": "e1", "method": "POST", "yes": true}),
+        )
+        .await;
+    assert!(
+        is_err && text.starts_with("paused (yes is ignored"),
+        "{text}"
+    );
+    assert!(text.contains("Don't retry it"), "{text}");
+    assert_eq!(stub.replays().len(), 1);
+    let (text, _) = m.call("task", serde_json::json!({})).await;
+    assert!(
+        text.starts_with("Waiting on the tester's approval"),
+        "{text}"
+    );
+    let (text, is_err) = m.call("task", serde_json::json!({"id": "T-9"})).await;
+    assert!(is_err && text.contains("only its own task"), "{text}");
+
+    // What an agent never gets, whatever it asks.
+    for name in ["scope", "promote", "export", "roe", "estop"] {
+        let (text, is_err) = m.call(name, serde_json::json!({})).await;
+        assert!(is_err && text.contains("Ask the tester"), "{name}: {text}");
+    }
+    let (text, is_err) = m.call("curl", serde_json::json!({})).await;
+    assert!(is_err && text.contains("not offered to agents"), "{text}");
+    let refused = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "command" && r["actor"] == "agent")
+        .count();
+    assert_eq!(refused, 6, "every refused tool call is audited");
+    let started = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "mcp")
+        .count();
+    assert_eq!(started, 1);
+
+    // Unknown methods, notifications and ping.
+    let v = m.rpc("resources/list", serde_json::json!({})).await;
+    assert_eq!(v["error"]["code"], -32601);
+    let res = m
+        .raw(
+            "/mcp",
+            &serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        )
+        .await;
+    assert!(res.starts_with("HTTP/1.1 202"), "{res}");
+    assert_eq!(
+        m.rpc("ping", serde_json::json!({})).await["result"],
+        serde_json::json!({})
+    );
+
+    // Ending the session.
+    let res = send_text(spall, "DELETE", "/mcp", "", Some(&m.headers())).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = m
+        .raw(
+            "/mcp",
+            &serde_json::json!({"jsonrpc": "2.0", "id": 9, "method": "ping"}),
+        )
+        .await;
+    assert!(res.starts_with("HTTP/1.1 404"), "{res}");
+    let _ = r;
+}
+
+#[tokio::test]
+async fn mcp_gets_the_same_host_and_origin_checks_as_the_ui() {
+    let (dir, _stub, spall, _r) = agent_setup("{}").await;
+    let m = Mcp::new(spall, &dir.path().join("api-token"));
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
+        .to_string();
+    // DNS rebinding: a page on evil.test resolving to 127.0.0.1.
+    let res = send_text(spall, "POST", "/mcp?task=T-1", &body, Some(&m.headers())).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "baseline: {res}");
+    let mut s = TcpStream::connect(spall).await.unwrap();
+    let req = format!(
+        "POST /mcp?task=T-1 HTTP/1.1\r\nHost: evil.test\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        m.headers(),
+        body.len()
+    );
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    assert!(out.starts_with("HTTP/1.1 403"), "{out}");
+    // A cross-site page, even with the token somehow.
+    let res = send_text(
+        spall,
+        "POST",
+        "/mcp?task=T-1",
+        &body,
+        Some(&format!("{}Origin: http://evil.test\r\n", m.headers())),
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 403"), "{res}");
+    let res = send_text(
+        spall,
+        "POST",
+        "/mcp?task=T-1",
+        &body,
+        Some(&format!("{}Sec-Fetch-Site: cross-site\r\n", m.headers())),
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 403"), "{res}");
+    let res = send_text(spall, "GET", "/mcp", "", Some(&m.headers())).await;
+    assert!(res.starts_with("HTTP/1.1 405"), "{res}");
+}
+
+#[tokio::test]
+async fn an_mcp_session_without_a_task_gets_a_draft_that_sends_nothing() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let mut m = Mcp::new(spall, &dir.path().join("api-token"));
+    let res = m.initialize("?goal=map%20the%20API&role=mapper").await;
+    assert!(
+        body_json(&res)["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("task T-2 (now draft)"),
+        "{res}"
+    );
+    let t = task_of(&r, "T-2");
+    assert_eq!(
+        (t.goal.as_str(), t.asked_by.as_str()),
+        ("map the API", "agent (claude-code)")
+    );
+    let (text, is_err) = m.call("replay", serde_json::json!({"id": "e1"})).await;
+    assert!(is_err && text.contains("T-2 is draft"), "{text}");
+    assert!(stub.replays().is_empty());
+    let (text, _) = m.call("task", serde_json::json!({})).await;
+    assert!(text.starts_with("It hasn't started"), "{text}");
+
+    // A finished task can't be bound; nor any task once agents are off.
+    send_text(spall, "PATCH", "/api/tasks/T-1", r#"{"op":"halt"}"#, None).await;
+    let mut m2 = Mcp::new(spall, &dir.path().join("api-token"));
+    let v = body_json(&m2.initialize("?task=T-1").await);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("never runs again"),
+        "{v}"
+    );
+    send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":false}}"#,
+        None,
+    )
+    .await;
+    let v = body_json(&m2.initialize("").await);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("don't allow agents"),
+        "{v}"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_proposes_findings_only_with_real_evidence_and_a_human_decides() {
+    let (dir, stub, spall, _r) = agent_setup("{}").await;
+    stub.push("e2");
+    let mut m = Mcp::new(spall, &dir.path().join("api-token"));
+    m.initialize("?task=T-1").await;
+    let propose = |ex: &str, param: &str| serde_json::json!({"exchange_id": ex, "rule": "WSTG-INPV-05", "message": "id looks injectable", "parameter": param, "level": "warning"});
+
+    // Evidence must be traffic this task sent or read.
+    let (text, is_err) = m.call("propose_finding", propose("e1", "id")).await;
+    assert!(
+        is_err && text.contains("sent or read") && text.contains("e1"),
+        "{text}"
+    );
+    m.call("open", serde_json::json!({"id": "e1"})).await;
+    let (text, is_err) = m.call("propose_finding", serde_json::json!({"exchange_id": "e1", "rule": "WSTG-INPV-05", "message": "m", "evidence": ["e2"]})).await;
+    assert!(is_err && text.contains(": e2"), "{text}");
+
+    let (text, is_err) = m.call("propose_finding", propose("e1", "id")).await;
+    assert!(!is_err && text.starts_with("proposed c-"), "{text}");
+    let list = body_json(&get_text(spall, "/api/candidates").await);
+    let c = &list["candidates"][0];
+    assert_eq!(c["flagged_by"], "agent:T-1");
+    assert_eq!(
+        c["finding"]["properties"]["flux/status"], "candidate",
+        "a candidate, for a human"
+    );
+    let cid = c["id"].as_str().unwrap().to_string();
+    let rec = audit_records(&dir.path().join("api-token"))
+        .into_iter()
+        .find(|r| r["action"] == "candidate")
+        .unwrap();
+    assert_eq!(
+        (rec["actor"].as_str(), rec["task"].as_str()),
+        (Some("agent"), Some("T-1"))
+    );
+    assert!(rec["reason"].as_str().unwrap().starts_with("propose c-"));
+
+    // The same thing again: the agent learns it's a duplicate.
+    let (text, is_err) = m.call("propose_finding", propose("e1", "id")).await;
+    assert!(
+        is_err && text.starts_with(&format!("duplicate: {cid}")),
+        "{text}"
+    );
+    // Rejected by the tester: the agent is told not to raise it again.
+    let res = send_text(
+        spall,
+        "PATCH",
+        &format!("/api/candidates/{cid}"),
+        r#"{"op":"reject","justification":"parameterized query"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let (text, is_err) = m.call("propose_finding", propose("e1", "id")).await;
+    assert!(
+        is_err && text.contains("set it aside") && text.contains("parameterized query"),
+        "{text}"
+    );
+
+    // Triaged like a flagged one; promote and export stay a human's.
+    let other = {
+        let (t, _) = m.call("propose_finding", propose("e1", "q")).await;
+        t
+    };
+    let cid2 = other.split_whitespace().nth(1).unwrap().to_string();
+    for name in ["promote", "export"] {
+        let (text, is_err) = m
+            .call(name, serde_json::json!({"candidate_id": cid2}))
+            .await;
+        assert!(
+            is_err && text.contains("agents may never run export commands"),
+            "{text}"
+        );
+    }
+    let res = send_text(
+        spall,
+        "PATCH",
+        &format!("/api/candidates/{cid2}"),
+        r#"{"op":"confirm"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+
+    // A per-task cap on proposals.
+    for i in 2..spall::agent::MAX_PROPOSALS {
+        let (text, is_err) = m
+            .call("propose_finding", propose("e1", &format!("p{i}")))
+            .await;
+        assert!(!is_err, "{i}: {text}");
+    }
+    let (text, is_err) = m.call("propose_finding", propose("e1", "one-more")).await;
+    assert!(is_err && text.contains("cap per task"), "{text}");
+}
+
+#[tokio::test]
+async fn injected_instructions_in_traffic_stay_data_and_change_nothing() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let corpus: Vec<String> = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/injection-corpus.txt"
+    ))
+    .unwrap()
+    .lines()
+    .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    .map(String::from)
+    .collect();
+    assert!(corpus.len() >= 10);
+    for (i, p) in corpus.iter().enumerate() {
+        let id = format!("inj{i}");
+        let mut e: serde_json::Value = serde_json::from_str(&entry(&id)).unwrap();
+        e["res_body"] = p.clone().into();
+        e["res_headers"] = serde_json::json!([["x-note", p], ["content-type", "text/html"]]);
+        e["url"] = format!("http://example.com/{id}?next={}", p.replace(' ', "+")).into();
+        stub.push_json(&id, e.to_string());
+    }
+    let mut m = Mcp::new(spall, &dir.path().join("api-token"));
+    m.initialize("?task=T-1").await;
+    let scope_before = r.engagements.scope().entries();
+    for (i, p) in corpus.iter().enumerate() {
+        let (text, is_err) = m
+            .call("open", serde_json::json!({"id": format!("inj{i}")}))
+            .await;
+        assert!(!is_err, "{text}");
+        // Exactly one wrapper, with one nonce, and the payload inside it.
+        let opens: Vec<&str> = text
+            .match_indices("<untrusted-")
+            .map(|(k, _)| &text[k + 11..k + 27])
+            .collect();
+        let closes: Vec<&str> = text
+            .match_indices("</untrusted-")
+            .map(|(k, _)| &text[k + 12..k + 28])
+            .collect();
+        assert_eq!((opens.len(), closes.len()), (1, 1), "{p}\n{text}");
+        assert_eq!(opens[0], closes[0]);
+        let start = text.find("<untrusted-").unwrap();
+        let end = text.find("</untrusted-").unwrap();
+        assert!(text.starts_with(spall::untrusted::PREAMBLE));
+        let probe = p
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .replace("untrusted-", "untrusted_");
+        let inside = &text[start..end];
+        assert!(
+            inside.contains(&probe.replace('"', "\\\"")) || inside.contains(&probe),
+            "{probe} kept as data: {inside}"
+        );
+        assert!(
+            !text[end..].contains(&probe) || probe.len() < 3,
+            "nothing after the wrapper"
+        );
+    }
+    // And whatever the payloads ask for, the server refuses.
+    for (name, args) in [
+        ("scope", serde_json::json!({"op": "all", "on": true})),
+        (
+            "roe",
+            serde_json::json!({"op": "set", "field": "agents", "value": "yes"}),
+        ),
+        ("estop", serde_json::json!({"clear": true})),
+        ("promote", serde_json::json!({"candidate_id": "c-00000000"})),
+        ("export", serde_json::json!({"unredacted": true})),
+    ] {
+        let (text, is_err) = m.call(name, args).await;
+        assert!(is_err, "{name}: {text}");
+    }
+    let (text, is_err) = m.call("replay", serde_json::json!({"id": "offsite"})).await;
+    assert!(
+        is_err && text.starts_with("refused"),
+        "evil.test stays out of scope: {text}"
+    );
+    let (text, is_err) = m
+        .call(
+            "replay",
+            serde_json::json!({"id": "e1", "yes": true, "method": "DELETE"}),
+        )
+        .await;
+    assert!(
+        is_err && text.starts_with("paused"),
+        "yes confirms nothing: {text}"
+    );
+    assert_eq!(
+        r.engagements.scope().entries(),
+        scope_before,
+        "scope unchanged"
+    );
+    assert!(stub.replays().is_empty(), "nothing was sent");
+}
+
+#[tokio::test]
+async fn claude_code_over_stdio_reads_replays_and_proposes_and_an_unsafe_send_waits() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let (dir, stub, spall, _r) = agent_setup("{}").await;
+    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_spall"))
+        .args([
+            "mcp",
+            "--url",
+            &format!("http://127.0.0.1:{}", spall.port()),
+            "--task",
+            "T-1",
+        ])
+        .env("SPALL_MCP_TOKEN_FILE", dir.path().join("mcp-token"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    async fn rpc(
+        stdin: &mut tokio::process::ChildStdin,
+        lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+        msg: serde_json::Value,
+        answer: bool,
+    ) -> serde_json::Value {
+        stdin
+            .write_all(format!("{msg}\n").as_bytes())
+            .await
+            .unwrap();
+        stdin.flush().await.unwrap();
+        if !answer {
+            return serde_json::Value::Null;
+        }
+        let got = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        serde_json::from_str(&got).unwrap()
+    }
+    let init = rpc(&mut stdin, &mut lines, serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": {"name": "claude-code", "version": "2"}}}), true).await;
+    assert_eq!(init["result"]["protocolVersion"], "2025-03-26");
+    rpc(
+        &mut stdin,
+        &mut lines,
+        serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        false,
+    )
+    .await;
+    let call = |id: u64, name: &str, args: serde_json::Value| serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": args}});
+    let text = |v: &serde_json::Value| {
+        v["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let v = rpc(
+        &mut stdin,
+        &mut lines,
+        call(2, "filter", serde_json::json!({"query": "example.com"})),
+        true,
+    )
+    .await;
+    assert!(text(&v).contains("e1"), "{v}");
+    let v = rpc(
+        &mut stdin,
+        &mut lines,
+        call(3, "open", serde_json::json!({"id": "e1"})),
+        true,
+    )
+    .await;
+    assert!(text(&v).contains("<untrusted-"), "{v}");
+    let v = rpc(
+        &mut stdin,
+        &mut lines,
+        call(4, "replay", serde_json::json!({"id": "e1"})),
+        true,
+    )
+    .await;
+    assert!(text(&v).starts_with("sent"), "{v}");
+    let v = rpc(&mut stdin, &mut lines, call(5, "propose_finding", serde_json::json!({"exchange_id": "e1", "rule": "WSTG-INFO-05", "message": "comments leak paths"})), true).await;
+    assert!(text(&v).starts_with("proposed c-"), "{v}");
+    let v = rpc(
+        &mut stdin,
+        &mut lines,
+        call(
+            6,
+            "replay",
+            serde_json::json!({"id": "e1", "method": "PUT"}),
+        ),
+        true,
+    )
+    .await;
+    assert_eq!(v["result"]["isError"], true);
+    assert!(text(&v).starts_with("paused"), "{v}");
+    assert_eq!(stub.replays().len(), 1, "the unsafe one waits for a human");
+
+    drop(stdin);
+    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(status.success());
+    let ended = audit_records(&dir.path().join("api-token"))
+        .into_iter()
+        .any(|r| {
+            r["action"] == "mcp"
+                && r["reason"]
+                    .as_str()
+                    .unwrap_or("")
+                    .starts_with("session ended")
+        });
+    assert!(ended, "the bridge ends its session on EOF");
 }

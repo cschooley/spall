@@ -93,6 +93,9 @@ pub struct Command {
     pub mcp: bool,
     /// Left out of help, completion and anything offered to an agent.
     pub hidden: bool,
+    /// The palette and console have it. Off only for an agent's own tool
+    /// (`propose_finding`; a human flags instead).
+    pub ui: bool,
     /// The arguments as a JSON Schema object.
     args: fn() -> Value,
 }
@@ -111,6 +114,7 @@ impl Command {
             "risk": self.risk,
             "mcp": self.mcp,
             "hidden": self.hidden,
+            "ui": self.ui,
             "args": self.args(),
         })
     }
@@ -160,9 +164,11 @@ pub static COMMANDS: &[Command] = &[
         name: "help",
         usage: "help",
         desc: "this list",
+        // tools/list is an agent's help.
         risk: Risk::Read,
-        mcp: true,
+        mcp: false,
         hidden: false,
+        ui: true,
         args: none,
     },
     Command {
@@ -172,6 +178,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: true,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[(
@@ -189,15 +196,33 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: true,
         hidden: false,
-        args: || obj(&[("id", id("the exchange id"))], &["id"]),
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    ("id", id("the exchange id")),
+                    (
+                        "body_offset",
+                        json!({"type": "integer", "minimum": 0, "description": "agents: the first body byte to show (bodies show 4 KiB by default)"}),
+                    ),
+                    (
+                        "body_length",
+                        json!({"type": "integer", "minimum": 1, "maximum": 65536, "description": "agents: how many body bytes to show"}),
+                    ),
+                ],
+                &["id"],
+            )
+        },
     },
     Command {
         name: "curl",
         usage: "curl",
         desc: "the selected exchange as a curl command (also copied)",
+        // The clipboard is the tester's; an agent reads exchanges with open.
         risk: Risk::Read,
-        mcp: true,
+        mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[("id", id("the exchange id; default: the selected one"))],
@@ -214,6 +239,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Send,
         mcp: true,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -250,6 +276,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Policy,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -281,6 +308,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Policy,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -311,6 +339,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Policy,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -352,6 +381,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Policy,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -370,6 +400,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: true,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[(
@@ -388,6 +419,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Record,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -423,6 +455,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Export,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[
@@ -440,6 +473,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Export,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[(
@@ -457,7 +491,48 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: true,
         hidden: false,
+        ui: true,
         args: || obj(&[("text", text("match id, title or CWE"))], &[]),
+    },
+    Command {
+        name: "task",
+        usage: "task [id]",
+        desc: "a task: goal, status, constraints, spend, and what it waits on (an agent sees only its own)",
+        risk: Risk::Read,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", text("the task, like T-3; an agent's default and only choice is its own"))], &[]),
+    },
+    Command {
+        name: "propose_finding",
+        usage: "propose_finding",
+        desc: "propose a candidate finding with evidence from this task's own traffic; a human triages and promotes it",
+        // The agent's one write into findings (#60): it proposes, a human
+        // decides. The tester flags instead.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: || {
+            obj(
+                &[
+                    ("exchange_id", id("the exchange that shows it: one this task sent or read")),
+                    ("rule", text("a rule id from rules, like WSTG-INPV-05")),
+                    ("message", text("what was found, for the tester")),
+                    ("parameter", text("the parameter or location, if any")),
+                    (
+                        "level",
+                        one_of(&["error", "warning", "note", "none"], "SARIF level"),
+                    ),
+                    (
+                        "evidence",
+                        json!({"type": "array", "items": id("an exchange"), "description": "more exchanges (replays) backing it: ones this task sent or read"}),
+                    ),
+                ],
+                &["exchange_id", "rule", "message"],
+            )
+        },
     },
     Command {
         name: "ca",
@@ -467,6 +542,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: none,
     },
     Command {
@@ -476,6 +552,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[(
@@ -493,6 +570,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: none,
     },
     Command {
@@ -502,6 +580,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: none,
     },
     Command {
@@ -511,6 +590,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || obj(&[("view", one_of(&VIEWS, "the view"))], &["view"]),
     },
     Command {
@@ -520,6 +600,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || obj(&[("name", one_of(&THEMES, "the theme"))], &["name"]),
     },
     Command {
@@ -529,6 +610,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: none,
     },
     Command {
@@ -538,6 +620,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: || {
             obj(
                 &[(
@@ -555,6 +638,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: false,
+        ui: true,
         args: none,
     },
     Command {
@@ -564,6 +648,7 @@ pub static COMMANDS: &[Command] = &[
         risk: Risk::Read,
         mcp: false,
         hidden: true,
+        ui: true,
         args: none,
     },
 ];
@@ -758,7 +843,16 @@ mod tests {
         }
         let god = find("god").unwrap();
         assert!(god.hidden && !god.mcp);
-        assert!(find("propose_finding").is_none(), "that's #60");
+        let p = find("propose_finding").unwrap();
+        assert_eq!(
+            (p.risk, p.mcp, p.ui),
+            (Risk::Record, true, false),
+            "the agent's, not the console's"
+        );
+        assert!(COMMANDS
+            .iter()
+            .filter(|c| !c.ui)
+            .all(|c| c.name == "propose_finding"));
     }
 
     #[test]
@@ -766,7 +860,15 @@ mod tests {
         let offered: Vec<&str> = offered().map(|c| c.name).collect();
         assert_eq!(
             offered,
-            ["help", "filter", "open", "curl", "replay", "hosts", "rules"]
+            [
+                "filter",
+                "open",
+                "replay",
+                "hosts",
+                "rules",
+                "task",
+                "propose_finding"
+            ]
         );
         for c in COMMANDS.iter().filter(|c| !c.risk.agent_may()) {
             assert!(!c.mcp, "{} is {:?} and flagged mcp", c.name, c.risk);

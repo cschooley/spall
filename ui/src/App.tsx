@@ -7,6 +7,7 @@ import { Inspector, type Tab as InspectorTab } from "./components/Inspector.tsx"
 import { Launcher } from "./components/Launcher.tsx";
 import { EStopButton, HaltBanner } from "./components/EStop.tsx";
 import { clearEStop, engageEStop } from "./lib/estop.ts";
+import { taskLines, taskListLines } from "./lib/tasks.ts";
 import { Rail, VIEWS } from "./components/Rail.tsx";
 import { modKey, ShortcutSheet } from "./components/ShortcutSheet.tsx";
 import { TrafficTable } from "./components/TrafficTable.tsx";
@@ -492,6 +493,11 @@ export function App() {
         return { ok: true, text: `exported ${r.name}${unredacted ? " (UNREDACTED: contains captured credentials)" : " (redacted)"}` };
       },
       rules: loadCatalog,
+      task: async (id) => {
+        const body = await apiJson(id ? `/api/tasks/${encodeURIComponent(id)}` : "/api/tasks");
+        if (typeof body === "string") return body;
+        return id ? taskLines(body) : taskListLines(body);
+      },
       estop: async (action, reason) => {
         const r = action === "clear" ? await clearEStop() : await engageEStop(reason);
         setStatusNonce((n) => n + 1);

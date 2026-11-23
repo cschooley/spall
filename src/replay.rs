@@ -440,6 +440,17 @@ impl Replayer {
     /// 409 with the existing one when a candidate shares its fingerprint
     /// (add evidence to it, or reopen it, instead). Audited.
     pub async fn flag(&self, flag: crate::candidates::Flag) -> Response {
+        self.flag_as(flag, "human", None).await
+    }
+
+    /// [`Replayer::flag`] by `by` (`human`, or `agent:T-3` proposing under
+    /// task `task`, #60). Same rules, same fingerprint match, same audit.
+    pub async fn flag_as(
+        &self,
+        flag: crate::candidates::Flag,
+        by: &str,
+        task: Option<&str>,
+    ) -> Response {
         use crate::candidates::{finding_for, new_id, Candidate};
         if let Err(m) = flag.validate() {
             return error(StatusCode::BAD_REQUEST, &m);
@@ -475,14 +486,19 @@ impl Replayer {
             id: new_id(),
             created: now.clone(),
             updated: now,
-            flagged_by: "human".into(),
+            flagged_by: by.into(),
             promoted: None,
             finding,
         };
         let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
+        if let Some(t) = task {
+            rec.actor = "agent".into();
+            rec.task = Some(t.into());
+        }
         rec.method = Some(entry.method.clone());
         rec.target = Some(entry.url.clone());
-        rec.reason = Some(format!("flag {} as {}", c.id, rule.id));
+        let verb = if task.is_some() { "propose" } else { "flag" };
+        rec.reason = Some(format!("{verb} {} as {}", c.id, rule.id));
         rec.result_id = Some(c.id.clone());
         match self.candidates.add(&eng, c) {
             Ok(c) => {

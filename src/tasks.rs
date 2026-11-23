@@ -375,6 +375,8 @@ pub enum Event {
     },
     /// A registry command the task ran.
     Command { name: String, outcome: String },
+    /// An exchange the task read (evidence it may cite, #60).
+    Read { exchange: String },
     /// An approval asked for or given (#56).
     Approval { what: String, outcome: String },
     /// A model turn (#63), as text.

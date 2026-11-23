@@ -65,6 +65,8 @@ pub struct AppState {
     pub proxy_address: Arc<str>,
     /// Replay through the action gate; `None` without the lever API.
     pub replayer: Option<Arc<crate::replay::Replayer>>,
+    /// The MCP server (#58); `None` without the lever API.
+    pub mcp: Option<Arc<crate::mcp::Server>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -97,6 +99,12 @@ pub fn router(state: AppState) -> Router {
         .route("/api/export", post(api_export))
         .route("/api/tasks", get(api_tasks).post(api_tasks_new))
         .route("/api/estop", post(api_estop))
+        .route(
+            "/mcp",
+            post(crate::mcp::handle_post)
+                .get(crate::mcp::handle_get)
+                .delete(crate::mcp::handle_delete),
+        )
         .route("/api/estop/clear", post(api_estop_clear))
         .route("/api/tasks/{id}", get(api_task).patch(api_task_patch))
         .route("/api/redaction", get(api_redaction))
@@ -956,7 +964,11 @@ async fn guard(State(state): State<AppState>, req: Request, next: Next) -> Respo
     };
     let mut res = if !allowed {
         (StatusCode::FORBIDDEN, "host not allowed\n").into_response()
-    } else if let Err(why) = crate::csrf::check(req.method(), req.headers()) {
+    } else if let Err(why) = if req.uri().path() == "/mcp" {
+        crate::csrf::check_mcp(req.method(), req.headers())
+    } else {
+        crate::csrf::check(req.method(), req.headers())
+    } {
         // Same-origin guard (#17), on every route so new ones are covered
         // by default. No CORS headers are ever sent.
         json_error(StatusCode::FORBIDDEN, why)
@@ -1048,6 +1060,7 @@ mod tests {
             ui,
             proxy_address: Arc::from("127.0.0.1:8080"),
             replayer: None,
+            mcp: None,
         })
     }
 

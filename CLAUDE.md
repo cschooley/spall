@@ -197,6 +197,22 @@ task with the reason). Grants die with a finished task. UI: approval
 cards in Engagement's Waiting on you, `N waiting on approval` in the
 status bar (`waiting_approval` in `/api/status`).
 
+MCP (#58, #59, #60, done): hand-rolled JSON-RPC, no SDK. `src/mcp.rs`
+serves streamable HTTP at `/mcp` (bearer token from `--mcp-token-file`,
+created 0600; `csrf::check_mcp` allows a headless client but refuses a
+browser's cross-site request); `src/mcp_bridge.rs` is `spall mcp`, a stdio
+bridge that forwards to the running spall (one process owns the stores).
+Sessions bind to `?task=T-n` or make a draft. Tools are
+`commands::offered()` run in `src/agent.rs` (shared with #63's host): every
+call goes through `admit_audited` and is logged to the task. Anything
+carrying traffic goes through `src/untrusted.rs`: nonce-wrapped, labeled,
+4 KiB bodies by default, credentials masked with flux's redaction (always,
+for agents; replay by id doesn't need them). `propose_finding` needs
+evidence the task sent or read (`Event::Request`/`Event::Read`), is
+`flagged_by: agent:T-n`, capped at `agent::MAX_PROPOSALS` per task. The
+registry's `ui` flag marks agent-only commands (`propose_finding`).
+`tests/fixtures/injection-corpus.txt` is the injection corpus.
+
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
 

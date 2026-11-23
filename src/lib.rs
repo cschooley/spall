@@ -2,6 +2,7 @@
 //! taphttp's lever API when configured (`--taphttp-api`), otherwise from
 //! tailing its `--log-file`.
 
+pub mod agent;
 pub mod audit;
 pub mod candidates;
 pub mod commands;
@@ -13,6 +14,8 @@ pub mod gate;
 pub mod hosts;
 pub mod hub;
 pub mod lever;
+pub mod mcp;
+pub mod mcp_bridge;
 pub mod openapi;
 pub mod replay;
 pub mod roe;
@@ -20,6 +23,7 @@ pub mod rules;
 pub mod scope_list;
 pub mod tailer;
 pub mod tasks;
+pub mod untrusted;
 pub mod web;
 
 use anyhow::Context;
@@ -163,6 +167,7 @@ pub struct App {
     hub: Arc<Hub>,
     lever: Option<Arc<lever::Lever>>,
     pub replayer: Option<Arc<replay::Replayer>>,
+    pub mcp: Option<Arc<mcp::Server>>,
 }
 
 /// Open the stores and the audit log for `config`; errors stop spall.
@@ -244,11 +249,28 @@ pub fn build(config: Config) -> anyhow::Result<App> {
         }
         None => None,
     };
+    let mcp = match &replayer {
+        Some(r) => {
+            let token = mcp::token(&config.mcp_token_file).with_context(|| {
+                format!(
+                    "the MCP token {} (set --mcp-token-file / SPALL_MCP_TOKEN_FILE)",
+                    config.mcp_token_file.display()
+                )
+            })?;
+            let tools = agent::Tools {
+                replayer: r.clone(),
+                hub: hub.clone(),
+            };
+            Some(mcp::arc(tools, token))
+        }
+        None => None,
+    };
     Ok(App {
         config,
         hub,
         lever,
         replayer,
+        mcp,
     })
 }
 
@@ -259,6 +281,7 @@ impl App {
             hub,
             lever,
             replayer,
+            mcp,
         } = self;
         let state = web::AppState {
             hub: hub.clone(),
@@ -267,6 +290,7 @@ impl App {
             ui: Arc::new(web::EmbeddedUi),
             proxy_address: Arc::from(config.proxy_address.as_str()),
             replayer,
+            mcp,
         };
         let source = async {
             match lever {

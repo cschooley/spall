@@ -111,3 +111,37 @@ export async function decide(id: string, d: Decision): Promise<string | null> {
   const body = await apiJson(`/api/tasks/${encodeURIComponent(id)}`, { method: "PATCH", body: d });
   return typeof body === "string" ? body : null;
 }
+
+/** One line per task, newest first, for the console's `task`. */
+export function taskListLines(v: unknown): string[] {
+  const list = (v as { tasks?: unknown } | null)?.tasks;
+  if (!Array.isArray(list) || list.length === 0) return ["no tasks in this engagement"];
+  return list.map((x) => {
+    const t = (x ?? {}) as Record<string, unknown>;
+    const c = (t.constraints ?? {}) as Record<string, unknown>;
+    return `${str(t.id).padEnd(6)} ${str(t.status).padEnd(19)} ${str(t.role).padEnd(8)} ${num(t.spent)}/${num(c.budget)}  ${str(t.goal)}`;
+  });
+}
+
+/** A task's details, for the console's `task <id>`. */
+export function taskLines(v: unknown): string[] {
+  const t = (v ?? {}) as Record<string, unknown>;
+  const c = (t.constraints ?? {}) as Record<string, unknown>;
+  const list = (k: string, empty: string) => {
+    const a = c[k];
+    return Array.isArray(a) && a.length ? a.filter((x) => typeof x === "string").join(", ") : empty;
+  };
+  const out = [
+    `${str(t.id)} · ${str(t.status)} · ${str(t.role)} · asked by ${str(t.asked_by)}`,
+    `goal: ${str(t.goal)}`,
+    `spent ${num(t.spent)} of ${num(c.budget)} requests · time limit ${num(c.time_limit_minutes)} min`,
+    `hosts: ${list("hosts", "the engagement's scope")} · methods: ${list("methods", "any the RoE allows")} · without asking: ${list("safe_methods", "none")}`,
+  ];
+  if (str(t.reason)) out.push(`why: ${str(t.reason)}`);
+  if (str(t.note)) out.push(`note: ${str(t.note)}`);
+  const p = (t.pending ?? null) as Record<string, unknown> | null;
+  if (p) out.push(`waiting on approval: ${str(p.method)} ${str(p.target)} (${str(p.reason)})`);
+  const log = Array.isArray(t.log) ? t.log : [];
+  out.push(`log: ${log.length} entr${log.length === 1 ? "y" : "ies"}`);
+  return out;
+}
