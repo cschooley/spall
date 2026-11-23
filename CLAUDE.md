@@ -134,8 +134,13 @@ credential highlighting comes from flux (`/api/redaction`).
 Not started. Read docs/architecture.md (M6) and docs/ux.md (Tasks,
 intake, roles) first: MCP server (read traffic, replay through the gate,
 `propose_finding`; never promote or export), Tasks view, approval gates,
-e-stop, attribution (taphttp `meta` / `source`). Existing issues #1, #2,
-#13. File the rest before building, as with M3 and M4.
+e-stop, attribution (taphttp `meta` / `source`). Filed: umbrella #68,
+three phases. Phase 1 (agent over MCP): #53 server-side registry
+(first: the UI registry is TS-only), #54 tasks, #55 gate for agents,
+#56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
+#60 `propose_finding`, #61 Tasks view, #62 attribution. Phase 2 (spall
+as host): #63 host, #64 roles, #65 intake, #66 quad, #67 buttons.
+Phase 3 (sensors): #13, #1, #2.
 
 Open questions to raise, not decide alone: making Engagement the home
 view now that "waiting on you" has content (docs/ux.md).
