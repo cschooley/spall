@@ -161,8 +161,21 @@ trimmed; the gate (#55) must still check `Constraints::layer` with
 `roe::check_layers` and `allows_host`, since the RoE can narrow later.
 Humans get create/approve/edit-draft/halt over `/api/tasks`; the machine
 moves (`transition`), `log` and `charge` (budget, one lock) are
-server-internal for #55/#58. #57's per-task resume will need a
-`halted` → `approved` move the status machine doesn't have yet.
+server-internal for #55/#58.
+
+**Halted is forever** (decided 2026-11-23): an e-stop, a human halt or a
+stop condition ends the task for good; it is never resumed or retried,
+and the work is given again as a new task. Don't add a way out of
+`halted`.
+
+Agents through the gate (#55, done): `Replayer::agent_replay(task, req)`
+is the only agent send path and has no HTTP route (tests reach it via
+`spall::build` + `App::run`). Outside the RoE or scope denies; outside
+the task (host, method, unsafe send, time limit, budget) pauses the task
+to `waiting_on_approval` with the exact request in `Task::pending`.
+Agents never get or use a confirm token. The budget is charged under the
+task store's lock just before sending; taphttp `meta` is
+`{"actor":"agent","task":"T-n"}`; audit records carry `task`.
 
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.

@@ -152,6 +152,21 @@ pub async fn tail_into_hub(
 /// Run the traffic source (lever API follower or log tailer) and the web
 /// server on an already-bound listener.
 pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> {
+    build(config)?.run(listener).await
+}
+
+/// Everything `serve` runs, opened from the config. Tests hold `replayer`
+/// to drive the agent side (`Replayer::agent_replay`), which has no HTTP
+/// route of its own: no browser request can claim to be an agent.
+pub struct App {
+    config: Config,
+    hub: Arc<Hub>,
+    lever: Option<Arc<lever::Lever>>,
+    pub replayer: Option<Arc<replay::Replayer>>,
+}
+
+/// Open the stores and the audit log for `config`; errors stop spall.
+pub fn build(config: Config) -> anyhow::Result<App> {
     let hub = Arc::new(Hub::new(config.history));
     let lever = config.taphttp_api.as_ref().map(|base| {
         Arc::new(lever::Lever::new(
@@ -219,6 +234,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 engagements,
                 all_hosts: std::sync::atomic::AtomicBool::new(config.scope.allows_all()),
                 limiter: std::sync::Mutex::new(roe::Limiter::default()),
+                task_limiters: std::sync::Mutex::new(std::collections::HashMap::new()),
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,
                 candidates,
@@ -228,33 +244,50 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
         }
         None => None,
     };
-    let state = web::AppState {
-        hub: hub.clone(),
-        allowed_hosts: Arc::new(config.allowed_hosts.clone()),
-        lever: lever.clone(),
-        ui: Arc::new(web::EmbeddedUi),
-        proxy_address: Arc::from(config.proxy_address.as_str()),
+    Ok(App {
+        config,
+        hub,
+        lever,
         replayer,
-    };
-    let source = async {
-        match lever {
-            Some(lever) => {
-                tracing::info!("traffic from taphttp lever API at {}", lever.base());
-                lever::Follower::new(lever, hub, config.history).run().await
+    })
+}
+
+impl App {
+    pub async fn run(self, listener: TcpListener) -> anyhow::Result<()> {
+        let App {
+            config,
+            hub,
+            lever,
+            replayer,
+        } = self;
+        let state = web::AppState {
+            hub: hub.clone(),
+            allowed_hosts: Arc::new(config.allowed_hosts.clone()),
+            lever: lever.clone(),
+            ui: Arc::new(web::EmbeddedUi),
+            proxy_address: Arc::from(config.proxy_address.as_str()),
+            replayer,
+        };
+        let source = async {
+            match lever {
+                Some(lever) => {
+                    tracing::info!("traffic from taphttp lever API at {}", lever.base());
+                    lever::Follower::new(lever, hub, config.history).run().await
+                }
+                None => {
+                    tail_into_hub(
+                        LineTailer::new(&config.log_file),
+                        Duration::from_millis(config.poll_ms),
+                        hub,
+                    )
+                    .await
+                }
             }
-            None => {
-                tail_into_hub(
-                    LineTailer::new(&config.log_file),
-                    Duration::from_millis(config.poll_ms),
-                    hub,
-                )
-                .await
-            }
+        };
+        tokio::select! {
+            r = axum::serve(listener, web::router(state)) => r.context("web server failed"),
+            r = source => r,
         }
-    };
-    tokio::select! {
-        r = axum::serve(listener, web::router(state)) => r.context("web server failed"),
-        r = source => r,
     }
 }
 

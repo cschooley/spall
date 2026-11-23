@@ -368,6 +368,9 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         check: Option<String>,
         outcome: String,
+        /// The target's status code, when it answered.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
     },
     /// A registry command the task ran.
     Command { name: String, outcome: String },
@@ -419,6 +422,24 @@ pub struct Task {
     pub started: Option<String>,
     pub ended: Option<String>,
     pub log: Vec<Entry>,
+    /// While waiting on approval: the exact request that paused it (#55),
+    /// for the approval to show and bind its token to (#56).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending: Option<Pending>,
+}
+
+/// A request a task paused on, exactly as it would be sent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Pending {
+    pub method: String,
+    pub target: String,
+    pub host_header: Option<String>,
+    /// taphttp's `POST /replay` body, attribution included.
+    pub request: serde_json::Value,
+    /// Why it needs a human.
+    pub reason: String,
+    pub asked: String,
 }
 
 impl Task {
@@ -534,6 +555,11 @@ pub enum Error {
     /// Not allowed from where the task stands.
     Conflict(String),
     Full,
+    /// The task has spent its request budget.
+    Spent {
+        id: String,
+        budget: u32,
+    },
     Save(String),
 }
 
@@ -543,6 +569,9 @@ impl std::fmt::Display for Error {
             Error::NotFound(id) => write!(f, "no task {id}"),
             Error::Invalid(m) | Error::Conflict(m) => f.write_str(m),
             Error::Full => write!(f, "this engagement has {MAX_PER_ENGAGEMENT} tasks already"),
+            Error::Spent { id, budget } => {
+                write!(f, "{id} has spent its budget of {budget} requests")
+            }
             Error::Save(m) => write!(f, "saving tasks: {m}"),
         }
     }
@@ -672,6 +701,7 @@ impl Store {
                 started: None,
                 ended: None,
                 log: Vec::new(),
+                pending: None,
             };
             book.next += 1;
             book.tasks.push(t.clone());
@@ -770,6 +800,74 @@ impl Store {
         })
     }
 
+    /// Pause running task `id` on `pending`: it waits on a human (#56).
+    /// Only from running; a task already waiting stays as it is.
+    pub fn pause(&self, engagement: &str, id: &str, pending: Pending) -> Result<Task, Error> {
+        self.change(engagement, |book| {
+            let t = find(book, id)?;
+            let now = pending.asked.clone();
+            let what = format!("{} {}: {}", pending.method, pending.target, pending.reason);
+            move_to(
+                t,
+                Status::WaitingOnApproval,
+                Some(pending.reason.clone()),
+                &now,
+            )?;
+            t.pending = Some(pending);
+            push(
+                t,
+                Event::Approval {
+                    what,
+                    outcome: "asked".into(),
+                },
+                &now,
+            )?;
+            Ok(t.clone())
+        })
+    }
+
+    /// Log a request sent under task `id`, then apply its stop conditions:
+    /// reaching one halts the task (for good; the work is given again).
+    pub fn log_send(
+        &self,
+        engagement: &str,
+        id: &str,
+        event: Event,
+        now: &str,
+    ) -> Result<Task, Error> {
+        self.change(engagement, |book| {
+            let t = find(book, id)?;
+            if t.status.finished() {
+                return Err(Error::Conflict(format!(
+                    "{} is {}",
+                    t.id,
+                    t.status.as_str()
+                )));
+            }
+            push(t, event, now)?;
+            let count = |f: fn(u16) -> bool| {
+                t.log
+                    .iter()
+                    .filter(|e| matches!(e.event, Event::Request { status: Some(s), .. } if f(s)))
+                    .count()
+            };
+            let stop = &t.constraints.stop;
+            let hit = match (stop.server_errors, stop.throttled) {
+                (Some(n), _) if count(|s| (500..600).contains(&s)) >= n as usize => {
+                    Some(format!("stop condition: {n} server errors (5xx)"))
+                }
+                (_, Some(n)) if count(|s| s == 429) >= n as usize => {
+                    Some(format!("stop condition: throttled {n} times (429)"))
+                }
+                _ => None,
+            };
+            if let Some(why) = hit {
+                move_to(t, Status::Halted, Some(why), now)?;
+            }
+            Ok(t.clone())
+        })
+    }
+
     /// Charge one request to task `id`: only while it runs and has budget
     /// left. Checked and counted under one lock, so racing sends can't
     /// overspend.
@@ -784,10 +882,10 @@ impl Store {
                 )));
             }
             if t.spent >= t.constraints.budget {
-                return Err(Error::Conflict(format!(
-                    "{} has spent its budget of {} requests",
-                    t.id, t.constraints.budget
-                )));
+                return Err(Error::Spent {
+                    id: t.id.clone(),
+                    budget: t.constraints.budget,
+                });
             }
             t.spent += 1;
             t.updated = now.into();
@@ -836,6 +934,11 @@ fn move_to(t: &mut Task, to: Status, reason: Option<String>, now: &str) -> Resul
     }
     t.status = to;
     t.reason = reason.clone();
+    // Leaving the wait (resumed, failed, halted) drops the request: an
+    // approval can never outlive it.
+    if to != Status::WaitingOnApproval {
+        t.pending = None;
+    }
     if to == Status::Running && t.started.is_none() {
         t.started = Some(now.into());
     }
@@ -1372,9 +1475,10 @@ mod tests {
         for left in (0..10).rev() {
             assert_eq!(store.charge("eng-1", "T-1", NOW).unwrap(), left);
         }
-        assert!(
-            matches!(store.charge("eng-1", "T-1", NOW), Err(Error::Conflict(m)) if m.contains("budget of 10"))
-        );
+        assert!(matches!(
+            store.charge("eng-1", "T-1", NOW),
+            Err(Error::Spent { budget: 10, .. })
+        ));
         store
             .log(
                 "eng-1",
@@ -1385,6 +1489,7 @@ mod tests {
                     target: "https://app.test/".into(),
                     check: Some("WSTG-INFO-02".into()),
                     outcome: "sent".into(),
+                    status: Some(200),
                 },
                 NOW,
             )
@@ -1598,5 +1703,138 @@ mod tests {
         });
         assert_eq!(ok, 25);
         assert_eq!(store.get("e", "T-1").unwrap().spent, 25);
+    }
+
+    fn running(store: &Store, constraints: Requested) {
+        let (r, s) = (rules(), scope());
+        let n = New {
+            constraints,
+            ..new("t")
+        };
+        store.create("e", &n, "human", &cx(&r, &s)).unwrap();
+        store.apply("e", "T-1", &Op::Approve, &cx(&r, &s)).unwrap();
+        store
+            .transition("e", "T-1", Status::Running, None, NOW)
+            .unwrap();
+    }
+
+    fn sent(status: u16) -> Event {
+        Event::Request {
+            exchange: Some("r-1".into()),
+            method: "GET".into(),
+            target: "https://app.test/".into(),
+            check: None,
+            outcome: "sent".into(),
+            status: Some(status),
+        }
+    }
+
+    #[test]
+    fn a_pause_keeps_the_request_until_the_wait_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(&store, Requested::default());
+        let p = Pending {
+            method: "POST".into(),
+            target: "https://app.test/x".into(),
+            host_header: None,
+            request: serde_json::json!({"id": "e1", "method": "POST"}),
+            reason: "T-1 sends POST only with a human's approval".into(),
+            asked: NOW.into(),
+        };
+        let t = store.pause("e", "T-1", p.clone()).unwrap();
+        assert_eq!(
+            (t.status, t.pending.as_ref()),
+            (Status::WaitingOnApproval, Some(&p))
+        );
+        assert_eq!(t.reason.as_deref(), Some(p.reason.as_str()));
+        let asked = serde_json::to_value(t.log.last().unwrap()).unwrap();
+        assert_eq!(
+            (asked["kind"].as_str(), asked["outcome"].as_str()),
+            (Some("approval"), Some("asked"))
+        );
+        assert!(
+            matches!(store.pause("e", "T-1", p.clone()), Err(Error::Conflict(_))),
+            "already waiting"
+        );
+        // Kept across a restart, then dropped when the wait ends.
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.get("e", "T-1").unwrap().pending, Some(p));
+        let (r, s) = (rules(), scope());
+        let (_, halted) = store
+            .apply(
+                "e",
+                "T-1",
+                &Op::Halt {
+                    reason: String::new(),
+                },
+                &cx(&r, &s),
+            )
+            .unwrap();
+        assert!(
+            halted.pending.is_none(),
+            "no approval outlives the task's wait"
+        );
+    }
+
+    #[test]
+    fn a_stop_condition_halts_the_task_for_good() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(
+            &store,
+            Requested {
+                stop: Some(Stop {
+                    server_errors: Some(2),
+                    throttled: Some(3),
+                }),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            store.log_send("e", "T-1", sent(500), NOW).unwrap().status,
+            Status::Running
+        );
+        assert_eq!(
+            store.log_send("e", "T-1", sent(429), NOW).unwrap().status,
+            Status::Running
+        );
+        assert_eq!(
+            store.log_send("e", "T-1", sent(200), NOW).unwrap().status,
+            Status::Running
+        );
+        let t = store.log_send("e", "T-1", sent(503), NOW).unwrap();
+        assert_eq!(t.status, Status::Halted);
+        assert_eq!(
+            t.reason.as_deref(),
+            Some("stop condition: 2 server errors (5xx)")
+        );
+        assert!(
+            Status::ALL.iter().all(|s| !Status::Halted.can_become(*s)),
+            "never resumed"
+        );
+        assert!(matches!(
+            store.log_send("e", "T-1", sent(200), NOW),
+            Err(Error::Conflict(_))
+        ));
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(
+            &store,
+            Requested {
+                stop: Some(Stop {
+                    server_errors: None,
+                    throttled: Some(2),
+                }),
+                ..Default::default()
+            },
+        );
+        store.log_send("e", "T-1", sent(429), NOW).unwrap();
+        let t = store.log_send("e", "T-1", sent(429), NOW).unwrap();
+        assert_eq!(
+            t.reason.as_deref(),
+            Some("stop condition: throttled 2 times (429)")
+        );
     }
 }

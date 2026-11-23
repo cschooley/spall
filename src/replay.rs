@@ -90,10 +90,33 @@ pub fn validate(req: &ReplayRequest) -> Result<(), String> {
     Ok(())
 }
 
+/// Who is sending: the tester (the browser or console), or an agent under
+/// a task (#55). Only spall's own code picks this; no request can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Who<'a> {
+    Human,
+    Agent { task: &'a str },
+}
+
+impl Who<'_> {
+    /// The attribution taphttp stores with the replay (`meta`).
+    pub fn meta(&self) -> serde_json::Value {
+        match self {
+            Who::Human => serde_json::json!({ "actor": "human" }),
+            Who::Agent { task } => serde_json::json!({ "actor": "agent", "task": task }),
+        }
+    }
+}
+
 /// The body for taphttp's `POST /replay`: only the fields the caller
 /// changed, plus spall's attribution. serde_json's map is ordered, so the
 /// bytes are canonical and double as the confirmation fingerprint input.
 pub fn forward_body(req: &ReplayRequest) -> Vec<u8> {
+    forward_body_as(req, Who::Human)
+}
+
+/// [`forward_body`], attributed to `who`.
+pub fn forward_body_as(req: &ReplayRequest, who: Who) -> Vec<u8> {
     let mut m = serde_json::Map::new();
     m.insert("id".into(), req.id.clone().into());
     if let Some(v) = &req.method {
@@ -112,7 +135,7 @@ pub fn forward_body(req: &ReplayRequest) -> Vec<u8> {
     if let Some(v) = &req.body_encoding {
         m.insert("body_encoding".into(), v.clone().into());
     }
-    m.insert("meta".into(), serde_json::json!({ "actor": "human" }));
+    m.insert("meta".into(), who.meta());
     serde_json::to_vec(&serde_json::Value::Object(m)).unwrap_or_default()
 }
 
@@ -181,6 +204,8 @@ pub struct Replayer {
     pub limiter: Mutex<Limiter>,
     pub confirmations: Confirmations,
     pub audit: AuditLog,
+    /// Each task's own rate ceiling (#55), on top of the engagement's.
+    pub task_limiters: Mutex<std::collections::HashMap<String, Limiter>>,
     /// Candidates flagged in each engagement (#42).
     pub candidates: crate::candidates::Store,
     /// Tasks in each engagement (#54).
@@ -206,10 +231,16 @@ fn task_error(e: &crate::tasks::Error) -> Response {
     let st = match e {
         T::NotFound(_) => StatusCode::NOT_FOUND,
         T::Invalid(_) => StatusCode::BAD_REQUEST,
-        T::Conflict(_) | T::Full => StatusCode::CONFLICT,
+        T::Conflict(_) | T::Full | T::Spent { .. } => StatusCode::CONFLICT,
         T::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(st, &e.to_string())
+}
+
+/// Whether a failed charge was the budget running out (rather than the
+/// task leaving `running`).
+fn task_of_budget(e: &crate::tasks::Error) -> bool {
+    matches!(e, crate::tasks::Error::Spent { .. })
 }
 
 /// At most 80 characters of free text, on one line, for an audit reason.
@@ -689,6 +720,126 @@ impl Replayer {
         }
     }
 
+    /// Why an agent's send is outside its task, if it is: a host or
+    /// method it wasn't given, a send it must ask for, its time or budget
+    /// used up. `None` sends (the engagement's rules already allowed it).
+    fn outside_task(
+        &self,
+        t: &crate::tasks::Task,
+        scope: &Scope,
+        eff: &Effective,
+        decision: &Decision,
+    ) -> Option<String> {
+        let c = &t.constraints;
+        let id = &t.id;
+        let hosts = std::iter::once(gate::url_host(&eff.url).unwrap_or_default())
+            .chain(eff.host_header.clone());
+        for h in hosts {
+            if !c.allows_host(scope, &h) {
+                return Some(format!(
+                    "{} isn't one of {id}'s hosts ({})",
+                    scope.explain(&h).host,
+                    c.hosts.join(", ")
+                ));
+            }
+        }
+        let layer = c.layer(&self.engagements.active().rules);
+        if let Err(e) = layer.check_action(Actor::Agent, Class::Send, &eff.method) {
+            return Some(format!(
+                "{id}: {}",
+                e.replace("the rules of engagement", "the task's constraints")
+            ));
+        }
+        if !layer.is_safe(&eff.method) {
+            return Some(format!(
+                "{id} sends {} only with a human's approval",
+                eff.method
+            ));
+        }
+        if let Decision::NeedsConfirmation(r) = decision {
+            return Some(r.clone());
+        }
+        if let Some(started) = t
+            .started
+            .as_deref()
+            .and_then(|s| s.parse::<jiff::Timestamp>().ok())
+        {
+            let limit = jiff::SignedDuration::from_mins(i64::from(c.time_limit_minutes));
+            if jiff::Timestamp::now().duration_since(started) >= limit {
+                return Some(format!(
+                    "{id} has used its time limit ({} min)",
+                    c.time_limit_minutes
+                ));
+            }
+        }
+        if t.spent >= c.budget {
+            return Some(format!(
+                "{id} has spent its budget of {} requests",
+                c.budget
+            ));
+        }
+        None
+    }
+
+    /// Pause task `id` on this exact request (#55): it waits on a human,
+    /// and the agent is told why. Nothing is sent, and no token is issued.
+    fn pause(
+        &self,
+        rec: &mut Record,
+        engagement: &str,
+        id: &str,
+        eff: &Effective,
+        body: &[u8],
+        reason: String,
+    ) -> Response {
+        let pending = crate::tasks::Pending {
+            method: eff.method.clone(),
+            target: eff.url.clone(),
+            host_header: eff.host_header.clone(),
+            request: serde_json::from_slice(body).unwrap_or_default(),
+            reason: reason.clone(),
+            asked: taphttp_types::Timestamp::now().to_string(),
+        };
+        rec.decision = Some("pause");
+        rec.reason = Some(reason.clone());
+        match self.tasks.pause(engagement, id, pending) {
+            Ok(_) => {
+                rec.outcome = Outcome::Paused;
+                self.audit(rec);
+                json(
+                    StatusCode::ACCEPTED,
+                    serde_json::json!({
+                        "decision": "paused",
+                        "task": id,
+                        "status": "waiting_on_approval",
+                        "reason": reason,
+                    }),
+                )
+            }
+            Err(e) => {
+                // Already waiting, halted meanwhile, or not saved: in every
+                // case nothing is sent.
+                rec.outcome = Outcome::Denied;
+                rec.error = Some(e.to_string());
+                self.audit(rec);
+                json(
+                    StatusCode::CONFLICT,
+                    serde_json::json!({ "error": format!("{reason}; and {e}"), "decision": "deny" }),
+                )
+            }
+        }
+    }
+
+    /// Add a send to its task's log (a no-op for a human's).
+    fn task_log(&self, engagement: &str, entry: Option<(String, crate::tasks::Event)>) {
+        if let Some((id, ev)) = entry {
+            let now = taphttp_types::Timestamp::now().to_string();
+            if let Err(e) = self.tasks.log_send(engagement, &id, ev, &now) {
+                tracing::warn!("task {id}: logging a send: {e}");
+            }
+        }
+    }
+
     fn audit(&self, rec: &Record) {
         let mut rec = rec.clone();
         if rec.engagement.is_none() {
@@ -712,16 +863,93 @@ impl Replayer {
                 )
             }
         };
+        self.replay(Who::Human, req).await
+    }
+
+    /// An agent's replay under `task` (#55). Same path as a human's, with
+    /// the task as credentials: the engagement's rules and scope deny;
+    /// anything outside the task's own constraints pauses the task for a
+    /// human instead; agents never get or use a confirmation token. The
+    /// MCP server (#58) and the agent host (#63) call this; there is no
+    /// HTTP route to it.
+    pub async fn agent_replay(&self, task: &str, req: ReplayRequest) -> Response {
+        self.replay(Who::Agent { task }, req).await
+    }
+
+    async fn replay(&self, who: Who<'_>, req: ReplayRequest) -> Response {
+        let actor_name = match who {
+            Who::Human => "human",
+            Who::Agent { .. } => "agent",
+        };
+        let task_id = match who {
+            Who::Human => None,
+            Who::Agent { task } => Some(task.to_string()),
+        };
+        let stamp = |mut rec: Record| {
+            rec.actor = actor_name.into();
+            rec.task = task_id.clone();
+            rec
+        };
         if let Err(msg) = validate(&req) {
             if crate::web::valid_exchange_id(&req.id) {
-                let mut rec = Record::new("replay", &req.id, Outcome::Error);
+                let mut rec = stamp(Record::new("replay", &req.id, Outcome::Error));
                 rec.error = Some(msg.clone());
                 self.audit(&rec);
             }
             return error(StatusCode::BAD_REQUEST, &msg);
         }
 
-        let mut rec = Record::new("replay", &req.id, Outcome::Error);
+        let mut rec = stamp(Record::new("replay", &req.id, Outcome::Error));
+
+        // An agent acts only under a running task of the active engagement,
+        // and never confirms: approvals come from a human (#56).
+        let engagement = self.engagements.active();
+        let task = match who {
+            Who::Human => None,
+            Who::Agent { task } => {
+                let refuse = |rec: &mut Record, why: String| {
+                    rec.outcome = Outcome::Denied;
+                    rec.decision = Some("deny");
+                    rec.reason = Some(why.clone());
+                    self.audit(rec);
+                    json(
+                        StatusCode::FORBIDDEN,
+                        serde_json::json!({ "error": why, "decision": "deny" }),
+                    )
+                };
+                if req.confirm.is_some() {
+                    return refuse(
+                        &mut rec,
+                        "agents don't confirm sends: a human approves them (the task waits)".into(),
+                    );
+                }
+                match self.tasks.get(&engagement.id, task) {
+                    None => {
+                        return refuse(
+                            &mut rec,
+                            format!("no task {task} in engagement {}", engagement.id),
+                        )
+                    }
+                    Some(t) if t.status != crate::tasks::Status::Running => {
+                        let why = t
+                            .reason
+                            .as_deref()
+                            .map(|r| format!(": {r}"))
+                            .unwrap_or_default();
+                        let after = if t.status == crate::tasks::Status::Halted {
+                            "; a halted task never sends again (give the work as a new task)"
+                        } else {
+                            ""
+                        };
+                        return refuse(
+                            &mut rec,
+                            format!("{task} is {}{why}{after}", t.status.as_str()),
+                        );
+                    }
+                    Some(t) => Some(t),
+                }
+            }
+        };
 
         // The original, to know where this would go.
         let original = match self
@@ -765,7 +993,6 @@ impl Replayer {
         rec.host_header = eff.host_header.clone();
         let scope = self.scope_now();
         rec.scope_all = scope.allows_all();
-        let engagement = self.engagements.active();
         let layers = [&engagement.rules];
         let decision = gate::decide(
             &scope,
@@ -775,7 +1002,10 @@ impl Replayer {
                 method: &eff.method,
                 url: &eff.url,
                 host_header: eff.host_header.as_deref(),
-                actor: Actor::Human,
+                actor: match who {
+                    Who::Human => Actor::Human,
+                    Who::Agent { .. } => Actor::Agent,
+                },
                 class: Class::Send,
             },
             jiff::Timestamp::now(),
@@ -783,9 +1013,39 @@ impl Replayer {
         rec.decision = Some(decision.kind());
         rec.reason = decision.reason().map(String::from);
 
-        let body = forward_body(&req);
+        let body = forward_body_as(&req, who);
+        let log = |outcome: &str, exchange: Option<String>, status: Option<u16>| {
+            task.as_ref().map(|t| {
+                let ev = crate::tasks::Event::Request {
+                    exchange,
+                    method: eff.method.clone(),
+                    target: eff.url.clone(),
+                    check: None,
+                    outcome: outcome.into(),
+                    status,
+                };
+                (t.id.clone(), ev)
+            })
+        };
+        // The task's own layer: outside it, the task pauses for a human.
+        if let (Some(t), false) = (&task, matches!(decision, Decision::Deny(_))) {
+            if let Some(reason) = self.outside_task(t, &scope, &eff, &decision) {
+                return self.pause(&mut rec, &engagement.id, &t.id, &eff, &body, reason);
+            }
+        }
         match &decision {
             Decision::Deny(reason) => {
+                rec.outcome = Outcome::Denied;
+                self.audit(&rec);
+                self.task_log(&engagement.id, log("denied", None, None));
+                return json(
+                    StatusCode::FORBIDDEN,
+                    serde_json::json!({ "error": reason, "decision": "deny" }),
+                );
+            }
+            // An agent's send that needs confirmation paused above; should
+            // that ever change, it is refused here, never sent.
+            Decision::NeedsConfirmation(reason) if task.is_some() => {
                 rec.outcome = Outcome::Denied;
                 self.audit(&rec);
                 return json(
@@ -845,11 +1105,27 @@ impl Replayer {
         // The rate ceiling counts sends only: denials and unconfirmed
         // attempts above never reach it.
         let rate = roe::rate_of(&layers);
-        let wait = self
+        let mut wait = self
             .limiter
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .take(rate, Instant::now());
+        let mut rate = rate;
+        if let (Ok(()), Some(t)) = (&wait, &task) {
+            // Then the task's own ceiling (never above the engagement's).
+            let task_rate =
+                roe::rate_of(&[&engagement.rules, &t.constraints.layer(&engagement.rules)]);
+            if task_rate != rate {
+                rate = task_rate;
+                wait = self
+                    .task_limiters
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .entry(format!("{}/{}", engagement.id, t.id))
+                    .or_default()
+                    .take(task_rate, Instant::now());
+            }
+        }
         if let Err(wait) = wait {
             let secs = wait.as_secs_f64();
             let msg = format!(
@@ -859,6 +1135,7 @@ impl Replayer {
             rec.outcome = Outcome::RateLimited;
             rec.error = Some(msg.clone());
             self.audit(&rec);
+            self.task_log(&engagement.id, log("rate_limited", None, None));
             let mut res = json(
                 StatusCode::TOO_MANY_REQUESTS,
                 serde_json::json!({ "error": msg, "decision": "rate_limited", "retry_after_secs": secs }),
@@ -871,7 +1148,55 @@ impl Replayer {
             return res;
         }
 
-        match self.lever.post_json("/replay", body, REPLAY_TIMEOUT).await {
+        // Charged last, under the task store's lock: racing sends can't
+        // overspend, and a task halted meanwhile sends nothing.
+        if let Some(t) = &task {
+            if let Err(e) = self.tasks.charge(
+                &engagement.id,
+                &t.id,
+                &taphttp_types::Timestamp::now().to_string(),
+            ) {
+                // Spent by a racing send since the check above: ask for more.
+                if task_of_budget(&e) {
+                    let reason = format!(
+                        "{} has spent its budget of {} requests",
+                        t.id, t.constraints.budget
+                    );
+                    return self.pause(&mut rec, &engagement.id, &t.id, &eff, &body, reason);
+                }
+                rec.outcome = Outcome::Denied;
+                rec.decision = Some("deny");
+                rec.reason = Some(e.to_string());
+                self.audit(&rec);
+                return json(
+                    StatusCode::CONFLICT,
+                    serde_json::json!({ "error": e.to_string(), "decision": "deny" }),
+                );
+            }
+        }
+
+        let sent = self.lever.post_json("/replay", body, REPLAY_TIMEOUT).await;
+        if task.is_some() {
+            let (outcome, id, status) = match &sent {
+                Ok((st, bytes)) => {
+                    let v = upstream_json(bytes);
+                    let id = v.get("id").and_then(|x| x.as_str()).map(String::from);
+                    let code = v
+                        .get("status")
+                        .and_then(|x| x.as_u64())
+                        .and_then(|x| u16::try_from(x).ok());
+                    let outcome = match *st {
+                        StatusCode::OK => "sent",
+                        StatusCode::BAD_GATEWAY if id.is_some() => "failed",
+                        _ => "error",
+                    };
+                    (outcome, id, code)
+                }
+                Err(_) => ("error", None, None),
+            };
+            self.task_log(&engagement.id, log(outcome, id, status));
+        }
+        match sent {
             Ok((status, bytes)) => {
                 rec.upstream_status = Some(status.as_u16());
                 let value = upstream_json(&bytes);

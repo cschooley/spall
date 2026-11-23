@@ -244,6 +244,31 @@ async fn start_spall_with(
 ) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let config = spall_config(api, token_file, extra);
+    tokio::spawn(spall::serve(config, listener));
+    addr
+}
+
+/// Like `start_spall_with`, keeping hold of the replayer: the agent side
+/// (`agent_replay`) has no HTTP route, so tests call it directly.
+async fn start_agent_spall(
+    api: SocketAddr,
+    token_file: &FsPath,
+    extra: &[&str],
+) -> (SocketAddr, Arc<spall::replay::Replayer>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = spall::build(spall_config(Some(api), token_file, extra)).unwrap();
+    let replayer = app.replayer.clone().unwrap();
+    tokio::spawn(app.run(listener));
+    (addr, replayer)
+}
+
+fn spall_config(
+    api: Option<SocketAddr>,
+    token_file: &FsPath,
+    extra: &[&str],
+) -> spall::config::Config {
     let mut args = vec![
         "spall".to_string(),
         "--taphttp-token-file".into(),
@@ -280,9 +305,7 @@ async fn start_spall_with(
         );
     }
     args.extend(extra.iter().map(|s| s.to_string()));
-    let config = spall::config::Config::try_parse_from(args).unwrap();
-    tokio::spawn(spall::serve(config, listener));
-    addr
+    spall::config::Config::try_parse_from(args).unwrap()
 }
 
 async fn http_get(addr: SocketAddr, path: &str) -> TcpStream {
@@ -2208,4 +2231,351 @@ async fn tasks_survive_a_restart() {
     )
     .await;
     assert_eq!(body_json(&next)["id"], "T-2");
+}
+
+/// spall following a stub with e1, `example.com` in scope, agents allowed,
+/// and task T-1 (made from `constraints`) approved and running.
+async fn agent_setup(
+    constraints: &str,
+) -> (
+    tempfile::TempDir,
+    Stub,
+    SocketAddr,
+    Arc<spall::replay::Replayer>,
+) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    stub.push_json(
+        "offsite",
+        entry("offsite").replace("http://example.com/", "http://evil.test/"),
+    );
+    let (spall, r) = start_agent_spall(api, &token, &["--scope", "example.com"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        &format!(r#"{{"goal":"map","role":"mapper","constraints":{constraints}}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let eng = r.engagements.active().id;
+    r.tasks
+        .transition(&eng, "T-1", spall::tasks::Status::Running, None, &now())
+        .unwrap();
+    (dir, stub, spall, r)
+}
+
+fn agent_req(json: &str) -> spall::replay::ReplayRequest {
+    serde_json::from_str(json).unwrap()
+}
+
+async fn agent_send(
+    r: &spall::replay::Replayer,
+    task: &str,
+    json: &str,
+) -> (u16, serde_json::Value) {
+    let res = r.agent_replay(task, agent_req(json)).await;
+    let status = res.status().as_u16();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+fn task_of(r: &spall::replay::Replayer, id: &str) -> spall::tasks::Task {
+    r.tasks.get(&r.engagements.active().id, id).unwrap()
+}
+
+#[tokio::test]
+async fn an_agent_sends_under_its_task_attributed_charged_and_logged() {
+    let (dir, stub, _spall, r) = agent_setup(r#"{"budget":5}"#).await;
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1","meta":{"actor":"human"}}"#).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["id"], "r-e1");
+    let sent = stub.replays();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0]["meta"],
+        serde_json::json!({"actor": "agent", "task": "T-1"}),
+        "spall's attribution, never the caller's"
+    );
+
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.spent, 1);
+    let last = serde_json::to_value(t.log.last().unwrap()).unwrap();
+    assert_eq!(last["kind"], "request");
+    assert_eq!(
+        (
+            last["outcome"].as_str(),
+            last["exchange"].as_str(),
+            last["status"].as_u64()
+        ),
+        (Some("sent"), Some("r-e1"), Some(200))
+    );
+
+    let recs = audit_records(&dir.path().join("api-token"));
+    let rec = recs.iter().rev().find(|r| r["action"] == "replay").unwrap();
+    assert_eq!(
+        (
+            rec["actor"].as_str(),
+            rec["task"].as_str(),
+            rec["outcome"].as_str()
+        ),
+        (Some("agent"), Some("T-1"), Some("sent"))
+    );
+
+    // A human's replay is still the human's.
+    let (status, _) = (r.handle(br#"{"id":"e1"}"#).await.status().as_u16(), ());
+    assert_eq!(status, 200);
+    assert_eq!(
+        stub.replays()[1]["meta"],
+        serde_json::json!({"actor": "human"})
+    );
+    assert_eq!(task_of(&r, "T-1").spent, 1, "not charged to the task");
+}
+
+#[tokio::test]
+async fn outside_the_rules_or_scope_denies_outside_the_task_pauses() {
+    let (_dir, stub, spall, r) = agent_setup(r#"{"methods":["GET","POST"]}"#).await;
+
+    // Outside scope: a plain denial; the task keeps running.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"offsite"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("not in scope"),
+        "{body}"
+    );
+    // Outside the RoE: the same.
+    send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"methods":["GET","POST"]}}"#,
+        None,
+    )
+    .await;
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1","method":"DELETE"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(task_of(&r, "T-1").status, spall::tasks::Status::Running);
+
+    // An agent can't confirm, even with a token.
+    let (status, body) =
+        agent_send(&r, "T-1", r#"{"id":"e1","method":"POST","confirm":"abc"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("don't confirm"),
+        "{body}"
+    );
+
+    // Inside the RoE and scope, but a send the task must ask for: pause.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1","method":"POST","body":"x=1"}"#).await;
+    assert_eq!(status, 202, "{body}");
+    assert_eq!(body["decision"], "paused");
+    assert!(body.get("confirm").is_none(), "no token to the agent");
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.status, spall::tasks::Status::WaitingOnApproval);
+    let p = t.pending.expect("the exact request is kept");
+    assert_eq!(
+        (p.method.as_str(), p.target.as_str()),
+        ("POST", "http://example.com/e1")
+    );
+    assert_eq!(
+        p.request,
+        serde_json::json!({"id": "e1", "method": "POST", "body": "x=1", "meta": {"actor": "agent", "task": "T-1"}})
+    );
+    assert!(stub.replays().is_empty(), "nothing was sent");
+
+    // Waiting: nothing more goes out until a human decides.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("waiting_on_approval"),
+        "{body}"
+    );
+    assert!(stub.replays().is_empty());
+}
+
+#[tokio::test]
+async fn a_method_or_host_outside_the_task_pauses() {
+    let (_dir, stub, _spall, r) = agent_setup(r#"{"methods":["GET"]}"#).await;
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1","method":"PUT"}"#).await;
+    assert_eq!(status, 202, "{body}");
+    assert!(
+        body["reason"]
+            .as_str()
+            .unwrap()
+            .contains("the task's constraints"),
+        "{body}"
+    );
+    assert!(stub.replays().is_empty());
+
+    let (_dir, stub, _spall, r) = agent_setup(r#"{"hosts":["example.com"]}"#).await;
+    let (status, body) = agent_send(
+        &r,
+        "T-1",
+        r#"{"id":"e1","req_headers":[["host","other.example.com"]]}"#,
+    )
+    .await;
+    // other.example.com isn't in scope at all: the engagement denies first.
+    assert_eq!(status, 403, "{body}");
+    assert!(stub.replays().is_empty());
+}
+
+#[tokio::test]
+async fn a_halted_finished_or_unapproved_task_cannot_send() {
+    let (_dir, stub, spall, r) = agent_setup("{}").await;
+    let eng = r.engagements.active().id;
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"draft","role":"mapper"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let (status, body) = agent_send(&r, "T-2", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+    assert!(
+        body["error"].as_str().unwrap().contains("T-2 is draft"),
+        "{body}"
+    );
+    let (status, _) = agent_send(&r, "T-9", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+
+    r.tasks
+        .transition(
+            &eng,
+            "T-1",
+            spall::tasks::Status::Done,
+            None,
+            "2026-11-23T16:00:00Z",
+        )
+        .unwrap();
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+    assert!(
+        body["error"].as_str().unwrap().contains("T-1 is done"),
+        "{body}"
+    );
+
+    send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"halt","reason":"stop"}"#,
+        None,
+    )
+    .await;
+    let (status, body) = agent_send(&r, "T-2", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("never sends again"),
+        "{body}"
+    );
+    assert!(stub.replays().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_budget_is_exact_under_racing_sends() {
+    let (_dir, stub, spall, r) = agent_setup(r#"{"budget":5}"#).await;
+    send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"rate_limit":0}}"#,
+        None,
+    )
+    .await;
+    let sends: Vec<_> = (0..20)
+        .map(|_| {
+            let r = r.clone();
+            tokio::spawn(async move { agent_send(&r, "T-1", r#"{"id":"e1"}"#).await.0 })
+        })
+        .collect();
+    let mut codes = Vec::new();
+    for s in sends {
+        codes.push(s.await.unwrap());
+    }
+    assert_eq!(codes.iter().filter(|c| **c == 200).count(), 5, "{codes:?}");
+    assert_eq!(stub.replays().len(), 5, "exactly the budget went out");
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.spent, 5);
+    assert_eq!(
+        t.status,
+        spall::tasks::Status::WaitingOnApproval,
+        "it asks for more"
+    );
+    assert!(t.reason.unwrap().contains("budget of 5"));
+}
+
+fn now() -> String {
+    jiff::Timestamp::now().to_string()
+}
+
+#[tokio::test]
+async fn a_task_past_its_time_limit_pauses() {
+    let (_dir, stub, spall, r) = agent_setup(r#"{"time_limit_minutes":1}"#).await;
+    let eng = r.engagements.active().id;
+    // A second task with the same limit, started two minutes ago.
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"late","role":"mapper","constraints":{"time_limit_minutes":1}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    let past = (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(2)).to_string();
+    r.tasks
+        .transition(&eng, "T-2", spall::tasks::Status::Running, None, &past)
+        .unwrap();
+
+    let (status, body) = agent_send(&r, "T-2", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 202, "{body}");
+    assert!(
+        body["reason"]
+            .as_str()
+            .unwrap()
+            .contains("used its time limit (1 min)"),
+        "{body}"
+    );
+    let (status, _) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 200, "T-1 is inside its minute");
+    assert_eq!(stub.replays().len(), 1);
 }

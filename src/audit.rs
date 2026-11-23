@@ -40,12 +40,17 @@ pub enum Outcome {
     Exported,
     /// A task was made, approved, edited or halted, or that was refused (#54).
     TaskChanged,
+    /// An agent's request was outside its task: the task waits on a human (#55).
+    Paused,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Record {
     pub ts: String,
     pub actor: String,
+    /// The task an agent acted under (#55).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
     /// The active engagement's id when this happened.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engagement: Option<String>,
@@ -83,6 +88,7 @@ impl Record {
         Record {
             ts: taphttp_types::Timestamp::now().to_string(),
             actor: "human".into(),
+            task: None,
             engagement: None,
             action,
             exchange_id: exchange_id.into(),
