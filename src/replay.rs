@@ -183,6 +183,8 @@ pub struct Replayer {
     pub audit: AuditLog,
     /// Candidates flagged in each engagement (#42).
     pub candidates: crate::candidates::Store,
+    /// Tasks in each engagement (#54).
+    pub tasks: crate::tasks::Store,
     /// `--allow-unredacted-export`: the opt-in an unredacted export needs
     /// on top of asking for one (#51).
     pub allow_unredacted_export: bool,
@@ -198,6 +200,34 @@ fn error(status: StatusCode, msg: &str) -> Response {
 
 /// taphttp's body as JSON for the browser: a JSON body as-is, anything
 /// else (a plain-text error) wrapped as a string.
+/// A task store error as an HTTP answer.
+fn task_error(e: &crate::tasks::Error) -> Response {
+    use crate::tasks::Error as T;
+    let st = match e {
+        T::NotFound(_) => StatusCode::NOT_FOUND,
+        T::Invalid(_) => StatusCode::BAD_REQUEST,
+        T::Conflict(_) | T::Full => StatusCode::CONFLICT,
+        T::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error(st, &e.to_string())
+}
+
+/// At most 80 characters of free text, on one line, for an audit reason.
+fn short(s: &str) -> String {
+    let one: String = s
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect();
+    if one.chars().count() > 80 {
+        format!("{}…", one.chars().take(79).collect::<String>())
+    } else {
+        one
+    }
+}
+
 fn upstream_json(body: &[u8]) -> serde_json::Value {
     serde_json::from_slice(body)
         .unwrap_or_else(|_| serde_json::json!({ "error": String::from_utf8_lossy(body).trim() }))
@@ -571,6 +601,90 @@ impl Replayer {
                     CErr::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
                 };
                 error(st, &e.to_string())
+            }
+        }
+    }
+
+    /// The active engagement's tasks, newest first, without their logs.
+    pub fn tasks(&self) -> Vec<serde_json::Value> {
+        let eng = self.engagements.active().id;
+        self.tasks.list(&eng).iter().map(|t| t.summary()).collect()
+    }
+
+    /// One of the active engagement's tasks, log included.
+    pub fn task(&self, id: &str) -> Option<crate::tasks::Task> {
+        self.tasks.get(&self.engagements.active().id, id)
+    }
+
+    /// Make a draft task (#54): only in an engagement whose rules allow
+    /// agents, with a scope, inside its dates. Audited, refusals too.
+    pub fn create_task(&self, new: crate::tasks::New) -> Response {
+        use crate::tasks::{authorized, Context};
+        let e = self.engagements.active();
+        let scope = self.engagements.scope();
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut rec = Record::new("task", "", Outcome::TaskChanged);
+        rec.reason = Some(format!("create: {}", short(&new.goal)));
+        if let Err(why) = authorized(&e.rules, &e.period(), &scope, jiff::Timestamp::now()) {
+            rec.error = Some(why.clone());
+            self.audit(&rec);
+            return error(StatusCode::CONFLICT, &format!("no task: {why}"));
+        }
+        let cx = Context {
+            rules: &e.rules,
+            scope: &scope,
+            now: &now,
+        };
+        match self.tasks.create(&e.id, &new, "human", &cx) {
+            Ok(t) => {
+                rec.reason = Some(format!("create {}", t.id));
+                rec.result_id = Some(t.id.clone());
+                self.audit(&rec);
+                json(
+                    StatusCode::CREATED,
+                    serde_json::to_value(&t).unwrap_or_default(),
+                )
+            }
+            Err(err) => {
+                rec.error = Some(err.to_string());
+                self.audit(&rec);
+                task_error(&err)
+            }
+        }
+    }
+
+    /// A human's change to task `id`: approve, edit a draft, halt (#54).
+    /// Audited with the status before and after.
+    pub fn task_op(&self, id: &str, op: crate::tasks::Op) -> Response {
+        use crate::tasks::{Context, Op};
+        let e = self.engagements.active();
+        let scope = self.engagements.scope();
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut rec = Record::new("task", "", Outcome::TaskChanged);
+        rec.result_id = Some(id.to_string());
+        rec.reason = Some(match &op {
+            Op::Halt { reason } if !reason.trim().is_empty() => {
+                format!("halt {id}: {}", short(reason))
+            }
+            _ => format!("{} {id}", op.name()),
+        });
+        let cx = Context {
+            rules: &e.rules,
+            scope: &scope,
+            now: &now,
+        };
+        match self.tasks.apply(&e.id, id, &op, &cx) {
+            Ok((before, after)) => {
+                rec.changes = Some(serde_json::json!({
+                    "status": { "before": before.status, "after": after.status },
+                }));
+                self.audit(&rec);
+                axum::Json(after).into_response()
+            }
+            Err(err) => {
+                rec.error = Some(err.to_string());
+                self.audit(&rec);
+                task_error(&err)
             }
         }
     }

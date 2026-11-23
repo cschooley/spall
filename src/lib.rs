@@ -19,6 +19,7 @@ pub mod roe;
 pub mod rules;
 pub mod scope_list;
 pub mod tailer;
+pub mod tasks;
 pub mod web;
 
 use anyhow::Context;
@@ -210,6 +211,9 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
             let candidates_dir = config.engagements.join("candidates");
             let candidates = candidates::Store::open(&candidates_dir)
                 .with_context(|| format!("loading candidates from {}", candidates_dir.display()))?;
+            let tasks_dir = config.engagements.join("tasks");
+            let tasks = tasks::Store::open(&tasks_dir)
+                .with_context(|| format!("loading tasks from {}", tasks_dir.display()))?;
             Some(Arc::new(replay::Replayer {
                 lever: lever.clone(),
                 engagements,
@@ -218,6 +222,7 @@ pub async fn serve(config: Config, listener: TcpListener) -> anyhow::Result<()> 
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,
                 candidates,
+                tasks,
                 allow_unredacted_export: config.allow_unredacted_export,
             }))
         }

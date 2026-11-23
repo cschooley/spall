@@ -95,6 +95,8 @@ pub fn router(state: AppState) -> Router {
             get(api_candidate_redaction),
         )
         .route("/api/export", post(api_export))
+        .route("/api/tasks", get(api_tasks).post(api_tasks_new))
+        .route("/api/tasks/{id}", get(api_task).patch(api_task_patch))
         .route("/api/redaction", get(api_redaction))
         .route("/api/ca", get(api_ca))
         .route("/api/ca.pem", get(api_ca_pem))
@@ -525,6 +527,61 @@ async fn api_candidate_redaction(
         return no_candidates();
     };
     r.redaction(&id)
+}
+
+fn no_tasks() -> Response {
+    json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "tasks need taphttp's lever API (start spall with --taphttp-api)",
+    )
+}
+
+/// The active engagement's tasks (#54), newest first, without logs.
+async fn api_tasks(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    axum::Json(serde_json::json!({ "tasks": r.tasks() })).into_response()
+}
+
+/// Make a draft task: `{"goal", "role", "constraints"?, "plan"?, "note"?}`.
+async fn api_tasks_new(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    match serde_json::from_slice::<crate::tasks::New>(&body) {
+        Ok(new) => r.create_task(new),
+        Err(e) => json_error(
+            StatusCode::BAD_REQUEST,
+            &format!(r#"want {{"goal", "role", "constraints"?, "plan"?, "note"?}}: {e}"#),
+        ),
+    }
+}
+
+/// One task of the active engagement, log included.
+async fn api_task(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    match r.task(&id) {
+        Some(t) => axum::Json(t).into_response(),
+        None => json_error(StatusCode::NOT_FOUND, "no such task"),
+    }
+}
+
+/// A human's change to a task: `{"op": "approve" | "halt" | "edit", ...}`.
+async fn api_task_patch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    match serde_json::from_slice::<crate::tasks::Op>(&body) {
+        Ok(op) => r.task_op(&id, op),
+        Err(e) => json_error(StatusCode::BAD_REQUEST, &format!("not a task change: {e}")),
+    }
 }
 
 /// Export the promoted candidates as a flux report (#51):

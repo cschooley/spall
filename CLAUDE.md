@@ -154,6 +154,16 @@ A new command goes in both, or a test fails. Agents run commands only
 through `commands::admit` / `admit_audited`, which refuses `policy` and
 `export` whatever the `mcp` flag says.
 
+Tasks (#54, done): `src/tasks.rs`, stored at
+`<engagements>/tasks/<engagement>.json`. Constraints are resolved
+against the RoE at create/edit and anything wider is refused, not
+trimmed; the gate (#55) must still check `Constraints::layer` with
+`roe::check_layers` and `allows_host`, since the RoE can narrow later.
+Humans get create/approve/edit-draft/halt over `/api/tasks`; the machine
+moves (`transition`), `log` and `charge` (budget, one lock) are
+server-internal for #55/#58. #57's per-task resume will need a
+`halted` → `approved` move the status machine doesn't have yet.
+
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
 

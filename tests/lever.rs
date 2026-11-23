@@ -2022,3 +2022,190 @@ async fn the_command_registry_is_served_from_the_server() {
         (Some("policy"), Some(false))
     );
 }
+
+#[tokio::test]
+async fn tasks_are_made_approved_halted_audited_and_kept_per_engagement() {
+    let (dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let token = dir.path().join("api-token");
+    let new = r#"{"goal":"map example.com","role":"mapper","plan":["crawl"],"constraints":{"methods":["GET"],"budget":20}}"#;
+
+    // Not while the RoE keeps agents out.
+    let res = post_text(spall, "/api/tasks", new, None).await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    assert!(res.contains("don't allow agents"), "{res}");
+    let agents = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    assert!(agents.starts_with("HTTP/1.1 200"), "{agents}");
+
+    // Wider than the RoE: refused, nothing made.
+    let wide = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"g","role":"tester","constraints":{"rate_limit":500}}"#,
+        None,
+    )
+    .await;
+    assert!(
+        wide.starts_with("HTTP/1.1 400") && wide.contains("rate_limit"),
+        "{wide}"
+    );
+    let outside = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"g","role":"tester","constraints":{"hosts":["evil.test"]}}"#,
+        None,
+    )
+    .await;
+    assert!(
+        outside.starts_with("HTTP/1.1 400") && outside.contains("scope"),
+        "{outside}"
+    );
+    let forged = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"g","role":"mapper","status":"running"}"#,
+        None,
+    )
+    .await;
+    assert!(forged.starts_with("HTTP/1.1 400"), "{forged}");
+
+    let res = post_text(spall, "/api/tasks", new, None).await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let t = body_json(&res);
+    assert_eq!(
+        (t["id"].as_str(), t["status"].as_str()),
+        (Some("T-1"), Some("draft"))
+    );
+    assert_eq!(t["constraints"]["methods"], serde_json::json!(["GET"]));
+    assert_eq!(t["constraints"]["rate_limit"], 10.0, "the RoE's, left out");
+    assert_eq!(t["asked_by"], "human");
+
+    let patch = |body: &'static str| send_text(spall, "PATCH", "/api/tasks/T-1", body, None);
+    let start = send_text(spall, "PATCH", "/api/tasks/T-1", r#"{"op":"start"}"#, None).await;
+    assert!(
+        start.starts_with("HTTP/1.1 400"),
+        "a human can't run it by hand: {start}"
+    );
+    let res = patch(r#"{"op":"edit","note":"my boss said"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = patch(r#"{"op":"approve"}"#).await;
+    assert_eq!(body_json(&res)["status"], "approved");
+    let res = patch(r#"{"op":"edit","goal":"something else"}"#).await;
+    assert!(
+        res.starts_with("HTTP/1.1 409") && res.contains("only a draft"),
+        "{res}"
+    );
+    let res = patch(r#"{"op":"halt","reason":"wrong host"}"#).await;
+    let halted = body_json(&res);
+    assert_eq!(
+        (halted["status"].as_str(), halted["reason"].as_str()),
+        (Some("halted"), Some("wrong host"))
+    );
+    let missing = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-9",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(missing.starts_with("HTTP/1.1 404"), "{missing}");
+
+    let list = body_json(&get_text(spall, "/api/tasks").await);
+    let tasks = list["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert!(
+        tasks[0].get("log").is_none() && tasks[0]["log_len"] == 2,
+        "lists leave the log out"
+    );
+    let one = body_json(&get_text(spall, "/api/tasks/T-1").await);
+    assert_eq!(one["log"][1]["to"], "halted");
+    assert_eq!(one["note"], "my boss said");
+
+    let recs: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "task")
+        .collect();
+    let reasons: Vec<&str> = recs.iter().map(|r| r["reason"].as_str().unwrap()).collect();
+    assert!(
+        reasons[0].starts_with("create:") && recs[0]["error"].as_str().unwrap().contains("agents"),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons.contains(&"create T-1")
+            && reasons.contains(&"approve T-1")
+            && reasons.contains(&"halt T-1: wrong host"),
+        "{reasons:?}"
+    );
+    assert!(recs.iter().all(|r| r["outcome"] == "task_changed"));
+    let approve = recs.iter().find(|r| r["reason"] == "approve T-1").unwrap();
+    assert_eq!(
+        approve["changes"]["status"],
+        serde_json::json!({"before": "draft", "after": "approved"})
+    );
+
+    // Another engagement's tasks never show.
+    let other = post_text(spall, "/api/engagements", r#"{"name":"Other"}"#, None).await;
+    assert!(other.starts_with("HTTP/1.1 201"), "{other}");
+    let list = body_json(&get_text(spall, "/api/tasks").await);
+    assert_eq!(list["tasks"], serde_json::json!([]));
+    let res = get_text(spall, "/api/tasks/T-1").await;
+    assert!(res.starts_with("HTTP/1.1 404"), "{res}");
+}
+
+#[tokio::test]
+async fn tasks_survive_a_restart() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    let spall = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"kept","role":"reporter"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+
+    let again = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    eventually("second backfill", || stub.exchange_queries().len() >= 2).await;
+    let t = body_json(&get_text(again, "/api/tasks/T-1").await);
+    assert_eq!(
+        (t["goal"].as_str(), t["status"].as_str()),
+        (Some("kept"), Some("approved"))
+    );
+    let next = post_text(
+        again,
+        "/api/tasks",
+        r#"{"goal":"next","role":"mapper"}"#,
+        None,
+    )
+    .await;
+    assert_eq!(body_json(&next)["id"], "T-2");
+}

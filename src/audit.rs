@@ -38,6 +38,8 @@ pub enum Outcome {
     CandidateChanged,
     /// Promoted findings were exported, or an export was refused (#51).
     Exported,
+    /// A task was made, approved, edited or halted, or that was refused (#54).
+    TaskChanged,
 }
 
 #[derive(Debug, Clone, Serialize)]
