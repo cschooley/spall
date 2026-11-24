@@ -589,6 +589,32 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "report",
+        usage: "report",
+        desc: "file your report on this task for the tester: what you did, what you found, what you proposed, what's left. Filing again replaces it; done: true also ends the task (only while it runs)",
+        // A record on the agent's own task (#81): nothing sent, nothing
+        // granted. The tester writes notes instead.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: || {
+            obj(
+                &[
+                    (
+                        "text",
+                        text("the report, plain text (at most 16,000 characters)"),
+                    ),
+                    (
+                        "done",
+                        flag("true when you're finished: the task ends as done"),
+                    ),
+                ],
+                &["text"],
+            )
+        },
+    },
+    Command {
         name: "ca",
         usage: "ca",
         desc: "taphttp's CA certificate: fingerprint, download, and browser setup steps",
@@ -898,16 +924,18 @@ mod tests {
         }
         let god = find("god").unwrap();
         assert!(god.hidden && !god.mcp);
-        let p = find("propose_finding").unwrap();
-        assert_eq!(
-            (p.risk, p.mcp, p.ui),
-            (Risk::Record, true, false),
-            "the agent's, not the console's"
-        );
+        for n in ["propose_finding", "report"] {
+            let p = find(n).unwrap();
+            assert_eq!(
+                (p.risk, p.mcp, p.ui),
+                (Risk::Record, true, false),
+                "{n}: the agent's, not the console's"
+            );
+        }
         assert!(COMMANDS
             .iter()
             .filter(|c| !c.ui)
-            .all(|c| c.name == "propose_finding"));
+            .all(|c| c.name == "propose_finding" || c.name == "report"));
     }
 
     #[test]
@@ -923,7 +951,8 @@ mod tests {
                 "hosts",
                 "rules",
                 "task",
-                "propose_finding"
+                "propose_finding",
+                "report"
             ]
         );
         for c in COMMANDS.iter().filter(|c| !c.risk.agent_may()) {

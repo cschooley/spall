@@ -288,3 +288,19 @@ test("without a model, spall can't be picked to run a task", async ({ page }) =>
   expect(sent.runner).toBeUndefined();
   await expect(page.getByRole("region", { name: "Task detail" })).toContainText("run by an MCP client");
 });
+
+test("an agent's report shows on its task, as text only (#81)", async ({ page }) => {
+  const done = task("T-6", "done", { report: { text: `Stack: Apache behind Cloudflare.\n\nNext: /cgi-bin/ ${P}`, at: "2026-11-24T18:10:00Z" } });
+  const quiet = task("T-7", "running");
+  tasksApi(page, [done, quiet]);
+  await page.goto("/#tasks/T-6");
+  const report = page.getByRole("region", { name: "Task detail" }).getByRole("region", { name: "Report" });
+  await expect(report).toContainText("filed 18:10:00");
+  const text = report.locator("pre");
+  await expect(text).toHaveText(`Stack: Apache behind Cloudflare.\n\nNext: /cgi-bin/ ${P}`);
+  expect(await report.locator("img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+
+  await page.goto("/#tasks/T-7");
+  await expect(page.getByRole("region", { name: "Task detail" }).getByRole("region", { name: "Report" })).toContainText("None yet");
+});

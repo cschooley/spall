@@ -177,6 +177,8 @@ export interface Task {
   runner: "external" | "spall";
   /** What its model has used, against its token cap; spall-run tasks only. */
   usage: Usage;
+  /** The agent's report on its work (#81): model-written, so text only. */
+  report: { text: string; at: string } | null;
 }
 
 export interface Usage {
@@ -259,7 +261,14 @@ export function asTask(v: unknown): Task | null {
     pendingRaw: t.pending ?? null,
     runner: t.runner === "spall" ? "spall" : "external",
     usage: asUsage(t.usage, c.tokens),
+    report: asReport(t.report),
   };
+}
+
+function asReport(v: unknown): Task["report"] {
+  const r = (v ?? null) as Record<string, unknown> | null;
+  if (!r || typeof r !== "object" || typeof r.text !== "string") return null;
+  return { text: r.text, at: str(r.at) };
 }
 
 export function asTasks(v: unknown): Task[] {

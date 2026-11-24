@@ -29,6 +29,8 @@ pub const MAX_PER_ENGAGEMENT: usize = 1000;
 pub const MAX_LOG: usize = 20_000;
 pub const MAX_GOAL: usize = 2000;
 pub const MAX_NOTE: usize = 2000;
+/// An agent's report on its task (#81), in characters.
+pub const MAX_REPORT: usize = 16_000;
 pub const MAX_STEPS: usize = 50;
 pub const MAX_STEP: usize = 300;
 pub const MAX_HOSTS: usize = 100;
@@ -121,6 +123,15 @@ pub enum Runner {
     External,
     /// spall's own host, with the tester's model key.
     Spall,
+}
+
+/// What the agent says it did and found (#81): plain text, written by a
+/// model that read attacker-controlled traffic, so shown as text only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Report {
+    pub text: String,
+    pub at: String,
 }
 
 /// What a task's model has used (#63): only spall's host counts it.
@@ -484,6 +495,9 @@ pub struct Task {
     /// What its model has used, when spall's host runs it (#63).
     #[serde(default)]
     pub usage: ModelUsage,
+    /// The agent's report on its work (#81); filing again replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<Report>,
 }
 
 /// A request a task paused on, exactly as it would be sent.
@@ -997,6 +1011,7 @@ impl Store {
                 pending: None,
                 grant: None,
                 usage: ModelUsage::default(),
+                report: None,
             };
             book.next += 1;
             book.tasks.push(t.clone());
@@ -1122,6 +1137,52 @@ impl Store {
                 )));
             }
             push(t, event, now)
+        })
+    }
+
+    /// File the agent's report on task `id` (#81), replacing any before.
+    /// Only while the task is unfinished: a finished task's report is final.
+    /// `done` ends it as done, which only a running task can: one waiting on
+    /// the tester can't finish around the request. All or nothing.
+    pub fn report(
+        &self,
+        engagement: &str,
+        id: &str,
+        text: &str,
+        done: bool,
+        now: &str,
+    ) -> Result<Task, Error> {
+        let text = text.replace("\r\n", "\n");
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(Error::Invalid("report: empty".into()));
+        }
+        check_text("report", text, MAX_REPORT, true).map_err(Error::Invalid)?;
+        self.change(engagement, |book| {
+            let t = find(book, id)?;
+            if t.status.finished() {
+                return Err(Error::Conflict(format!(
+                    "{} is {}: its report is final",
+                    t.id,
+                    t.status.as_str()
+                )));
+            }
+            if done && t.status != Status::Running {
+                return Err(Error::Conflict(format!(
+                    "{} is {}: only a running task can finish",
+                    t.id,
+                    t.status.as_str()
+                )));
+            }
+            t.report = Some(Report {
+                text: text.into(),
+                at: now.into(),
+            });
+            t.updated = now.into();
+            if done {
+                move_to(t, Status::Done, None, now)?;
+            }
+            Ok(t.clone())
         })
     }
 
@@ -2242,6 +2303,106 @@ mod tests {
         });
         assert_eq!(ok, 25);
         assert_eq!(store.get("e", "T-1").unwrap().spent, 25);
+    }
+
+    #[test]
+    fn a_task_keeps_its_agents_report_until_it_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(&store, Requested::default());
+        assert_eq!(store.get("e", "T-1").unwrap().report, None);
+
+        let t = store
+            .report(
+                "e",
+                "T-1",
+                "  Stack: Apache\r\nbehind Cloudflare.\n\n",
+                false,
+                NOW,
+            )
+            .unwrap();
+        let r = t.report.unwrap();
+        assert_eq!(
+            r.text, "Stack: Apache\nbehind Cloudflare.",
+            "trimmed, newlines kept"
+        );
+        assert_eq!(r.at, NOW);
+
+        // Filing again replaces it; it survives a reopen.
+        store.report("e", "T-1", "second", false, NOW).unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(
+            store.get("e", "T-1").unwrap().report.unwrap().text,
+            "second"
+        );
+        assert!(store.get("e", "T-1").unwrap().summary()["report"]["text"] == "second");
+
+        for bad in ["", "   \n", "bell\u{7}", &"x".repeat(MAX_REPORT + 1)] {
+            assert!(
+                matches!(
+                    store.report("e", "T-1", bad, false, NOW),
+                    Err(Error::Invalid(_))
+                ),
+                "{bad:.20}"
+            );
+        }
+        assert!(store
+            .report("e", "T-1", &"x".repeat(MAX_REPORT), false, NOW)
+            .is_ok());
+
+        // A finished task's report is final.
+        store
+            .transition("e", "T-1", Status::Done, None, NOW)
+            .unwrap();
+        assert!(matches!(
+            store.report("e", "T-1", "late", false, NOW),
+            Err(Error::Conflict(_))
+        ));
+        assert!(matches!(
+            store.report("e", "T-9", "nobody", false, NOW),
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn a_final_report_ends_a_running_task_as_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(&store, Requested::default());
+        store
+            .pause(
+                "e",
+                "T-1",
+                pending(Ask::Method {
+                    method: "POST".into(),
+                }),
+            )
+            .unwrap();
+        // Waiting on the tester: it can't finish around the request.
+        assert!(matches!(
+            store.report("e", "T-1", "all done", true, NOW),
+            Err(Error::Conflict(_))
+        ));
+        let t = store.get("e", "T-1").unwrap();
+        assert_eq!(
+            (t.status, t.report),
+            (Status::WaitingOnApproval, None),
+            "nothing kept"
+        );
+
+        store
+            .transition("e", "T-1", Status::Running, None, NOW)
+            .unwrap();
+        let t = store.report("e", "T-1", "all done", true, NOW).unwrap();
+        assert_eq!(t.status, Status::Done);
+        assert_eq!(t.ended.as_deref(), Some(NOW));
+        assert_eq!(t.report.unwrap().text, "all done");
+        // A bad report finishes nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        running(&store, Requested::default());
+        assert!(store.report("e", "T-1", " ", true, NOW).is_err());
+        assert_eq!(store.get("e", "T-1").unwrap().status, Status::Running);
     }
 
     fn running(store: &Store, constraints: Requested) {

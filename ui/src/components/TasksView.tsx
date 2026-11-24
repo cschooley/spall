@@ -228,6 +228,13 @@ function TaskCard({ t, agentModel, onChanged, onOpenExchange }: { t: Task; agent
           <Card key={waiting.pending.asked} w={waiting} onDone={onChanged} />
         </div>
       ) : null}
+      <section className="sect" aria-label="Report">
+        <h3>
+          Report <span className="note">{t.report ? `· filed ${t.report.at.slice(11, 19)} by the agent` : "· the agent's summary of its work"}</span>
+        </h3>
+        {/* Model-written after reading captured traffic: text only, never HTML or markdown. */}
+        {t.report ? <pre className="report">{t.report.text}</pre> : <p className="note">None yet.</p>}
+      </section>
       <div className="cols">
         <div className="sect">
           <h3>Constraints</h3>

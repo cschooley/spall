@@ -697,6 +697,11 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .tasks .plan { list-style: none; margin: 0; padding: 0; font: var(--vg-text-sm)/1.9 var(--vg-font-mono); }
 .tasks .plan li { display: flex; gap: var(--vg-space-3); color: var(--vg-text-secondary); }
 .tasks .plan li.done { color: var(--vg-text-tertiary); }
+.tasks pre.report {
+  margin: 0; padding: var(--vg-space-3); max-height: 24rem; overflow: auto;
+  background: var(--vg-bg-base); border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-md);
+  color: var(--vg-text-primary); font: var(--vg-text-sm)/1.5 var(--vg-font-mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
 .tasks .cands { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--vg-space-2); font: var(--vg-text-sm) var(--vg-font-mono); }
 .tasks .cands li { display: flex; flex-wrap: wrap; gap: var(--vg-space-3); }
 .tasks .cands a { color: var(--vg-text-primary); }

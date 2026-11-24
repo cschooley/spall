@@ -149,7 +149,7 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host (done), #64 roles, #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host (done), #81 task report, #64 roles, #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 

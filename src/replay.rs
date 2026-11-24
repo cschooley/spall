@@ -875,6 +875,34 @@ impl Replayer {
         }
     }
 
+    /// The agent's report on its task `id` (#81): stored on the task and
+    /// audited as the agent's, refusals too. The text itself isn't audited.
+    pub fn agent_report(
+        &self,
+        id: &str,
+        text: &str,
+        done: bool,
+    ) -> Result<crate::tasks::Task, crate::tasks::Error> {
+        let e = self.engagements.active();
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut rec = Record::new("task", "", Outcome::TaskChanged);
+        rec.actor = "agent".into();
+        rec.task = Some(id.to_string());
+        rec.engagement = Some(e.id.clone());
+        rec.result_id = Some(id.to_string());
+        rec.reason = Some(format!(
+            "report {id} ({} characters){}",
+            text.trim().chars().count(),
+            if done { ", done" } else { "" }
+        ));
+        let res = self.tasks.report(&e.id, id, text, done, &now);
+        if let Err(err) = &res {
+            rec.error = Some(err.to_string());
+        }
+        self.audit(&rec);
+        res
+    }
+
     /// A human's change to task `id`: approve, edit a draft, halt (#54).
     /// Audited with the status before and after.
     pub fn task_op(&self, id: &str, op: crate::tasks::Op) -> Response {

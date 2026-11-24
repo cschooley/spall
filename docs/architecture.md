@@ -123,7 +123,7 @@ If it only decides *what* to send or *how to judge*, it is a **check**. If it is
 | browser | a headless browser driving the app (SPAs, DOM XSS); its traffic through the proxy, attributed | not filed |
 | raw send | exact bytes (smuggling, HTTP/2 quirks, WebSockets); needs taphttp | not filed, later |
 
-Not primitives: payload lists, wordlists, encoders and matchers (checks); compare/diff and extracting links (read tools); proposing a finding (a record tool); a crawl or fuzzing strategy (a skill). Every primitive refuses to target the stack itself (#73).
+Not primitives: payload lists, wordlists, encoders and matchers (checks); compare/diff and extracting links (read tools); proposing a finding or filing a task report (record tools); a crawl or fuzzing strategy (a skill). Every primitive refuses to target the stack itself (#73).
 
 ## Sensors: where the work happens
 

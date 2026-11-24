@@ -142,3 +142,11 @@ test("who runs a task, and what its model has used (#63)", async () => {
   assert.deepEqual(JSON.parse(sent[1]!), { goal: "g", role: "tester", constraints: {}, note: "" });
   assert.ok(taskLines({ ...FULL, runner: "spall", usage: { calls: 1, input_tokens: 10, output_tokens: 2, model_ms: 900 } }).some((l) => l === "run by spall · 1 model call · 12 of 2.0M tokens (10 in, 2 out) · 0s"));
 });
+
+test("an agent's report, if it filed one (#81)", () => {
+  const t = asTask({ ...FULL, report: { text: "Stack: Apache\nNext: /cgi-bin/", at: "2026-11-24T18:10:00Z" } })!;
+  assert.deepEqual(t.report, { text: "Stack: Apache\nNext: /cgi-bin/", at: "2026-11-24T18:10:00Z" });
+  assert.equal(asTask(FULL)!.report, null);
+  assert.equal(asTask({ ...FULL, report: { text: 5, at: "x" } })!.report, null);
+  assert.equal(asTask({ ...FULL, report: "text" })!.report, null);
+});

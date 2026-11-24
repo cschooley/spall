@@ -3435,7 +3435,8 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "hosts",
             "rules",
             "task",
-            "propose_finding"
+            "propose_finding",
+            "report"
         ]
     );
 
@@ -3824,6 +3825,79 @@ async fn the_same_issue_in_other_words_is_seen_again_not_proposed_again() {
     let res = flag(r#"{"exchange":"e1","rule":"WSTG-INFO-02","parameter":"Server response header / error-page footer","force":true}"#).await;
     assert!(res.starts_with("HTTP/1.1 409"), "{res}");
     assert_eq!(body_json(&res)["match"], "exact");
+}
+
+#[tokio::test]
+async fn an_agent_files_a_report_the_tester_keeps() {
+    let (dir, _stub, spall, _r) = agent_setup("{}").await;
+    let mut m = Mcp::new(spall, &dir.path().join("api-token"));
+    let init = body_json(&m.initialize("?task=T-1").await);
+    assert!(
+        init["result"]["instructions"]
+            .as_str()
+            .is_some_and(|s| s.contains("report")),
+        "the agent is asked for one: {init}"
+    );
+
+    let (text, is_err) = m
+        .call(
+            "report",
+            serde_json::json!({"text": "Stack: Apache behind Cloudflare.\nNext: /cgi-bin/."}),
+        )
+        .await;
+    assert!(!is_err && text.contains("T-1"), "{text}");
+    let t = body_json(&get_text(spall, "/api/tasks/T-1").await);
+    assert_eq!(
+        t["report"]["text"],
+        "Stack: Apache behind Cloudflare.\nNext: /cgi-bin/."
+    );
+    let list = body_json(&get_text(spall, "/api/tasks").await);
+    assert!(
+        list["tasks"][0]["report"]["text"].is_string(),
+        "lists carry it"
+    );
+    assert!(t["log"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "command" && e["name"] == "report" && e["outcome"] == "ok"));
+    let rec = audit_records(&dir.path().join("api-token"))
+        .into_iter()
+        .find(|r| {
+            r["action"] == "task"
+                && r["reason"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("report T-1"))
+        })
+        .expect("audited");
+    assert_eq!(
+        (rec["actor"].as_str(), rec["task"].as_str()),
+        (Some("agent"), Some("T-1"))
+    );
+
+    let (text, is_err) = m.call("report", serde_json::json!({"text": "  "})).await;
+    assert!(is_err && text.contains("empty"), "{text}");
+    let (text, is_err) = m.call("report", serde_json::json!({})).await;
+    assert!(is_err, "{text}");
+
+    // Finished: the final report ends the task as done, and nothing
+    // more runs under it.
+    let (text, is_err) = m
+        .call(
+            "report",
+            serde_json::json!({"text": "Final: Apache behind Cloudflare.", "done": true}),
+        )
+        .await;
+    assert!(!is_err && text.contains("T-1 is done"), "{text}");
+    let t = body_json(&get_text(spall, "/api/tasks/T-1").await);
+    assert_eq!(t["status"], "done");
+    assert_eq!(t["report"]["text"], "Final: Apache behind Cloudflare.");
+    let (text, is_err) = m.call("report", serde_json::json!({"text": "late"})).await;
+    assert!(is_err && text.contains("done"), "{text}");
+    let (_, is_err) = m.call("open", serde_json::json!({"id": "e1"})).await;
+    assert!(is_err, "nothing more runs under it");
+    let t = body_json(&get_text(spall, "/api/tasks/T-1").await);
+    assert_eq!(t["report"]["text"], "Final: Apache behind Cloudflare.");
 }
 
 #[tokio::test]
@@ -4354,6 +4428,45 @@ async fn host_setup(
 
 fn task_now(r: &spall::replay::Replayer) -> spall::tasks::Task {
     r.tasks.get(&r.engagements.active().id, "T-1").unwrap()
+}
+
+#[tokio::test]
+async fn a_spall_run_task_keeps_its_report_or_its_closing_answer() {
+    // Filed: kept, not replaced by the closing line.
+    let model = Scripted::new(vec![
+        turn(
+            "",
+            vec![call(
+                "c1",
+                "report",
+                serde_json::json!({"text": "Stack: nginx.\nLeft: /admin."}),
+            )],
+        ),
+        turn("Filed my report.", vec![]),
+    ]);
+    let (_dir, _stub, _spall, r) = host_setup(model.clone(), "{}").await;
+    eventually_async("done", || async {
+        task_now(&r).status == spall::tasks::Status::Done
+    })
+    .await;
+    assert_eq!(
+        task_now(&r).report.unwrap().text,
+        "Stack: nginx.\nLeft: /admin."
+    );
+    let told = serde_json::to_string(&model.seen()[1]).unwrap();
+    assert!(told.contains("filed: the tester sees it on T-1"), "{told}");
+
+    // Forgotten: the closing answer becomes the report.
+    let model = Scripted::new(vec![turn("  Done: e1 answers 200 from nginx.  ", vec![])]);
+    let (_dir, _stub, _spall, r) = host_setup(model, "{}").await;
+    eventually_async("done", || async {
+        task_now(&r).status == spall::tasks::Status::Done
+    })
+    .await;
+    assert_eq!(
+        task_now(&r).report.unwrap().text,
+        "Done: e1 answers 200 from nginx."
+    );
 }
 
 #[tokio::test]

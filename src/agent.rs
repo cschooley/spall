@@ -192,6 +192,7 @@ impl Tools {
             "rules" => rules(a),
             "task" => self.task(&t, a),
             "propose_finding" => self.propose(&t, a).await,
+            "report" => self.report(&t, a),
             _ => Err(err(format!("{name}: offered but not built yet"))),
         };
         let out = out.unwrap_or_else(|e| e);
@@ -473,6 +474,28 @@ impl Tools {
         )))
     }
 
+    fn report(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            text: String,
+            #[serde(default)]
+            done: bool,
+        }
+        let a: A = args("report", a)?;
+        match self.replayer.agent_report(&t.id, &a.text, a.done) {
+            Ok(t) if t.status == Status::Done => Ok(ok(format!(
+                "filed, and {} is done: the tester sees your report on it. Nothing more runs under it; stop here.",
+                t.id
+            ))),
+            Ok(_) => Ok(ok(format!(
+                "filed: the tester sees it on {}. Filing again replaces it; file with done: true when you're finished.",
+                t.id
+            ))),
+            Err(e) => Err(err(format!("report not filed: {e}"))),
+        }
+    }
+
     async fn propose(&self, t: &Task, a: &Value) -> Result<Output, Output> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -637,7 +660,8 @@ mod tests {
                 "hosts",
                 "rules",
                 "task",
-                "propose_finding"
+                "propose_finding",
+                "report"
             ]
         );
         for d in definitions() {

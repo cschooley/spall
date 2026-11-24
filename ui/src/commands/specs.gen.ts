@@ -669,6 +669,32 @@ export const SPECS = [
   {
     "args": {
       "additionalProperties": false,
+      "properties": {
+        "done": {
+          "description": "true when you're finished: the task ends as done",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "the report, plain text (at most 16,000 characters)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "desc": "file your report on this task for the tester: what you did, what you found, what you proposed, what's left. Filing again replaces it; done: true also ends the task (only while it runs)",
+    "hidden": false,
+    "mcp": true,
+    "name": "report",
+    "risk": "record",
+    "ui": false,
+    "usage": "report"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
       "properties": {},
       "required": [],
       "type": "object"

@@ -34,8 +34,8 @@ pub const MAX_TURNS: u32 = 500;
 const HOW: &str = "You are run by spall itself, not by an outside client: there is no human in this \
 conversation, only tool results and, between turns, the tester's notes and approval decisions, which \
 spall adds as plain text after your tool results. Work through your task with your tools. When the \
-task is done, or you can't go further, answer with a short summary for the tester (what you did, what \
-you found, what you proposed) and no tool calls: that ends the task. A paused request is decided by \
+task is done, or you can't go further, file your report (report), then answer with a short closing line \
+and no tool calls: that ends the task. If you end without filing one, your closing answer becomes the report. A paused request is decided by \
 the tester; you'll be told the outcome here before your next turn.";
 
 /// The system prompt for `t`. Fixed for the task's whole conversation.
@@ -202,6 +202,20 @@ impl Host {
         }
     }
 
+    /// The model ended without filing a report (#81): its closing answer
+    /// becomes one, so what it found isn't lost with the conversation.
+    fn closing_report(&self, eng: &str, id: &str, text: &str) {
+        let r = &self.tools.replayer;
+        let text = text.trim();
+        if text.is_empty() || r.tasks.get(eng, id).is_none_or(|t| t.report.is_some()) {
+            return;
+        }
+        let text: String = text.chars().take(crate::tasks::MAX_REPORT).collect();
+        if let Err(e) = r.agent_report(id, &text, false) {
+            tracing::debug!("{eng}/{id}: closing report: {e}");
+        }
+    }
+
     fn end(&self, eng: &str, id: &str, to: Status, reason: Option<String>) {
         let r = &self.tools.replayer;
         if let Err(e) = r.tasks.transition(eng, id, to, reason, &Self::now()) {
@@ -290,6 +304,7 @@ impl Host {
             match &turn.stop {
                 Stop::EndTurn if turn.calls.is_empty() => {
                     self.save_transcript(eng, id, &c);
+                    self.closing_report(eng, id, &turn.text);
                     self.end(eng, id, Status::Done, None);
                     return;
                 }
