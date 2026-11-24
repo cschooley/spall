@@ -203,6 +203,8 @@ impl Tools {
             "propose_finding" => self.propose(&t, a).await,
             "report" => self.report(&t, a),
             "skill" => skill(&t, a),
+            "retest_result" => self.retest_result(&t, a),
+            v if crate::verbs::find(v).is_some() => self.verb(&t, v, a).await,
             _ => Err(err(format!("{name}: offered but not built yet"))),
         };
         let out = out.unwrap_or_else(|e| e);
@@ -484,6 +486,92 @@ impl Tools {
         )))
     }
 
+    /// A verb (#67): draft a task from an object, as a proposal for the
+    /// tester. The agent's own task is unchanged; the draft runs only if a
+    /// human approves it.
+    async fn verb(&self, t: &Task, name: &str, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            id: String,
+            category: Option<String>,
+        }
+        let a: A = args(name, a)?;
+        let by = format!("agent:{}", t.id);
+        match self
+            .replayer
+            .verb(&by, name, &a.id, a.category.as_deref())
+            .await
+        {
+            Ok((d, cost)) => Ok(ok(format!(
+                "drafted {} ({}, {cost}) for the tester to approve; it doesn't change your task, and nothing runs until they do.",
+                d.id,
+                d.role.as_str()
+            ))),
+            Err((_, why)) => Err(err(format!("{name}: {why}"))),
+        }
+    }
+
+    /// `retest_result` (#67, #65): the verdict of a retest, on the
+    /// candidate, resting on a replay this task sent.
+    fn retest_result(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        use crate::candidates::{Retest, Verdict};
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            candidate: String,
+            verdict: Verdict,
+            exchange_id: String,
+            note: String,
+        }
+        let a: A = args("retest_result", a)?;
+        let sent = t.log.iter().any(|e| {
+            matches!(&e.event, Event::Request { exchange: Some(id), .. } if *id == a.exchange_id)
+        });
+        if !sent {
+            return Err(err(format!(
+                "retest_result: {} isn't a request {} sent: replay the evidence first, then file the replay's id",
+                a.exchange_id, t.id
+            )));
+        }
+        let r = &self.replayer;
+        let eng = &t.engagement;
+        let now = taphttp_types::Timestamp::now().to_string();
+        let retest = Retest {
+            by: format!("agent:{}", t.id),
+            at: now,
+            verdict: a.verdict,
+            exchange: a.exchange_id.clone(),
+            note: a.note.trim().to_string(),
+        };
+        let mut rec =
+            crate::audit::Record::new("candidate", "", crate::audit::Outcome::CandidateChanged);
+        rec.actor = "agent".into();
+        rec.task = Some(t.id.clone());
+        rec.engagement = Some(eng.clone());
+        rec.result_id = Some(a.candidate.clone());
+        rec.reason = Some(format!(
+            "retest {}: {} ({})",
+            a.candidate,
+            a.verdict.as_str(),
+            a.exchange_id
+        ));
+        let res = r.candidates.retest(eng, &a.candidate, retest);
+        if let Err(e) = &res {
+            rec.error = Some(e.to_string());
+        }
+        r.audit(&rec);
+        match res {
+            Ok(c) => Ok(ok(format!(
+                "filed: {} {} on retest ({}). The tester sees it in Findings.",
+                c.id,
+                a.verdict.as_str(),
+                a.exchange_id
+            ))),
+            Err(e) => Err(err(format!("retest_result: {e}"))),
+        }
+    }
+
     fn report(&self, t: &Task, a: &Value) -> Result<Output, Output> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -724,7 +812,15 @@ mod tests {
                 "task",
                 "propose_finding",
                 "report",
-                "skill"
+                "skill",
+                "why",
+                "explain",
+                "map_auth",
+                "test_for",
+                "retest",
+                "variants",
+                "escalate",
+                "retest_result"
             ]
         );
         // Each role sees only what it may run (#64).

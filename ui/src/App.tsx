@@ -1,3 +1,4 @@
+import { runVerb } from "./lib/verbs.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { execute, paletteItems, type Ctx, type OutKind, type PaletteItem, type ReplayEdit } from "./commands/registry.ts";
 import { CommandPalette } from "./components/CommandPalette.tsx";
@@ -523,6 +524,7 @@ export function App() {
         return { ok: true, text: `exported ${r.name}${unredacted ? " (UNREDACTED: contains captured credentials)" : " (redacted)"}` };
       },
       rules: loadCatalog,
+      verb: (name, id, category) => runVerb(name, id, category),
       haltTask: async (id, reason) => {
         const err = await changeTask(id, reason ? { op: "halt", reason } : { op: "halt" });
         if (err) return { ok: false, text: `halt: ${err}` };

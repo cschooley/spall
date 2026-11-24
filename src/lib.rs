@@ -28,6 +28,7 @@ pub mod stack;
 pub mod tailer;
 pub mod tasks;
 pub mod untrusted;
+pub mod verbs;
 pub mod web;
 
 use anyhow::Context;
@@ -252,6 +253,7 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 tasks,
                 allow_unredacted_export: config.allow_unredacted_export,
                 stack: stack::Stack::from_config(&config),
+                spall_runs: std::sync::atomic::AtomicBool::new(false),
             }))
         }
         None => None,
@@ -323,6 +325,8 @@ impl App {
             };
             let dir = self.config.engagements.join("tasks").join("transcripts");
             self.host = Some(host::Host::new(tools, model, &dir));
+            r.spall_runs
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
         self
     }

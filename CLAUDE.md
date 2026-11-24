@@ -149,7 +149,7 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #67 buttons (done), #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
@@ -274,6 +274,16 @@ role can't make before any pause or grant; `tasks::role_fits` refuses
 destructive constraints for any role but tester. Agents see
 `commands::offered_to(role)`; `skill` reads a skill. M6 ships built-ins;
 the pack loader is #31.
+
+Buttons (#67, done): `src/verbs.rs` (`VERBS`, `draft`) turns a verb on an
+exchange or candidate into a `tasks::New` with its cost; each verb is a
+`record` registry command (palette, console, MCP) and
+`Replayer::verb(asked_by, …)` drafts it (drafts only; an agent's capped at
+`MAX_AGENT_DRAFTS`, `asked_by: agent:T-n`), served at
+`POST /api/verbs/{name}`. `retest_result` (agent, needs a replay the task
+sent) is `candidates::Store::retest`: flux's retest flow (`baselineState`,
+`fixed`). UI: `lib/verbs.ts` (its list is held to the registry by test),
+`AgentVerbs.tsx` in the inspector and the Findings pane. PoC waits on #13.
 
 ## Testing
 

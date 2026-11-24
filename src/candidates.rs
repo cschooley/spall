@@ -61,8 +61,49 @@ pub struct Candidate {
     /// ticks it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub notes_in_export: bool,
+    /// Retests (#67, #65): each run's verdict and the exchange it rests on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retests: Vec<Retest>,
     pub finding: Finding,
 }
+
+/// Whether a retest reproduced a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// Still there: flux `baselineState: unchanged`.
+    Reproduces,
+    /// The same request no longer shows it: `baselineState: absent`,
+    /// `flux/status: fixed`.
+    Fixed,
+    /// Can't tell (the endpoint changed, the session is gone): no change.
+    Unclear,
+}
+
+impl Verdict {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verdict::Reproduces => "reproduces",
+            Verdict::Fixed => "fixed",
+            Verdict::Unclear => "unclear",
+        }
+    }
+}
+
+/// One retest of a candidate: by whom, when, the verdict, the exchange
+/// that shows it (also added to the evidence) and a line of why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Retest {
+    /// `human` or `agent:T-n`.
+    pub by: String,
+    pub at: String,
+    pub verdict: Verdict,
+    pub exchange: String,
+    pub note: String,
+}
+
+/// Retests kept per candidate.
+pub const MAX_RETESTS: usize = 50;
 
 /// A tester's note on a candidate (#82). `at` identifies it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,6 +466,61 @@ impl Store {
         c.seen_again.push(sighting);
         let n = 1 + c.seen_again.len() as u64;
         c.finding.extra.insert(OCCURRENCES.into(), n.into());
+        let after = c.clone();
+        if let Err(e) = save(&self.dir, engagement, list) {
+            if let Some(c) = list.iter_mut().find(|c| c.id == id) {
+                *c = before;
+            }
+            return Err(Error::Save(format!("{e:#}")));
+        }
+        Ok(after)
+    }
+
+    /// Record a retest (#67, #65) as flux's retest flow has it
+    /// (docs/flux/SPEC.md, Flows): `baselineState` `unchanged` when it
+    /// reproduces, `absent` and `flux/status: fixed` when it doesn't; an
+    /// unclear one changes nothing in the finding. Its exchange joins the
+    /// evidence either way. A human can confirm or reopen it after.
+    pub fn retest(&self, engagement: &str, id: &str, r: Retest) -> Result<Candidate, Error> {
+        if r.note.chars().count() > MAX_NOTE || r.note.chars().any(|c| c.is_control() && c != '\n')
+        {
+            return Err(Error::Invalid(format!(
+                "note: at most {MAX_NOTE} characters, no control characters"
+            )));
+        }
+        let mut all = self.lock();
+        let list = all
+            .get_mut(engagement)
+            .ok_or_else(|| Error::NotFound(id.into()))?;
+        let c = list
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| Error::NotFound(id.into()))?;
+        if c.retests.len() >= MAX_RETESTS {
+            return Err(Error::Invalid(format!(
+                "{id} has {MAX_RETESTS} retests already"
+            )));
+        }
+        let before = c.clone();
+        let ids = &mut c.finding.properties.replay_ids;
+        if !ids.contains(&r.exchange) && ids.len() < MAX_EVIDENCE {
+            ids.push(r.exchange.clone());
+        }
+        match r.verdict {
+            Verdict::Reproduces => {
+                c.finding.baseline_state = Some(flux::BaselineState::Unchanged);
+                let p = c.finding.provenance.get_or_insert_with(Default::default);
+                p.last_detection_time_utc = Some(r.at.clone());
+            }
+            Verdict::Fixed => {
+                c.finding.baseline_state = Some(flux::BaselineState::Absent);
+                c.finding.properties.status = Some(Status::Fixed);
+                c.promoted = None;
+            }
+            Verdict::Unclear => {}
+        }
+        c.updated = r.at.clone();
+        c.retests.push(r);
         let after = c.clone();
         if let Err(e) = save(&self.dir, engagement, list) {
             if let Some(c) = list.iter_mut().find(|c| c.id == id) {
@@ -951,6 +1047,7 @@ mod tests {
             seen_again: Vec::new(),
             notes: Vec::new(),
             notes_in_export: false,
+            retests: Vec::new(),
             finding: finding_for(rule, &flag(rule.id, param), &entry("ex-1", url), NOW),
         }
     }

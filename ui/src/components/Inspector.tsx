@@ -3,6 +3,7 @@
 // curl, save body, flag as candidate (M4, here and never on a row). Every
 // value is attacker-controlled and rendered as text.
 
+import { AgentVerbs } from "./AgentVerbs.tsx";
 import { By } from "./Attribution.tsx";
 import { ofExchange } from "../lib/attribution.ts";
 import { Fragment, useEffect, useState } from "react";
@@ -228,6 +229,7 @@ export function Inspector({
           ) : null}
         </div>
       )}
+      {draft || flagging ? null : <AgentVerbs key={`verbs-${entry.id}`} on="exchange" id={entry.id} available={replay.available} />}
       {mine.length ? (
         <ul className="cands" aria-label="Candidates for this exchange">
           {mine.map((c) => (

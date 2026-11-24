@@ -129,7 +129,7 @@ Rules:
 - **No button-only powers.** Every button is also a palette entry, a console command and an MCP tool, from the same registry.
 - **Name the outcome, not the effort.** "Escalate impact", not "Deepen". If you can't tell what a button will produce, you won't click it.
 - **Show the cost first.** Every button states its estimate before it runs ("~40 requests, safe methods").
-- **Hidden until built.** A button appears only when its milestone ships, like the dimmed rail views.
+- **Hidden until built.** A button appears only when its milestone ships, like the dimmed rail views. Built in #67: all but PoC, which waits on the sandbox (#13). Every button only drafts; the task card waits in Tasks for approval.
 
 | On | Button | Produces | Role, risk class |
 |---|---|---|---|

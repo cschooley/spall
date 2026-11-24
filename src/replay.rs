@@ -300,7 +300,14 @@ pub struct Replayer {
     pub allow_unredacted_export: bool,
     /// spall's and taphttp's own addresses: never an agent's target (#73).
     pub stack: crate::stack::Stack,
+    /// spall's own agent host is running (#63): a verb's task (#67) is
+    /// drafted for it to run, not for an outside client.
+    pub spall_runs: AtomicBool,
 }
+
+/// Drafts one agent's task may make with verbs (#67) before it's told to
+/// leave the rest to the tester.
+pub const MAX_AGENT_DRAFTS: usize = 5;
 
 fn json(status: StatusCode, body: serde_json::Value) -> Response {
     (status, axum::Json(body)).into_response()
@@ -603,6 +610,7 @@ impl Replayer {
             seen_again: Vec::new(),
             notes: Vec::new(),
             notes_in_export: false,
+            retests: Vec::new(),
             finding,
         };
         let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
@@ -877,8 +885,123 @@ impl Replayer {
         }
     }
 
-    /// The agent's report on its task `id` (#81): stored on the task and
-    /// audited as the agent's, refusals too. The text itself isn't audited.
+    /// An exchange from the lever API, or why not (status, message).
+    pub async fn exchange_or(&self, id: &str) -> Result<TrafficEntry, (StatusCode, String)> {
+        if !crate::web::valid_exchange_id(id) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("not an exchange id: {id:?}"),
+            ));
+        }
+        match self.lever.get_bytes(&format!("/exchanges/{id}")).await {
+            Ok((StatusCode::OK, b)) => serde_json::from_slice(&b).map_err(|_| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    "taphttp returned an unreadable exchange".into(),
+                )
+            }),
+            Ok((StatusCode::NOT_FOUND, _)) => {
+                Err((StatusCode::NOT_FOUND, format!("no exchange {id}")))
+            }
+            Ok((s, _)) => Err((StatusCode::BAD_GATEWAY, format!("taphttp answered {s}"))),
+            Err(_) => Err((StatusCode::BAD_GATEWAY, "taphttp is unreachable".into())),
+        }
+    }
+
+    /// Run verb `name` (#67) on object `id` for `asked_by` (`human` or
+    /// `agent:T-n`): draft the task it pre-fills, with its cost. Drafts
+    /// only; audited like any task made. `Err` is (status, message).
+    pub async fn verb(
+        &self,
+        asked_by: &str,
+        name: &str,
+        id: &str,
+        arg: Option<&str>,
+    ) -> Result<(crate::tasks::Task, String), (StatusCode, String)> {
+        use crate::tasks::{authorized, Context, Runner};
+        use crate::verbs::{Evidence, Exchange, Object, On};
+        let v = crate::verbs::find(name)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no verb {name:?}")))?;
+        let e = self.engagements.active();
+        let as_x = |x: &TrafficEntry| Exchange {
+            id: x.id.clone(),
+            method: x.method.clone(),
+            url: x.url.clone(),
+        };
+        let candidate;
+        let obj = match v.on {
+            On::Exchange => Object::Exchange(as_x(&self.exchange_or(id).await?)),
+            On::Candidate => {
+                candidate = self
+                    .candidates
+                    .get(&e.id, id)
+                    .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no candidate {id}")))?;
+                let mut exchanges = Vec::new();
+                for x in candidate.exchanges().iter().take(10) {
+                    match self.exchange_or(x).await {
+                        Ok(x) => exchanges.push(as_x(&x)),
+                        Err((StatusCode::NOT_FOUND, _)) => {}
+                        Err(err) => return Err(err),
+                    }
+                }
+                Object::Candidate(Evidence {
+                    candidate: &candidate,
+                    exchanges,
+                })
+            }
+        };
+        let mut d = crate::verbs::draft(name, &obj, arg, &e.rules)
+            .map_err(|why| (StatusCode::BAD_REQUEST, why))?;
+        if self.spall_runs.load(Ordering::Relaxed) {
+            d.new.runner = Some(Runner::Spall);
+        }
+        d.new.note = format!("{} on {id}: {}", v.label, d.cost);
+        let scope = self.engagements.scope();
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut rec = Record::new("task", "", Outcome::TaskChanged);
+        if let Some(task) = asked_by.strip_prefix("agent:") {
+            rec.actor = "agent".into();
+            rec.task = Some(task.to_string());
+        }
+        rec.engagement = Some(e.id.clone());
+        rec.reason = Some(format!("{name} on {id}"));
+        let made = authorized(&e.rules, &e.period(), &scope, jiff::Timestamp::now())
+            .map_err(|why| (StatusCode::CONFLICT, format!("no task: {why}")))
+            .and_then(|()| {
+                if asked_by.starts_with("agent:")
+                    && self
+                        .tasks
+                        .list(&e.id)
+                        .iter()
+                        .filter(|t| t.asked_by == asked_by)
+                        .count()
+                        >= MAX_AGENT_DRAFTS
+                {
+                    return Err((
+                        StatusCode::CONFLICT,
+                        format!("{asked_by} has drafted {MAX_AGENT_DRAFTS} tasks: leave the rest to the tester"),
+                    ));
+                }
+                let cx = Context {
+                    rules: &e.rules,
+                    scope: &scope,
+                    now: &now,
+                };
+                self.tasks
+                    .create(&e.id, &d.new, asked_by, &cx)
+                    .map_err(|err| (StatusCode::CONFLICT, err.to_string()))
+            });
+        match &made {
+            Ok(t) => {
+                rec.reason = Some(format!("{name} on {id}: create {} ({})", t.id, d.cost));
+                rec.result_id = Some(t.id.clone());
+            }
+            Err((_, why)) => rec.error = Some(why.clone()),
+        }
+        self.audit(&rec);
+        made.map(|t| (t, d.cost))
+    }
+
     /// An agent's command its role refused (#64), kept as evidence of a
     /// confused or hijacked agent, like `commands::admit_audited`'s.
     pub fn audit_agent_refusal(&self, engagement: &str, task: &str, name: &str, why: &str) {
@@ -892,6 +1015,8 @@ impl Replayer {
         self.audit(&rec);
     }
 
+    /// The agent's report on its task `id` (#81): stored on the task and
+    /// audited as the agent's, refusals too. The text itself isn't audited.
     pub fn agent_report(
         &self,
         id: &str,
@@ -1185,7 +1310,7 @@ impl Replayer {
         }
     }
 
-    fn audit(&self, rec: &Record) {
+    pub fn audit(&self, rec: &Record) {
         let mut rec = rec.clone();
         if rec.engagement.is_none() {
             rec.engagement = Some(self.engagements.active().id);

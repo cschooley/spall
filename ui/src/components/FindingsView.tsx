@@ -7,6 +7,7 @@
 // each candidate shows what redaction will strip (#49). Every string shown
 // came from captured traffic or a tester: text only.
 
+import { AgentVerbs } from "./AgentVerbs.tsx";
 import { By } from "./Attribution.tsx";
 import { ofCandidate } from "../lib/attribution.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -365,6 +366,24 @@ export function FindingsView({
                   </dd>
                 </>
               ) : null}
+              {current.retests.length > 0 ? (
+                <>
+                  <dt>retests</dt>
+                  <dd>
+                    <ul className="seen-again" aria-label="Retests">
+                      {current.retests.map((r) => (
+                        <li key={`${r.by}-${r.at}`}>
+                          {`${timeOf(r.at)} · ${ofCandidate(r.by).agent ? "◆ " : ""}${ofCandidate(r.by).label} · ${r.verdict} · `}
+                          <button type="button" className="link" onClick={() => onOpenExchange(r.exchange)}>
+                            {r.exchange}
+                          </button>
+                          {r.note ? ` · ${r.note}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </dd>
+                </>
+              ) : null}
               {current.suppressed ? (
                 <>
                   <dt>decision</dt>
@@ -382,6 +401,7 @@ export function FindingsView({
             </dl>
             <Evidence key={current.id} candidate={current} onOpenExchange={onOpenExchange} onAdd={(ids) => void act({ op: "evidence", exchanges: ids })} />
             <Notes key={`notes-${current.id}`} candidate={current} onAct={act} />
+            <AgentVerbs key={`verbs-${current.id}`} on="candidate" id={current.id} evidence={current.exchanges.length} available />
             <Redaction key={`${current.id}-${current.updated}`} id={current.id} />
             <p className="note wrap">Promotion is always a human's call. Exports are redacted unless spall was started with --allow-unredacted-export and you ask twice.</p>
           </section>

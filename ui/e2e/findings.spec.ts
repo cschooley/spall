@@ -278,3 +278,38 @@ test("notes: added, shown as text, deleted, and in the export only when ticked (
   await expect(notes).toContainText("None yet.");
   expect(api.calls.at(-1)?.body).toMatchObject({ op: "unnote" });
 });
+
+test("agent buttons draft a pre-filled task with its cost shown first; retests show as text (#67)", async ({ page }) => {
+  const t = token();
+  const s = seed(t);
+  s.list[0]!.retests = [{ by: "agent:T-4", at: s.entries[0]!.ts, verdict: "fixed", exchange: s.entries[3]!.id, note: `no SQL error now ${P}` }];
+  append(...s.entries);
+  const api = candidatesApi(page, { entries: s.entries, seed: s.list });
+  await page.goto("/#findings/c-00000001");
+  const pane = page.getByRole("complementary", { name: "Candidate" });
+  const retests = pane.getByRole("list", { name: "Retests" });
+  await expect(retests).toContainText(`◆ agent · T-4 · fixed · ${s.entries[3]!.id} · no SQL error now ${P}`);
+  expect(await pane.locator("img").count()).toBe(0);
+
+  const agent = page.getByRole("region", { name: "Agent" });
+  // Cost first, before anything is drafted: retest of 2 exchanges.
+  await expect(agent).toContainText("~6 requests, the evidence's methods");
+  await expect(agent.getByRole("button")).toHaveText(["Explain for devs", "Retest", "Find variants", "Escalate impact"]);
+  expect(await agent.getByRole("button", { name: "PoC" }).count()).toBe(0);
+  await agent.getByRole("button", { name: "Retest" }).click();
+  await expect(agent.getByRole("status")).toContainText("Drafted T-7 (tester, ~5 requests, safe methods): approve it in Tasks");
+  expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/verbs/retest", body: { id: "c-00000001" } });
+  // Typing in the pane didn't triage it.
+  await expect(page.locator(".findings")).toContainText("to triage");
+  await expect(agent.getByRole("link", { name: "T-7" })).toHaveAttribute("href", "#tasks/T-7");
+
+  // On an exchange, in the inspector: Test for… takes a category.
+  await page.goto("/#traffic");
+  await page.locator("tr.row", { hasText: `${t}.test` }).filter({ hasText: "/o/7" }).click();
+  const onX = page.getByRole("region", { name: "Agent" });
+  await expect(onX.getByRole("button")).toHaveText(["Why is this interesting?", "Map auth", "Test for…"]);
+  await onX.getByLabel("WSTG category").selectOption("INPV");
+  await onX.getByRole("button", { name: "Test for…" }).click();
+  await expect(onX.getByRole("status")).toContainText("Drafted T-8");
+  expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/verbs/test_for", body: { id: s.entries[2]!.id, category: "INPV" } });
+});

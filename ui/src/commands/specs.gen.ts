@@ -715,6 +715,219 @@ export const SPECS = [
   {
     "args": {
       "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the exchange",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Why is this interesting? Drafts a reporter task that reads the exchange and says what it shows. No requests",
+    "hidden": false,
+    "mcp": true,
+    "name": "why",
+    "risk": "record",
+    "ui": true,
+    "usage": "why <exchange-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the candidate, like c-1a2b3c4d",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Explain for devs: drafts a reporter task that writes the finding up for the developers. No requests",
+    "hidden": false,
+    "mcp": true,
+    "name": "explain",
+    "risk": "record",
+    "ui": true,
+    "usage": "explain <candidate-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the exchange",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Map auth: drafts a mapper task: which sessions reach this endpoint, with which methods. ~40 requests, safe methods",
+    "hidden": false,
+    "mcp": true,
+    "name": "map_auth",
+    "risk": "record",
+    "ui": true,
+    "usage": "map_auth <exchange-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "description": "the WSTG category",
+          "enum": [
+            "ATHZ",
+            "INPV",
+            "ATHN",
+            "SESS",
+            "BUSL",
+            "CONF"
+          ],
+          "type": "string"
+        },
+        "id": {
+          "description": "the exchange",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "category"
+      ],
+      "type": "object"
+    },
+    "desc": "Test for…: drafts a tester task for one WSTG category (ATHZ, INPV, ATHN, SESS, BUSL, CONF) on this endpoint. ~100 requests; unsafe ones asked for",
+    "hidden": false,
+    "mcp": true,
+    "name": "test_for",
+    "risk": "record",
+    "ui": true,
+    "usage": "test_for <exchange-id> <category>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the candidate, like c-1a2b3c4d",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Retest: drafts a tester task that replays the finding's evidence and says whether it still reproduces. Its methods are the evidence's",
+    "hidden": false,
+    "mcp": true,
+    "name": "retest",
+    "risk": "record",
+    "ui": true,
+    "usage": "retest <candidate-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the candidate, like c-1a2b3c4d",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Find variants: drafts a tester task for the same bug in sibling parameters and endpoints. ~60 requests; unsafe ones asked for",
+    "hidden": false,
+    "mcp": true,
+    "name": "variants",
+    "risk": "record",
+    "ui": true,
+    "usage": "variants <candidate-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "the candidate, like c-1a2b3c4d",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Escalate impact: drafts a tester task: can it become a write, stored, or chain? ~30 requests, every one asked for",
+    "hidden": false,
+    "mcp": true,
+    "name": "escalate",
+    "risk": "record",
+    "ui": true,
+    "usage": "escalate <candidate-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate": {
+          "description": "the candidate, like c-1a2b3c4d",
+          "type": "string"
+        },
+        "exchange_id": {
+          "description": "the replay this task sent that shows it",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        },
+        "note": {
+          "description": "one line of why, for the tester",
+          "type": "string"
+        },
+        "verdict": {
+          "description": "what the retest showed",
+          "enum": [
+            "reproduces",
+            "fixed",
+            "unclear"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "candidate",
+        "verdict",
+        "exchange_id",
+        "note"
+      ],
+      "type": "object"
+    },
+    "desc": "file a retest's verdict on a candidate: reproduces, fixed or unclear, with the replay this task sent that shows it. Fixed sets flux status fixed; the tester can reopen it",
+    "hidden": false,
+    "mcp": true,
+    "name": "retest_result",
+    "risk": "record",
+    "ui": false,
+    "usage": "retest_result"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
       "properties": {},
       "required": [],
       "type": "object"

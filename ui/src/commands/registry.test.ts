@@ -86,10 +86,26 @@ function fakeCtx(over: Partial<Ctx> = {}) {
       dropped: 0,
     }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
+    verb: async (name, id, category) => (calls.push(`verb:${name}:${id}${category ? `:${category}` : ""}`), { id: "T-9", role: "tester", cost: "~5 requests, safe methods" }),
     ...over,
   };
   return { ctx, lines, calls };
 }
+
+test("verbs draft from the console: an exchange verb on the selected one, a candidate's by id (#67)", async () => {
+  const { ctx, lines, calls } = fakeCtx({ selected: () => ({ id: "e1" }) as never });
+  await execute("why", ctx);
+  await execute("test_for inpv", ctx);
+  await execute("test_for e2 ATHZ", ctx);
+  await execute("retest c-1a2b3c4d", ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("verb:")), ["verb:why:e1", "verb:test_for:e1:inpv", "verb:test_for:e2:ATHZ", "verb:retest:c-1a2b3c4d"]);
+  assert.ok(lines.some(([t, k]) => k === "sys" && t.includes("drafted T-9 (tester, ~5 requests")));
+  const bad = fakeCtx();
+  await execute("retest", bad.ctx);
+  await execute("test_for e1 NOPE", bad.ctx);
+  assert.equal(bad.calls.filter((c) => c.startsWith("verb:")).length, 0);
+  assert.ok(bad.lines.filter(([, k]) => k === "warn").length >= 2);
+});
 
 test("tokenize splits on whitespace and honors quotes", () => {
   assert.deepEqual(tokenize("open abc"), ["open", "abc"]);
@@ -296,6 +312,13 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["promote", "export"],
       ["export", "export"],
       ["halt", "record"],
+      ["why", "record"],
+      ["explain", "record"],
+      ["map_auth", "record"],
+      ["test_for", "record"],
+      ["retest", "record"],
+      ["variants", "record"],
+      ["escalate", "record"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");

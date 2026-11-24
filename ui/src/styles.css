@@ -737,3 +737,12 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .tasks .new-task .run-by label:has(input[type="radio"]) { display: flex; align-items: baseline; gap: var(--vg-space-2); }
 .tasks .actions { display: flex; flex-wrap: wrap; gap: var(--vg-space-3); }
 @media (max-width: 1100px) { .tasks { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); } .tasks .steer { grid-column: 2; border-left: 0; border-top: 1px solid var(--vg-border-subtle); } .tasks .cols { grid-template-columns: 1fr; } }
+
+/* Agent buttons (#67): verbs on an object, each with its cost first. */
+.verbs { margin-top: var(--vg-space-4); }
+.verb-row { display: flex; flex-wrap: wrap; gap: var(--vg-space-2) var(--vg-space-4); }
+.verb { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: var(--vg-space-1) var(--vg-space-2); }
+.verb .cost { font: var(--vg-text-xs) var(--vg-font-mono); color: var(--vg-text-secondary); }
+.verb select { font: var(--vg-text-sm) var(--vg-font-mono); }
+.verb-msg { margin: var(--vg-space-2) 0 0; font: var(--vg-text-sm) var(--vg-font-mono); color: var(--vg-text-secondary); }
+.verb-msg.error { color: var(--vg-accent-rust); }

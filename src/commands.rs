@@ -627,6 +627,115 @@ pub static COMMANDS: &[Command] = &[
         args: || obj(&[("name", text("a skill's name, like test-authz"))], &[]),
     },
     Command {
+        name: "why",
+        usage: "why <exchange-id>",
+        desc: "Why is this interesting? Drafts a reporter task that reads the exchange and says what it shows. No requests",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", id("the exchange"))], &["id"]),
+    },
+    Command {
+        name: "explain",
+        usage: "explain <candidate-id>",
+        desc: "Explain for devs: drafts a reporter task that writes the finding up for the developers. No requests",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", text("the candidate, like c-1a2b3c4d"))], &["id"]),
+    },
+    Command {
+        name: "map_auth",
+        usage: "map_auth <exchange-id>",
+        desc: "Map auth: drafts a mapper task: which sessions reach this endpoint, with which methods. ~40 requests, safe methods",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", id("the exchange"))], &["id"]),
+    },
+    Command {
+        name: "test_for",
+        usage: "test_for <exchange-id> <category>",
+        desc: "Test for…: drafts a tester task for one WSTG category (ATHZ, INPV, ATHN, SESS, BUSL, CONF) on this endpoint. ~100 requests; unsafe ones asked for",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", id("the exchange")), ("category", one_of(&["ATHZ", "INPV", "ATHN", "SESS", "BUSL", "CONF"], "the WSTG category"))], &["id", "category"]),
+    },
+    Command {
+        name: "retest",
+        usage: "retest <candidate-id>",
+        desc: "Retest: drafts a tester task that replays the finding's evidence and says whether it still reproduces. Its methods are the evidence's",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", text("the candidate, like c-1a2b3c4d"))], &["id"]),
+    },
+    Command {
+        name: "variants",
+        usage: "variants <candidate-id>",
+        desc: "Find variants: drafts a tester task for the same bug in sibling parameters and endpoints. ~60 requests; unsafe ones asked for",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", text("the candidate, like c-1a2b3c4d"))], &["id"]),
+    },
+    Command {
+        name: "escalate",
+        usage: "escalate <candidate-id>",
+        desc: "Escalate impact: drafts a tester task: can it become a write, stored, or chain? ~30 requests, every one asked for",
+        // A verb (#67, src/verbs.rs): drafts a task from the object, with its
+        // cost. A draft sends nothing; a human approves it.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", text("the candidate, like c-1a2b3c4d"))], &["id"]),
+    },
+    Command {
+        name: "retest_result",
+        usage: "retest_result",
+        desc: "file a retest's verdict on a candidate: reproduces, fixed or unclear, with the replay this task sent that shows it. Fixed sets flux status fixed; the tester can reopen it",
+        // A record on the candidate (flux's retest flow): nothing sent. The
+        // exchange must be one this task sent.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: || {
+            obj(
+                &[
+                    ("candidate", text("the candidate, like c-1a2b3c4d")),
+                    (
+                        "verdict",
+                        one_of(&["reproduces", "fixed", "unclear"], "what the retest showed"),
+                    ),
+                    ("exchange_id", id("the replay this task sent that shows it")),
+                    ("note", text("one line of why, for the tester")),
+                ],
+                &["candidate", "verdict", "exchange_id", "note"],
+            )
+        },
+    },
+    Command {
         name: "ca",
         usage: "ca",
         desc: "taphttp's CA certificate: fingerprint, download, and browser setup steps",
@@ -950,10 +1059,10 @@ mod tests {
                 "{n}: the agent's, not the console's"
             );
         }
-        assert!(COMMANDS
-            .iter()
-            .filter(|c| !c.ui)
-            .all(|c| matches!(c.name, "propose_finding" | "report" | "skill")));
+        assert!(COMMANDS.iter().filter(|c| !c.ui).all(|c| matches!(
+            c.name,
+            "propose_finding" | "report" | "skill" | "retest_result"
+        )));
         let k = find("skill").unwrap();
         assert_eq!((k.risk, k.mcp, k.ui), (Risk::Read, true, false));
     }
@@ -973,7 +1082,15 @@ mod tests {
                 "task",
                 "propose_finding",
                 "report",
-                "skill"
+                "skill",
+                "why",
+                "explain",
+                "map_auth",
+                "test_for",
+                "retest",
+                "variants",
+                "escalate",
+                "retest_result"
             ]
         );
         for c in COMMANDS.iter().filter(|c| !c.risk.agent_may()) {

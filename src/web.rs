@@ -117,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/estop/clear", post(api_estop_clear))
         .route("/api/tasks/{id}", get(api_task).patch(api_task_patch))
+        .route("/api/verbs/{name}", axum::routing::post(api_verb))
         .route("/api/redaction", get(api_redaction))
         .route("/api/ca", get(api_ca))
         .route("/api/ca.pem", get(api_ca_pem))
@@ -618,6 +619,44 @@ async fn api_tasks_new(State(state): State<AppState>, body: axum::body::Bytes) -
             StatusCode::BAD_REQUEST,
             &format!(r#"want {{"goal", "role", "constraints"?, "plan"?, "note"?}}: {e}"#),
         ),
+    }
+}
+
+/// A verb on an object (#67): `{"id", "category"?}` drafts the task it
+/// pre-fills; 201 `{"task", "cost"}`. Drafts only; same-origin, audited.
+async fn api_verb(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Ask {
+        id: String,
+        category: Option<String>,
+    }
+    let ask: Ask = match serde_json::from_slice(&body) {
+        Ok(a) => a,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"id", "category"?}}: {e}"#),
+            )
+        }
+    };
+    match r
+        .verb("human", &name, &ask.id, ask.category.as_deref())
+        .await
+    {
+        Ok((t, cost)) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({ "task": t, "cost": cost })),
+        )
+            .into_response(),
+        Err((status, why)) => json_error(status, &why),
     }
 }
 

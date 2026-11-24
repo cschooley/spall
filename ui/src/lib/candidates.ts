@@ -54,6 +54,17 @@ export interface Candidate {
   /** The tester's notes (#82): spall's, exported only when notesInExport. */
   notes: CandidateNote[];
   notesInExport: boolean;
+  /** Retests (#67, #65), oldest first: who, the verdict, the exchange. */
+  retests: Retest[];
+}
+
+/** One retest of a candidate. `by` is `human` or `agent:T-n`. */
+export interface Retest {
+  by: string;
+  at: string;
+  verdict: "reproduces" | "fixed" | "unclear";
+  exchange: string;
+  note: string;
 }
 
 /** A tester's note on a candidate (#82); `at` identifies it. */
@@ -135,6 +146,14 @@ export function asCandidate(v: unknown): Candidate | null {
       return by !== null && at !== null && text !== null ? [{ by, at, text }] : [];
     }),
     notesInExport: c.notes_in_export === true,
+    retests: (Array.isArray(c.retests) ? c.retests : []).flatMap((x) => {
+      const o = obj(x);
+      const by = str(o.by);
+      const at = str(o.at);
+      const verdict = oneOf(o.verdict, ["reproduces", "fixed", "unclear"] as const);
+      const exchange = str(o.exchange);
+      return by !== null && at !== null && verdict !== null && exchange !== null ? [{ by, at, verdict, exchange, note: str(o.note) ?? "" }] : [];
+    }),
     evidence:
       f.webRequest || f.webResponse
         ? {

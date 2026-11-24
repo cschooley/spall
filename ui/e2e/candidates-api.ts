@@ -21,6 +21,7 @@ export interface Stored {
   seen_again?: { by: string; at: string; exchanges: string[] }[];
   notes?: { by: string; at: string; text: string }[];
   notes_in_export?: boolean;
+  retests?: { by: string; at: string; verdict: string; exchange: string; note: string }[];
   finding: Json & { properties: Json; suppressions?: Json[]; correlationGuid?: string };
 }
 
@@ -85,6 +86,14 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
     const id = decodeURIComponent(new URL(r.request().url()).pathname.split("/").pop()!);
     const e = state.entries.get(id);
     return e ? r.fulfill({ json: e }) : r.fulfill({ status: 404, json: { error: `no exchange ${id}` } });
+  });
+  // Verbs (#67): a draft per click, recorded like the rest.
+  void page.route(/\/api\/verbs\/[^/?]+$/, (r) => {
+    const name = new URL(r.request().url()).pathname.split("/").pop()!;
+    const body = r.request().postDataJSON() as unknown;
+    state.calls.push({ method: "POST", path: `/api/verbs/${name}`, body });
+    const role = ["why", "explain"].includes(name) ? "reporter" : name === "map_auth" ? "mapper" : "tester";
+    return r.fulfill({ status: 201, json: { task: { id: `T-${7 + state.calls.filter((c) => c.path.startsWith("/api/verbs/")).length - 1}`, role, status: "draft" }, cost: "~5 requests, safe methods" } });
   });
   void page.route(/\/api\/candidates(\?.*)?$/, async (r: Route) => {
     const req = r.request();

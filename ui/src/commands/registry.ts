@@ -16,6 +16,7 @@ import type { CaInfo } from "../lib/ca.ts";
 import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
 import { RISKS, SPECS } from "./specs.gen.ts";
+import { CATEGORIES, draftedLine, VERBS, type Drafted } from "../lib/verbs.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
 
@@ -85,6 +86,8 @@ export interface Ctx {
   useEngagement(which: string): Promise<EngagementInfo | string>;
   /** Set one detail on the active engagement; "" clears a date. */
   setEngagement(field: EngagementField, value: string): Promise<{ engagement: EngagementInfo; changed: boolean } | string>;
+  /** Draft verb `name`'s task for object `id` (#67), or why not. */
+  verb(name: string, id: string, category?: string): Promise<Drafted | string>;
   /** Change the active engagement's rules of engagement (#36); `rate_limit: 0` is off. */
   setRules(patch: Partial<Rules>): Promise<{ engagement: EngagementInfo; changed: boolean } | string>;
 }
@@ -708,6 +711,28 @@ const IMPLS: readonly Impl[] = [
     run: (_a, ctx) => ctx.clearConsole(),
   },
   { name: "god", group: "app", run: (_a, ctx) => ctx.out("no.") },
+  ...VERBS.map(
+    (v): Impl => ({
+      name: v.name,
+      group: "app",
+      // An exchange verb runs on the selected one; a candidate's needs its id.
+      palette: { label: `Agent: ${v.label}`, hint: v.hint(1), needsArgs: v.on === "candidate" || v.name === "test_for" },
+      complete: v.name === "test_for" ? (args) => (args.length === 2 ? CATEGORIES.map(([c]) => c).filter((c) => c.startsWith(args[1]!.toUpperCase())) : []) : undefined,
+      run: async (args, ctx) => {
+        const want = v.on === "exchange" ? "exchange-id" : "candidate-id";
+        const usage = `usage: ${v.name} <${want}>${v.name === "test_for" ? ` <${CATEGORIES.map(([c]) => c).join("|")}>` : ""}`;
+        const isCategory = (a: string | undefined) => !!a && CATEGORIES.some(([c]) => c === a.toUpperCase());
+        // `test_for INPV` runs on the selected exchange; `test_for e1 INPV` on e1.
+        const [given, category] = v.name === "test_for" && args.length === 1 && isCategory(args[0]) ? [undefined, args[0]] : args;
+        const id = given ?? (v.on === "exchange" ? ctx.selected()?.id : undefined);
+        const max = v.name === "test_for" ? 2 : 1;
+        if (!id || !ID.test(id) || args.length > max || (v.name === "test_for" && !isCategory(category))) return ctx.out(usage, "warn");
+        const r = await ctx.verb(v.name, id, category);
+        if (typeof r === "string") return ctx.out(`${v.name}: ${r}`, "warn");
+        ctx.out(draftedLine(v.name, r), "sys");
+      },
+    }),
+  ),
 ];
 
 /** Names the UI implements and the server's registry doesn't (a test keeps this empty). */

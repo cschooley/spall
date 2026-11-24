@@ -2759,6 +2759,141 @@ async fn each_role_is_refused_or_allowed_through_the_gate_as_the_table_says() {
     );
 }
 
+/// Verbs on objects (#67): a button drafts a pre-filled task with its cost,
+/// for a human or an agent alike, and nothing runs until it's approved. A
+/// retest's verdict lands on the candidate as flux's retest flow has it.
+#[tokio::test]
+async fn verbs_draft_prefilled_tasks_and_a_retest_marks_the_candidate() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"e1","rule":"WSTG-INPV-05"}"#,
+        None,
+    )
+    .await;
+    let cid = body_json(&res)["id"].as_str().unwrap().to_string();
+
+    // A human's button: the draft, its role and its cost.
+    let res = post_text(
+        spall,
+        "/api/verbs/retest",
+        &format!(r#"{{"id":"{cid}"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let v = body_json(&res);
+    assert_eq!(v["task"]["status"], "draft");
+    assert_eq!(v["task"]["role"], "tester");
+    assert_eq!(v["task"]["asked_by"], "human");
+    assert_eq!(
+        v["task"]["constraints"]["hosts"],
+        serde_json::json!(["example.com"])
+    );
+    assert_eq!(
+        v["task"]["constraints"]["methods"],
+        serde_json::json!(["GET"])
+    );
+    assert_eq!(v["cost"], "~5 requests, safe methods");
+    assert!(v["task"]["note"].as_str().unwrap().contains("Retest on"));
+    let res = post_text(
+        spall,
+        "/api/verbs/test_for",
+        r#"{"id":"e1","category":"nope"}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 400") && res.contains("ATHZ"),
+        "{res}"
+    );
+    let res = post_text(spall, "/api/verbs/poc", r#"{"id":"e1"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 404"), "not built: {res}");
+    let res = post_text(spall, "/api/verbs/why", r#"{"id":"nope"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 404"), "{res}");
+    assert!(stub.replays().is_empty(), "a verb sends nothing");
+
+    // An agent's: the same command, drafted for the tester, capped.
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let out = tools
+        .call("T-1", "why", &serde_json::json!({"id": "e1"}))
+        .await;
+    assert!(
+        !out.is_error && out.text.contains("drafted T-3"),
+        "{}",
+        out.text
+    );
+    let t3 = task_of(&r, "T-3");
+    assert_eq!(
+        (t3.status, t3.role, t3.asked_by.as_str()),
+        (
+            spall::tasks::Status::Draft,
+            spall::tasks::Role::Reporter,
+            "agent:T-1"
+        )
+    );
+    for _ in 0..4 {
+        assert!(
+            !tools
+                .call("T-1", "why", &serde_json::json!({"id": "e1"}))
+                .await
+                .is_error
+        );
+    }
+    let out = tools
+        .call("T-1", "why", &serde_json::json!({"id": "e1"}))
+        .await;
+    assert!(
+        out.is_error && out.text.contains("leave the rest"),
+        "{}",
+        out.text
+    );
+    assert!(stub.replays().is_empty());
+
+    // A retest's verdict needs a replay this task sent.
+    let rr = |exchange: &str| serde_json::json!({"candidate": cid, "verdict": "fixed", "exchange_id": exchange, "note": "no error any more"});
+    let out = tools.call("T-1", "retest_result", &rr("e1")).await;
+    assert!(
+        out.is_error && out.text.contains("isn't a request"),
+        "{}",
+        out.text
+    );
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 200, "{body}");
+    let replay = body["id"].as_str().unwrap().to_string();
+    let out = tools.call("T-1", "retest_result", &rr(&replay)).await;
+    assert!(!out.is_error, "{}", out.text);
+    let all = body_json(&get_text(spall, "/api/candidates").await);
+    let c = all["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == cid.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(c["finding"]["properties"]["flux/status"], "fixed", "{c}");
+    assert_eq!(c["finding"]["baselineState"], "absent");
+    assert_eq!(c["retests"][0]["by"], "agent:T-1");
+    assert_eq!(c["retests"][0]["exchange"], replay.as_str());
+    assert!(c["finding"]["properties"]["flux/replayIds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x == replay.as_str()));
+    let audit = audit_records(&dir.path().join("api-token"));
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("retest ") && s.contains("fixed"))
+        && a["task"] == "T-1"));
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("retest on ") && s.contains("create T-2"))));
+}
+
 #[tokio::test]
 async fn a_method_or_host_outside_the_task_pauses() {
     let (_dir, stub, _spall, r) = agent_setup(r#"{"methods":["GET"]}"#).await;
@@ -3621,7 +3756,15 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "task",
             "propose_finding",
             "report",
-            "skill"
+            "skill",
+            "why",
+            "explain",
+            "map_auth",
+            "test_for",
+            "retest",
+            "variants",
+            "escalate",
+            "retest_result"
         ]
     );
 
