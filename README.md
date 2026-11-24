@@ -5,7 +5,7 @@
 
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
-**Status:** pre-alpha, v0.7.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement), M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types), M5 (redacted flux export) and M6a (an agent over MCP, held to the gate). Next: M6b (spall runs the agent itself). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
+**Status:** pre-alpha, v0.8.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement), M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types), M5 (redacted flux export), M6a (an agent over MCP, held to the gate) and M6b (spall runs the agent itself: roles, intake and plans, quad, agent buttons). Next: M6c (sensors: the execution sandbox, an OOB listener, inboxes). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
@@ -376,8 +376,8 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 | M4 candidates | Flag candidates, keyboard triage, evidence, suppressions, on [flux](https://github.com/cschooley/flux) crate types; WSTG v4.2 rule ids (#48) | done, `v0.5.0` |
 | M5 export | Promotion, redacted flux export (redaction in the flux crate), redaction preview | done, `v0.6.0` |
 | M6a agent over MCP | Agent tasks driven by an outside MCP client: read traffic, replay through the gate, propose findings (never promote); approvals, e-stop, Tasks view, attribution | done, `v0.7.0` |
-| M6b agent host | spall runs the agent: your own model key, roles, intake chat and plans, quad, agent buttons | done |
-| M6c sensors | Execution sandbox, OOB listener, disposable inboxes | |
+| M6b agent host | spall runs the agent: your own model key, roles, intake chat and plans, quad, agent buttons | done, `v0.8.0` |
+| M6c sensors | Execution sandbox (and the PoC button), OOB listener, disposable inboxes | next |
 | M7 intercept | Pause and modify requests via taphttp | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses; route maps (Surface) | |
 | M9 academy | Capstone: hands-on exercises on shared WSTG/ASVS skills; content packs from repos, licenses shown; ready-to-go lab | |

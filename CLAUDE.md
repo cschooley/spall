@@ -135,10 +135,11 @@ redacted, validated flux report (`POST /api/export`,
 and an explicit ask, marked `flux/redacted: false`. The inspector's
 credential highlighting comes from flux (`/api/redaction`).
 
-## Current milestone: M6b "agent host"
+## Current milestone: M6c "sensors"
 
+**M6b "agent host": done** (tag `v0.8.0`, #69: #63-#67, #81, #82).
 **M6a "agent over MCP": done** (tag `v0.7.0`, #68: #53-#62, #73,
-#74, #78). Its notes stay below: M6b builds on all of it.
+#74, #78). Their notes stay below: M6c builds on both.
 
 M6 is split in three (2026-11-23), lettered so M7 onward keep their
 numbers. Read docs/architecture.md (agent sections) and docs/ux.md
@@ -149,9 +150,13 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #67 buttons (done), #66 quad (done), #65 intake (done), #65 intake, #66 quad,
-  #67 buttons.
-- **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
+- **M6b agent host** (#69, done): #63 host, #64 roles, #65 intake,
+  #66 quad, #67 buttons (all but PoC: #13), #81 task report, #82
+  candidate notes.
+- **M6c sensors** (#70, current): #13 sandbox (it also carries the PoC
+  button, the last #67 verb), #1 OOB listener, #2 inboxes. Each sensor
+  is a primitive (architecture.md, *Is it a primitive?*): a stop path
+  (e-stop, halt), a budget charge, attribution.
 
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
