@@ -560,14 +560,38 @@ impl Replayer {
         let now = taphttp_types::Timestamp::now().to_string();
         let finding = finding_for(rule, &flag, &entry, &now);
         let eng = self.engagements.active().id;
-        if let Some(existing) = self.candidates.matching(&eng, &finding) {
-            return json(
-                StatusCode::CONFLICT,
-                serde_json::json!({
-                    "error": format!("already flagged as {} (same endpoint, parameter and rule)", existing.id),
-                    "existing": existing,
-                }),
-            );
+        // The same issue (#78): exactly (the fingerprint), or in other
+        // words (the rule at its granularity, any state).
+        let key = crate::candidates::dedupe_key(rule, &entry.url, flag.parameter.as_deref());
+        let found = match self.candidates.matching(&eng, &finding) {
+            Some(c) => Some(("exact", c)),
+            None => self.candidates.similar(&eng, &key).map(|c| ("similar", c)),
+        };
+        let mut possible_duplicate_of = None;
+        if let Some((how, existing)) = found {
+            let place = crate::candidates::place(rule, &entry.url, flag.parameter.as_deref());
+            if task.is_some() {
+                // An agent's: never a sibling. What it saw joins the original.
+                return self.seen_again(&eng, existing, how, &place, &entry, &flag, by, task, &now);
+            }
+            if how == "exact" || !flag.force {
+                let error = if how == "exact" {
+                    format!(
+                        "already flagged as {} (same endpoint, parameter and rule)",
+                        existing.id
+                    )
+                } else {
+                    format!(
+                        "possibly a duplicate of {} ({}): the same rule on {place}. Add this exchange to its evidence, or flag anyway if it's a different issue.",
+                        existing.id, rule.id
+                    )
+                };
+                return json(
+                    StatusCode::CONFLICT,
+                    serde_json::json!({ "error": error, "match": how, "existing": existing }),
+                );
+            }
+            possible_duplicate_of = Some(existing.id);
         }
         let c = Candidate {
             id: new_id(),
@@ -575,6 +599,8 @@ impl Replayer {
             updated: now,
             flagged_by: by.into(),
             promoted: None,
+            possible_duplicate_of,
+            seen_again: Vec::new(),
             finding,
         };
         let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
@@ -598,6 +624,63 @@ impl Replayer {
                 error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
             }
         }
+    }
+
+    /// An agent proposed what `existing` already covers (#78): its exchanges
+    /// join the original as a sighting (audited) unless they're all there
+    /// already. 409 with the original, `match`, `place` and `seen_again`.
+    #[allow(clippy::too_many_arguments)]
+    fn seen_again(
+        &self,
+        eng: &str,
+        existing: crate::candidates::Candidate,
+        how: &str,
+        place: &str,
+        entry: &TrafficEntry,
+        flag: &crate::candidates::Flag,
+        by: &str,
+        task: Option<&str>,
+        now: &str,
+    ) -> Response {
+        let new: Vec<String> = std::iter::once(&flag.exchange)
+            .chain(&flag.replays)
+            .filter(|x| !existing.exchanges().contains(x))
+            .cloned()
+            .collect();
+        let mut seen = false;
+        let mut existing = existing;
+        if !new.is_empty() {
+            let s = crate::candidates::Sighting {
+                by: by.into(),
+                at: now.into(),
+                exchanges: new,
+            };
+            let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
+            rec.actor = if task.is_some() { "agent" } else { "human" }.into();
+            rec.task = task.map(String::from);
+            rec.method = Some(entry.method.clone());
+            rec.target = Some(entry.url.clone());
+            rec.result_id = Some(existing.id.clone());
+            rec.reason = Some(format!("seen again {} by {by} ({how} match)", existing.id));
+            match self.candidates.seen_again(eng, &existing.id, s) {
+                Ok(c) => {
+                    existing = c;
+                    seen = true;
+                }
+                Err(e) => rec.error = Some(e.to_string()),
+            }
+            self.audit(&rec);
+        }
+        json(
+            StatusCode::CONFLICT,
+            serde_json::json!({
+                "error": format!("{} already covers this ({place})", existing.id),
+                "match": how,
+                "place": place,
+                "seen_again": seen,
+                "existing": existing,
+            }),
+        )
     }
 
     /// Candidate `id` as it would be exported, and what redaction changes

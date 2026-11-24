@@ -3683,6 +3683,150 @@ async fn an_agent_fetches_over_mcp_and_what_it_fetched_is_evidence() {
 }
 
 #[tokio::test]
+async fn the_same_issue_in_other_words_is_seen_again_not_proposed_again() {
+    let (dir, stub, spall, _r) = agent_setup("{}").await;
+    stub.push("e2");
+    let token = dir.path().join("api-token");
+    let flag = |body: &'static str| post_text(spall, "/api/candidates", body, None);
+    let list = || async {
+        body_json(&get_text(spall, "/api/candidates").await)["candidates"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+
+    // T-3's finding (#78's fixture): a server banner, described in prose,
+    // confirmed by the tester.
+    let res = flag(r#"{"exchange":"e1","rule":"WSTG-INFO-02","parameter":"Server response header / error-page footer"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let orig = body_json(&res)["id"].as_str().unwrap().to_string();
+    let res = send_text(
+        spall,
+        "PATCH",
+        &format!("/api/candidates/{orig}"),
+        r#"{"op":"confirm"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+
+    let mut m = Mcp::new(spall, &token);
+    m.initialize("?task=T-1").await;
+    m.call("open", serde_json::json!({"id": "e1"})).await;
+    m.call("open", serde_json::json!({"id": "e2"})).await;
+
+    // An agent's parameter is a name; prose goes in the message.
+    let (text, is_err) = m
+        .call("propose_finding", serde_json::json!({"exchange_id": "e2", "rule": "WSTG-INFO-02", "message": "nginx version", "parameter": "Server header"}))
+        .await;
+    assert!(is_err && text.contains("the name of"), "{text}");
+
+    // T-4: the same banner on another path of the same host.
+    let (text, is_err) = m
+        .call("propose_finding", serde_json::json!({"exchange_id": "e2", "rule": "WSTG-INFO-02", "message": "nginx/1.25 in the Server header", "parameter": "Server"}))
+        .await;
+    assert!(
+        is_err && text.starts_with(&format!("duplicate: {orig} (confirmed)")),
+        "{text}"
+    );
+    assert!(text.contains("your evidence was added to it"), "{text}");
+    assert!(text.contains("doesn't count against your cap"), "{text}");
+    let l = list().await;
+    assert_eq!(l.len(), 1, "no new candidate: {l:?}");
+    assert_eq!(
+        l[0]["finding"]["properties"]["flux/replayIds"],
+        serde_json::json!(["e1", "e2"])
+    );
+    assert_eq!(l[0]["seen_again"][0]["by"], "agent:T-1");
+    assert_eq!(
+        l[0]["seen_again"][0]["exchanges"],
+        serde_json::json!(["e2"])
+    );
+    assert_eq!(l[0]["finding"]["occurrenceCount"], 2);
+    let rec = audit_records(&token)
+        .into_iter()
+        .rev()
+        .find(|a| a["action"] == "candidate")
+        .unwrap();
+    assert!(
+        rec["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("seen again {orig}")),
+        "{rec}"
+    );
+    assert_eq!(rec["task"], "T-1");
+    // Again with nothing new: still the original, nothing more recorded.
+    let (text, _) = m
+        .call("propose_finding", serde_json::json!({"exchange_id": "e2", "rule": "WSTG-INFO-02", "message": "again", "parameter": "server"}))
+        .await;
+    assert!(
+        text.starts_with(&format!("duplicate: {orig}"))
+            && !text.contains("your evidence was added"),
+        "{text}"
+    );
+    assert_eq!(list().await[0]["seen_again"].as_array().unwrap().len(), 1);
+
+    // A rejected one: the agent hears why, and its sighting is kept.
+    let res = flag(r#"{"exchange":"e1","rule":"WSTG-CONF-07"}"#).await;
+    let hsts = body_json(&res)["id"].as_str().unwrap().to_string();
+    send_text(
+        spall,
+        "PATCH",
+        &format!("/api/candidates/{hsts}"),
+        r#"{"op":"reject","justification":"HSTS is set at the CDN"}"#,
+        None,
+    )
+    .await;
+    let (text, is_err) = m
+        .call(
+            "propose_finding",
+            serde_json::json!({"exchange_id": "e2", "rule": "WSTG-CONF-07", "message": "no HSTS"}),
+        )
+        .await;
+    assert!(
+        is_err && text.contains("set it aside") && text.contains("HSTS is set at the CDN"),
+        "{text}"
+    );
+    assert_eq!(list().await.len(), 2);
+
+    // Parameter rules: another path or parameter is another finding.
+    for (ex, param) in [("e1", "q"), ("e2", "q"), ("e1", "id")] {
+        let (text, is_err) = m
+            .call("propose_finding", serde_json::json!({"exchange_id": ex, "rule": "WSTG-INPV-05", "message": "injectable", "parameter": param}))
+            .await;
+        assert!(
+            !is_err && text.starts_with("proposed c-"),
+            "{ex} {param}: {text}"
+        );
+    }
+    assert_eq!(list().await.len(), 5);
+
+    // A human's near-duplicate: warned, then flagged anyway, marked.
+    let res = flag(r#"{"exchange":"e2","rule":"WSTG-INFO-02","parameter":"X-Powered-By"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    let b = body_json(&res);
+    assert_eq!(b["match"], "similar");
+    assert_eq!(b["existing"]["id"], orig.as_str());
+    assert!(
+        b["error"]
+            .as_str()
+            .unwrap()
+            .contains("possibly a duplicate"),
+        "{b}"
+    );
+    let res =
+        flag(r#"{"exchange":"e2","rule":"WSTG-INFO-02","parameter":"X-Powered-By","force":true}"#)
+            .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    assert_eq!(body_json(&res)["possible_duplicate_of"], orig.as_str());
+    // The exact same one is still refused, force or not.
+    let res = flag(r#"{"exchange":"e1","rule":"WSTG-INFO-02","parameter":"Server response header / error-page footer","force":true}"#).await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    assert_eq!(body_json(&res)["match"], "exact");
+}
+
+#[tokio::test]
 async fn an_agent_proposes_findings_only_with_real_evidence_and_a_human_decides() {
     let (dir, stub, spall, _r) = agent_setup("{}").await;
     stub.push("e2");

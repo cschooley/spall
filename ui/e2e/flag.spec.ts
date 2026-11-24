@@ -70,6 +70,38 @@ test("flagging the same thing again offers to add evidence instead", async ({ pa
   expect(api.calls.at(-1)).toEqual({ method: "PATCH", path: "/api/candidates/c-00000009", body: { op: "evidence", exchanges: [b.id] } });
 });
 
+test("the same issue in other words warns; flag anyway marks it a possible duplicate (#78)", async ({ page }) => {
+  const t = token();
+  const a = entry({ host: `${t}.test`, url: `https://${t}.test/` });
+  const b = entry({ host: `${t}.test`, method: "HEAD", url: `https://${t}.test/missing`, ts: new Date(Date.parse(a.ts) + 1000).toISOString() });
+  append(a, b);
+  const api = candidatesApi(page, {
+    entries: [a, b],
+    seed: [{ id: "c-00000009", created: "", updated: "", flagged_by: "human", finding: findingFor("WSTG-INFO-02", a, "Server header") }],
+  });
+  await page.goto("/#traffic");
+  await filterTo(page, t);
+  await page.locator("tr.row", { hasText: "/missing" }).click();
+  await page.locator(".inspector [data-action='flag']").click();
+  const form = page.getByRole("form", { name: "Flag as candidate" });
+  await form.getByLabel("Find a rule").fill("info-02");
+  await form.getByLabel("Rule", { exact: true }).selectOption("WSTG-INFO-02");
+  await form.getByLabel("Parameter").fill("X-Powered-By");
+  await form.getByRole("button", { name: /^flag/ }).click();
+  const group = page.getByRole("group", { name: "Flag as candidate" });
+  await expect(group.getByRole("status")).toHaveText("Possibly a duplicate of c-00000009 (WSTG-INFO-02, to triage)");
+  await expect(group).toContainText(`the same rule on host ${t}.test`);
+  await expect(group.getByRole("button", { name: "add as evidence" })).toBeEnabled();
+  await group.getByRole("button", { name: "flag anyway" }).click();
+  await expect(page.getByRole("status")).toHaveText("✓ Flagged as c-00000002: WSTG-INFO-02, waiting for triage.");
+  expect(api.calls.at(-1)).toEqual({
+    method: "POST",
+    path: "/api/candidates",
+    body: { exchange: b.id, rule: "WSTG-INFO-02", parameter: "X-Powered-By", level: "warning", force: true },
+  });
+  expect(api.list.at(-1)!.possible_duplicate_of).toBe("c-00000009");
+});
+
 test("a rejected match is badged with its reason, as text, and can be reopened (#46)", async ({ page }) => {
   const t = token();
   const e = entry({ host: `${t}.test`, url: `https://${t}.test/search?q=${encodeURIComponent(P)}` });

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { asCandidate, type Candidate } from "./candidates.ts";
 import { RAW } from "./candidates.fixture.ts";
-import { candidateFromHash, duplicateTargets, hostOf, matchesFindingQuery, nextAfter, queue, tabCounts } from "./findings.ts";
+import { candidateFromHash, duplicateTargets, groupDuplicates, hostOf, matchesFindingQuery, nextAfter, originalOf, queue, tabCounts } from "./findings.ts";
 
 function cand(id: string, over: { status?: string; disposition?: string; rule?: string; url?: string; message?: string } = {}): Candidate {
   const f = RAW.finding;
@@ -66,4 +66,35 @@ test("hash, hosts and duplicate targets", () => {
   assert.equal(hostOf("https://[::1]:8443/x"), "[::1]");
   assert.equal(hostOf(null), "");
   assert.deepEqual(duplicateTargets(LIST, "c-1").map((c) => c.id), ["c-2", "c-5"]);
+});
+
+test("duplicates are listed under their original (#78)", () => {
+  const orig = { ...cand("c-o", { status: "confirmed" }), guid: "g-1" };
+  const decided = { ...cand("c-d"), suppressed: { disposition: "duplicate" as const, justification: "same", duplicateOf: "g-1" } };
+  const maybe = { ...cand("c-m"), possibleDuplicateOf: "c-o" };
+  const other = cand("c-x");
+  const lost = { ...cand("c-l"), possibleDuplicateOf: "c-gone" };
+  const all = [maybe, other, orig, decided, lost];
+  assert.equal(originalOf(decided, all)?.id, "c-o");
+  assert.equal(originalOf(maybe, all)?.id, "c-o");
+  assert.equal(originalOf(lost, all), null, "an original that's gone");
+  assert.equal(originalOf(other, all), null);
+  assert.deepEqual(
+    groupDuplicates(all, all).map((g) => [g.c.id, g.original?.id ?? null, g.nested]),
+    [
+      ["c-x", null, false],
+      ["c-o", null, false],
+      ["c-m", "c-o", true],
+      ["c-d", "c-o", true],
+      ["c-l", null, false],
+    ],
+  );
+  // The original in another tab: the duplicate stays in place and names it.
+  assert.deepEqual(
+    groupDuplicates([maybe, other], all).map((g) => [g.c.id, g.original?.id ?? null, g.nested]),
+    [
+      ["c-m", "c-o", false],
+      ["c-x", null, false],
+    ],
+  );
 });

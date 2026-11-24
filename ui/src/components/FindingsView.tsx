@@ -25,7 +25,7 @@ import {
   type RedactionPreview,
 } from "../lib/candidates.ts";
 import { saveBytes } from "../lib/download.ts";
-import { candidateFromHash, duplicateTargets, nextAfter, queue, tabCounts, TABS, type Tab } from "../lib/findings.ts";
+import { candidateFromHash, duplicateTargets, groupDuplicates, nextAfter, originalOf, queue, tabCounts, TABS, type Tab } from "../lib/findings.ts";
 import { loadCatalog, type Rule } from "../lib/rules.ts";
 import { timeOf } from "../lib/format.ts";
 import { Evidence } from "./Evidence.tsx";
@@ -106,7 +106,9 @@ export function FindingsView({
   }, []);
 
   const all = useMemo(() => (Array.isArray(list) ? list : []), [list]);
-  const shown = useMemo(() => queue(all, tab, query), [all, tab, query]);
+  // Duplicates sit under their original (#78); j/k walk the list as shown.
+  const grouped = useMemo(() => groupDuplicates(queue(all, tab, query), all), [all, tab, query]);
+  const shown = useMemo(() => grouped.map((g) => g.c), [grouped]);
   const counts = useMemo(() => tabCounts(all), [all]);
   // The selection, or the top of the queue while there's anything to select.
   const sel = selected && all.some((c) => c.id === selected) ? selected : (shown[0]?.id ?? null);
@@ -234,12 +236,14 @@ export function FindingsView({
           </p>
         ) : null}
         <ol className="qlist" aria-label="Candidates">
-          {shown.map((c) => (
-            <li key={c.id} className={c.id === sel ? "sel" : undefined} aria-current={c.id === sel ? "true" : undefined}>
+          {grouped.map(({ c, original, nested }) => (
+            <li key={c.id} className={[c.id === sel ? "sel" : "", nested ? "dup" : ""].filter(Boolean).join(" ") || undefined} aria-current={c.id === sel ? "true" : undefined}>
               <button type="button" onClick={() => (setSelected(c.id), setAsking(null))}>
                 <span className={`lvl lvl-${c.level ?? "none"}`}>{c.level ?? "—"}</span>
                 <span className="rule">{c.ruleId}</span>
                 <span className="where">{where(c)}</span>
+                {original ? <span className="dup-of">{`${c.suppressed?.disposition === "duplicate" ? "duplicate" : "possible duplicate"} of ${original.id}`}</span> : null}
+                {c.seenAgain.length > 0 ? <span className="seen">{`seen ×${c.seenAgain.length + 1}`}</span> : null}
                 <span className={`state st-${stateOf(c).replace(/ /g, "-")}`}>{stateOf(c)}</span>
                 {ofCandidate(c.flaggedBy).agent ? (
                   <span className="by-agent" title={`proposed by ${ofCandidate(c.flaggedBy).label}`}>
@@ -332,6 +336,29 @@ export function FindingsView({
                   <dd>{current.guid}</dd>
                 </>
               ) : null}
+              {(() => {
+                const o = originalOf(current, all);
+                return o ? (
+                  <>
+                    <dt>{current.suppressed?.disposition === "duplicate" ? "duplicate of" : "possible duplicate of"}</dt>
+                    <dd>
+                      <a href={`#findings/${encodeURIComponent(o.id)}`}>{`${o.id} · ${o.ruleId} · ${stateOf(o)}`}</a>
+                    </dd>
+                  </>
+                ) : null;
+              })()}
+              {current.seenAgain.length > 0 ? (
+                <>
+                  <dt>seen again</dt>
+                  <dd>
+                    <ul className="seen-again">
+                      {current.seenAgain.map((s) => (
+                        <li key={`${s.by}-${s.at}`}>{`${timeOf(s.at)} · ${ofCandidate(s.by).label} · ${s.exchanges.join(", ") || "no new exchange"}`}</li>
+                      ))}
+                    </ul>
+                  </dd>
+                </>
+              ) : null}
               {current.suppressed ? (
                 <>
                   <dt>decision</dt>
@@ -372,7 +399,8 @@ function Ask({
   onSubmit(op: Op): void;
 }) {
   const [why, setWhy] = useState("");
-  const [of, setOf] = useState(targets[0]?.id ?? "");
+  // A "flag anyway" candidate names its likely original (#78): start there.
+  const [of, setOf] = useState(targets.find((t) => t.id === current.possibleDuplicateOf)?.id ?? targets[0]?.id ?? "");
   const [level, setLevel] = useState<Level>(current.level ?? "warning");
   const [rank, setRank] = useState(current.rank === null ? "" : String(current.rank));
   const [message, setMessage] = useState(current.message);

@@ -549,6 +549,11 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .qlist button:hover { background: var(--vg-bg-surface); }
 .qlist .where { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vg-text-secondary); }
 .qlist .state { margin: 0; }
+/* Duplicates under their original (#78); the marks are text, not color. */
+.qlist li.dup button { padding-left: calc(var(--vg-space-5) + 3ch); }
+.qlist .dup-of, .qlist .seen { grid-column: 3 / -1; color: var(--vg-text-tertiary); font-size: var(--vg-text-xs); }
+.qlist li.dup .dup-of::before { content: "↳ "; }
+.cand .seen-again { margin: 0; padding: 0; list-style: none; }
 .lvl { color: var(--vg-text-tertiary); }
 .lvl-error { color: var(--vg-status-5xx); }
 .lvl-warning { color: var(--vg-accent-rust); }

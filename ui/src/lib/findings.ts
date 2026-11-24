@@ -93,3 +93,39 @@ export function candidateFromHash(hash: string): string | null {
 export function duplicateTargets(list: Candidate[], id: string): Candidate[] {
   return list.filter((c) => c.id !== id && !c.suppressed).sort((a, b) => Number(b.status === "confirmed") - Number(a.status === "confirmed"));
 }
+
+/** The candidate `c` duplicates: by `flux/duplicateOf` (a correlationGuid) once decided, else the one it was flagged anyway against (#78). */
+export function originalOf(c: Candidate, all: Candidate[]): Candidate | null {
+  const guid = c.suppressed?.disposition === "duplicate" ? c.suppressed.duplicateOf : null;
+  const o = guid ? all.find((x) => x.guid === guid) : c.possibleDuplicateOf ? all.find((x) => x.id === c.possibleDuplicateOf) : undefined;
+  return o && o.id !== c.id ? o : null;
+}
+
+/** A queue row: the candidate, and its original if it's a duplicate (#78). */
+export interface Grouped {
+  c: Candidate;
+  original: Candidate | null;
+  /** Listed right under its original (which is in the queue too). */
+  nested: boolean;
+}
+
+/**
+ * The queue with each duplicate under its original when both are in it
+ * (#78); otherwise in place, still naming its original. Order otherwise
+ * kept, so j/k walk it as shown.
+ */
+export function groupDuplicates(shown: Candidate[], all: Candidate[]): Grouped[] {
+  const ids = new Set(shown.map((c) => c.id));
+  const orig = new Map(shown.map((c) => [c.id, originalOf(c, all)] as const));
+  const nests = (c: Candidate) => {
+    const o = orig.get(c.id);
+    return !!o && ids.has(o.id) && !orig.get(o.id);
+  };
+  const out: Grouped[] = [];
+  for (const c of shown) {
+    if (nests(c)) continue;
+    out.push({ c, original: orig.get(c.id) ?? null, nested: false });
+    for (const d of shown) if (nests(d) && orig.get(d.id)?.id === c.id) out.push({ c: d, original: c, nested: true });
+  }
+  return out;
+}

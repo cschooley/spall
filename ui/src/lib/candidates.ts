@@ -47,6 +47,17 @@ export interface Candidate {
   evidence: Evidence | null;
   /** When a human promoted it for export (#50); null if not. */
   promoted: string | null;
+  /** Flagged anyway although it looked like this candidate (#78). */
+  possibleDuplicateOf: string | null;
+  /** Each later time the same issue was proposed or flagged (#78). */
+  seenAgain: Sighting[];
+}
+
+/** One more time an issue was seen (#78). */
+export interface Sighting {
+  by: string;
+  at: string;
+  exchanges: string[];
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
@@ -99,6 +110,13 @@ export function asCandidate(v: unknown): Candidate | null {
       : null,
     confirmedBy: strs(props["flux/confirmedBy"]),
     promoted: str(c.promoted),
+    possibleDuplicateOf: str(c.possible_duplicate_of),
+    seenAgain: (Array.isArray(c.seen_again) ? c.seen_again : []).flatMap((x) => {
+      const o = obj(x);
+      const by = str(o.by);
+      const at = str(o.at);
+      return by !== null && at !== null ? [{ by, at, exchanges: strs(o.exchanges) }] : [];
+    }),
     evidence:
       f.webRequest || f.webResponse
         ? {
@@ -142,6 +160,8 @@ export interface FlagInput {
   message?: string;
   replays?: string[];
   cwe?: number;
+  /** Flag it although it looks like an existing candidate (#78). */
+  force?: boolean;
 }
 
 /** The request body: empty optional fields left out. */
@@ -153,10 +173,15 @@ export function flagBody(i: FlagInput): Record<string, unknown> {
   if (i.message?.trim()) b.message = i.message.trim();
   if (i.replays?.length) b.replays = i.replays;
   if (i.cwe) b.cwe = i.cwe;
+  if (i.force) b.force = true;
   return b;
 }
 
-export type FlagResult = { kind: "created"; candidate: Candidate } | { kind: "exists"; candidate: Candidate; message: string } | { kind: "error"; message: string };
+export type FlagResult =
+  | { kind: "created"; candidate: Candidate }
+  /** `similar`: the same rule on the same place in other words (#78); flag anyway with `force`. Otherwise the same fingerprint. */
+  | { kind: "exists"; candidate: Candidate; message: string; similar: boolean }
+  | { kind: "error"; message: string };
 
 /** Flag an exchange. A matching fingerprint comes back as `exists`. */
 export async function flag(i: FlagInput): Promise<FlagResult> {
@@ -174,7 +199,7 @@ export async function flag(i: FlagInput): Promise<FlagResult> {
   }
   if (res.status === 409) {
     const c = asCandidate(o.existing);
-    if (c) return { kind: "exists", candidate: c, message: str(o.error) ?? "already flagged" };
+    if (c) return { kind: "exists", candidate: c, message: str(o.error) ?? "already flagged", similar: o.match === "similar" };
   }
   return { kind: "error", message: str(o.error) ?? `HTTP ${res.status}` };
 }
@@ -275,7 +300,7 @@ export function paramNames(url: string): string[] {
   return [...new Set(names)];
 }
 
-const FLAG_USAGE = "usage: flag <exchange-id> --rule <id> [--param P] [--level error|warning|note|none] [--rank 0-100] [--message M] [--replay <id>]... [--cwe N]";
+const FLAG_USAGE = "usage: flag <exchange-id> --rule <id> [--param P] [--level error|warning|note|none] [--rank 0-100] [--message M] [--replay <id>]... [--cwe N] [--anyway]";
 
 /** `flag` console arguments. */
 export function parseFlagArgs(args: string[]): FlagInput | string {
@@ -284,6 +309,11 @@ export function parseFlagArgs(args: string[]): FlagInput | string {
   const i: FlagInput = { exchange, rule: "" };
   for (let n = 0; n < rest.length; n += 2) {
     const k = rest[n]!;
+    if (k === "--anyway") {
+      i.force = true;
+      n -= 1;
+      continue;
+    }
     const v = rest[n + 1];
     if (v === undefined) return `${k}: needs a value. ${FLAG_USAGE}`;
     if (k === "--rule") i.rule = v;

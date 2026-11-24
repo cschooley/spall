@@ -541,7 +541,7 @@ const IMPLS: readonly Impl[] = [
     name: "flag",
     group: "traffic",
     palette: { label: "Flag exchange as candidate…", hint: "flag", needsArgs: true },
-    complete: (args) => (args.length >= 2 ? ["--rule", "--param", "--level", "--rank", "--message", "--replay", "--cwe"] : []),
+    complete: (args) => (args.length >= 2 ? ["--rule", "--param", "--level", "--rank", "--message", "--replay", "--cwe", "--anyway"] : []),
     run: async (args, ctx) => {
       const i = parseFlagArgs(args);
       if (typeof i === "string") return ctx.out(i, "warn");
@@ -551,6 +551,11 @@ const IMPLS: readonly Impl[] = [
       if (r.kind === "created") {
         ctx.out(`flagged ${c.id}: ${c.ruleId} · ${where(c)}`);
         ctx.out("waiting for triage in Findings (5)", "sys");
+        return;
+      }
+      if (r.similar) {
+        ctx.out(`flag: ${r.message}`, "warn");
+        ctx.out(`flag it as its own with --anyway, or add this exchange to ${c.id}'s evidence from the inspector (f)`, "sys");
         return;
       }
       ctx.out(`flag: already flagged as ${c.id} (${c.ruleId}, ${stateOf(c)})${c.suppressed ? `: ${c.suppressed.justification}` : ""}`, "warn");

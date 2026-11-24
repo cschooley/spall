@@ -444,7 +444,7 @@ pub static COMMANDS: &[Command] = &[
     },
     Command {
         name: "flag",
-        usage: "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N]",
+        usage: "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N] [--anyway]",
         desc: "flag an exchange as a candidate finding (rules lists rule ids); it waits in Findings for triage",
         // Agents propose through propose_finding (#60), never flag.
         risk: Risk::Record,
@@ -473,6 +473,10 @@ pub static COMMANDS: &[Command] = &[
                     (
                         "cwe",
                         json!({"type": "integer", "minimum": 1, "description": "override the rule's CWE"}),
+                    ),
+                    (
+                        "anyway",
+                        flag("flag it although it looks like an existing candidate (#78)"),
                     ),
                 ],
                 &["exchange_id", "rule"],

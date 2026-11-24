@@ -79,6 +79,55 @@ test("5 opens Findings: a keyboard triage queue that clears", async ({ page }) =
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
 
+test("duplicates sit under their original, which shows where else it was seen (#78)", async ({ page }) => {
+  const t = token();
+  const s = seed(t);
+  append(...s.entries);
+  const [a, b] = s.entries as [ReturnType<typeof entry>, ReturnType<typeof entry>];
+  const orig: Stored = {
+    id: "c-00000010",
+    created: a.ts,
+    updated: a.ts,
+    flagged_by: "human",
+    seen_again: [{ by: "agent:T-4", at: "2026-11-24T03:00:00Z", exchanges: [b.id] }],
+    finding: findingFor("WSTG-INFO-02", a, undefined, { correlationGuid: "6f1c2e3a-0000-4000-8000-00000000aaaa" }),
+  };
+  orig.finding.properties["flux/status"] = "confirmed";
+  const maybe: Stored = { id: "c-00000011", created: b.ts, updated: b.ts, flagged_by: "human", possible_duplicate_of: orig.id, finding: findingFor("WSTG-INFO-02", b, "X-Powered-By") };
+  const decided: Stored = {
+    id: "c-00000012",
+    created: b.ts,
+    updated: b.ts,
+    flagged_by: "agent:T-3",
+    finding: {
+      ...findingFor("WSTG-INFO-02", b),
+      suppressions: [{ kind: "external", status: "accepted", justification: "same banner", properties: { "flux/disposition": "duplicate", "flux/duplicateOf": "6f1c2e3a-0000-4000-8000-00000000aaaa" } }],
+    },
+  };
+  candidatesApi(page, { entries: s.entries, seed: [orig, ...s.list, maybe, decided] });
+  await page.goto("/#findings");
+  await page.getByRole("tab", { name: /^all/ }).click();
+  const rows = page.getByRole("list", { name: "Candidates" }).locator("li");
+  const ids = await rows.evaluateAll((ls) => ls.map((l) => (l.querySelector(".rule")?.textContent ?? "") + (l.classList.contains("dup") ? " ↳" : "")));
+  const at = ids.indexOf("WSTG-INFO-02");
+  expect(ids.slice(at, at + 3), ids.join(", ")).toEqual(["WSTG-INFO-02", "WSTG-INFO-02 ↳", "WSTG-INFO-02 ↳"]);
+  await expect(rows.nth(at)).toContainText("seen ×2");
+  await expect(rows.nth(at + 1)).toContainText(/(possible )?duplicate of c-00000010/);
+
+  const cand = page.getByRole("complementary", { name: "Candidate" });
+  await rows.filter({ hasText: "possible duplicate of c-00000010" }).getByRole("button").click();
+  await expect(cand.locator("h2")).toHaveText("c-00000011 · WSTG-INFO-02");
+  await expect(cand.locator(".kv")).toContainText("possible duplicate ofc-00000010 · WSTG-INFO-02 · confirmed");
+  // d starts from the likely original.
+  await page.keyboard.press("d");
+  await expect(page.getByRole("form", { name: "Duplicate of another candidate" }).getByLabel("Duplicate of")).toHaveValue("c-00000010");
+  await page.keyboard.press("Escape");
+
+  await cand.getByRole("link", { name: /c-00000010/ }).click();
+  await expect(cand.locator("h2")).toHaveText("c-00000010 · WSTG-INFO-02");
+  await expect(cand.locator(".seen-again")).toContainText(`agent · T-4 · ${b.id}`);
+});
+
 test("filter, accept risk and edit", async ({ page }) => {
   const t = token();
   const s = seed(t);

@@ -431,6 +431,10 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "anyway": {
+          "description": "flag it although it looks like an existing candidate (#78)",
+          "type": "boolean"
+        },
         "cwe": {
           "description": "override the rule's CWE",
           "minimum": 1,
@@ -491,7 +495,7 @@ export const SPECS = [
     "name": "flag",
     "risk": "record",
     "ui": true,
-    "usage": "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N]"
+    "usage": "flag <exchange-id> --rule <id> [--param P] [--level L] [--rank N] [--message M] [--replay <id>]... [--cwe N] [--anyway]"
   },
   {
     "args": {

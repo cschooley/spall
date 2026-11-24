@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use taphttp_types::{BodyEncoding, TrafficEntry};
 
 use crate::engagement::{create_dir_private, write_atomic};
-use crate::rules::Entry;
+use crate::rules::{Entry, Granularity};
 
 pub const SCHEMA_VERSION: u32 = 1;
 /// Per engagement; a flagging session never gets near it, a runaway does.
@@ -43,7 +43,53 @@ pub struct Candidate {
     /// When a human promoted it for export (#50); never an agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promoted: Option<String>,
+    /// Flagged although it looked like this one ("flag anyway", #78): a
+    /// hint for triage, not a decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub possible_duplicate_of: Option<String>,
+    /// Seen again (#78): the same issue proposed or flagged later, kept on
+    /// this one instead of as a sibling. Its exchanges join the evidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub seen_again: Vec<Sighting>,
     pub finding: Finding,
+}
+
+/// One more time an issue was seen (#78): by whom, when, which exchanges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sighting {
+    /// `human` or `agent:T-n`.
+    pub by: String,
+    pub at: String,
+    pub exchanges: Vec<String>,
+}
+
+/// Where a rule's findings are told apart, in words: "host a.test".
+pub fn place(rule: &Entry, url: &str, parameter: Option<&str>) -> String {
+    let (host, path) = host_and_path(url);
+    let path = path.split(['?', '#']).next().unwrap_or("/");
+    match (rule.granularity(), parameter) {
+        (Granularity::Host, _) => format!("host {host}"),
+        (Granularity::Parameter, Some(p)) => format!("{host}{path}, parameter {p}"),
+        _ => format!("{host}{path}"),
+    }
+}
+
+/// SARIF's `result.occurrenceCount`: how many times it was observed.
+const OCCURRENCES: &str = "occurrenceCount";
+
+/// What makes two candidates the same issue however they're worded (#78):
+/// the rule and the place at the rule's granularity (host; host and path,
+/// query dropped; or those and the parameter name, case-folded). Never the
+/// method or the message.
+pub fn dedupe_key(rule: &Entry, url: &str, parameter: Option<&str>) -> String {
+    let (host, path) = host_and_path(url);
+    let path = path.split(['?', '#']).next().unwrap_or("/");
+    let param = parameter.unwrap_or("").trim().to_lowercase();
+    match rule.granularity() {
+        Granularity::Host => format!("{}|{host}", rule.id),
+        Granularity::Endpoint => format!("{}|{host}|{path}", rule.id),
+        Granularity::Parameter => format!("{}|{host}|{path}|{param}", rule.id),
+    }
 }
 
 impl Candidate {
@@ -63,6 +109,14 @@ impl Candidate {
     /// The exchanges backing it, decisive one first.
     pub fn exchanges(&self) -> &[String] {
         &self.finding.properties.replay_ids
+    }
+
+    /// [`dedupe_key`] for this candidate; `None` if its rule left the
+    /// catalog or it has no endpoint.
+    pub fn dedupe_key(&self) -> Option<String> {
+        let rule = crate::rules::find(&self.finding.rule_id)?;
+        let (_, url) = self.finding.endpoint()?;
+        Some(dedupe_key(rule, url, self.parameter()))
     }
 
     /// Shares a fingerprint value with `f` (flux: consumers match on any
@@ -94,6 +148,10 @@ pub struct Flag {
     /// Only for `spall/other`: the CWE, when the tester knows it.
     #[serde(default)]
     pub cwe: Option<u32>,
+    /// Flag it although it looks like an existing candidate (#78). Never
+    /// past an exact fingerprint match.
+    #[serde(default)]
+    pub force: bool,
 }
 
 impl Flag {
@@ -274,6 +332,61 @@ impl Store {
             .iter()
             .find(|c| c.matches(f))
             .cloned()
+    }
+
+    /// The candidate that already covers `key` (#78), in any state. An
+    /// original wins over one marked its duplicate; then the oldest.
+    pub fn similar(&self, engagement: &str, key: &str) -> Option<Candidate> {
+        let all = self.lock();
+        let same: Vec<&Candidate> = all
+            .get(engagement)?
+            .iter()
+            .filter(|c| c.dedupe_key().as_deref() == Some(key))
+            .collect();
+        same.iter()
+            .find(|c| c.finding.duplicate_of().is_none())
+            .or(same.first())
+            .map(|c| (*c).clone())
+    }
+
+    /// Record that `id` was seen again (#78): its new exchanges join the
+    /// evidence (never past [`MAX_EVIDENCE`]), and its last-seen time and
+    /// occurrence count move. Nothing else changes, whatever its state.
+    pub fn seen_again(
+        &self,
+        engagement: &str,
+        id: &str,
+        sighting: Sighting,
+    ) -> Result<Candidate, Error> {
+        let mut all = self.lock();
+        let list = all
+            .get_mut(engagement)
+            .ok_or_else(|| Error::NotFound(id.into()))?;
+        let c = list
+            .iter_mut()
+            .find(|c| c.id == id)
+            .ok_or_else(|| Error::NotFound(id.into()))?;
+        let before = c.clone();
+        let ids = &mut c.finding.properties.replay_ids;
+        for x in &sighting.exchanges {
+            if !ids.contains(x) && ids.len() < MAX_EVIDENCE {
+                ids.push(x.clone());
+            }
+        }
+        let p = c.finding.provenance.get_or_insert_with(Default::default);
+        p.last_detection_time_utc = Some(sighting.at.clone());
+        c.updated = sighting.at.clone();
+        c.seen_again.push(sighting);
+        let n = 1 + c.seen_again.len() as u64;
+        c.finding.extra.insert(OCCURRENCES.into(), n.into());
+        let after = c.clone();
+        if let Err(e) = save(&self.dir, engagement, list) {
+            if let Some(c) = list.iter_mut().find(|c| c.id == id) {
+                *c = before;
+            }
+            return Err(Error::Save(format!("{e:#}")));
+        }
+        Ok(after)
     }
 
     /// Add `c` and save. On a failed save nothing is added.
@@ -748,7 +861,26 @@ mod tests {
             updated: NOW.into(),
             flagged_by: "human".into(),
             promoted: None,
+            possible_duplicate_of: None,
+            seen_again: Vec::new(),
             finding: finding_for(rule, &flag(rule.id, param), &entry("ex-1", url), NOW),
+        }
+    }
+
+    fn candidate_for(
+        id: &str,
+        rule: &str,
+        method: &str,
+        url: &str,
+        param: Option<&str>,
+    ) -> Candidate {
+        let r = rules::find(rule).unwrap();
+        let mut e = entry("ex-1", url);
+        e.method = method.into();
+        Candidate {
+            id: id.into(),
+            finding: finding_for(r, &flag(rule, param), &e, NOW),
+            ..candidate(id, url, param)
         }
     }
 
@@ -822,6 +954,166 @@ mod tests {
         );
         assert_eq!(host_and_path("https://[::1]:443/x"), ("[::1]".into(), "/x"));
         assert_eq!(host_and_path("https://[::1]/x"), ("[::1]".into(), "/x"));
+    }
+
+    #[test]
+    fn the_same_issue_in_other_words_has_the_same_dedupe_key() {
+        let key = |rule: &str, method: &str, url: &str, p: Option<&str>| {
+            candidate_for("c", rule, method, url, p)
+                .dedupe_key()
+                .unwrap()
+        };
+        // T-4 (#78): one server banner, described two ways, on GET and HEAD.
+        let a = key(
+            "WSTG-INFO-02",
+            "GET",
+            "http://host.docker.internal:8080/",
+            Some("Server response header / error-page footer"),
+        );
+        let b = key(
+            "WSTG-INFO-02",
+            "HEAD",
+            "http://HOST.docker.internal:8080/missing?x=1",
+            Some("Server"),
+        );
+        assert_eq!(a, b);
+        assert_ne!(
+            a,
+            key("WSTG-INFO-02", "GET", "http://other.test/", Some("Server"))
+        );
+        assert_ne!(
+            a,
+            key(
+                "WSTG-CONF-07",
+                "GET",
+                "http://host.docker.internal:8080/",
+                None
+            )
+        );
+        // Endpoint rules: the path matters, the query and method don't.
+        let e = |url: &str, m: &str| key("WSTG-ATHZ-02", m, url, None);
+        assert_eq!(
+            e("https://a.test/admin?x=1", "GET"),
+            e("https://a.test/admin", "POST")
+        );
+        assert_ne!(
+            e("https://a.test/admin", "GET"),
+            e("https://a.test/users", "GET")
+        );
+        // Parameter rules: and the parameter, by name, case-folded.
+        let p = |url: &str, n: &str| key("WSTG-INPV-05", "GET", url, Some(n));
+        assert_eq!(p("https://a.test/s?q=1", "q"), p("https://a.test/s", " Q "));
+        assert_ne!(p("https://a.test/s", "q"), p("https://a.test/s", "id"));
+        assert_ne!(p("https://a.test/s", "q"), p("https://a.test/t", "q"));
+    }
+
+    #[test]
+    fn similar_finds_the_original_in_any_state_and_seen_again_adds_to_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut orig = candidate_for(
+            "c-1",
+            "WSTG-INFO-02",
+            "GET",
+            "http://h.test/",
+            Some("Server header"),
+        );
+        orig.created = "2026-11-23T10:00:00Z".into();
+        store.add("e", orig).unwrap();
+        store
+            .apply(
+                "e",
+                "c-1",
+                &Op::Reject {
+                    justification: "a CDN's banner".into(),
+                },
+                NOW,
+                &mut guids(),
+            )
+            .unwrap();
+        let dup = candidate_for(
+            "c-2",
+            "WSTG-INFO-02",
+            "GET",
+            "http://h.test/x",
+            Some("banner"),
+        );
+        let key = dup.dedupe_key().unwrap();
+        store.add("e", dup).unwrap();
+        store
+            .apply(
+                "e",
+                "c-2",
+                &Op::Duplicate {
+                    of: "c-1".into(),
+                    justification: "same".into(),
+                },
+                NOW,
+                &mut guids(),
+            )
+            .unwrap();
+
+        let found = store.similar("e", &key).unwrap();
+        assert_eq!(
+            found.id, "c-1",
+            "the original, rejected or not, over its duplicate"
+        );
+        assert!(store.similar("e", "WSTG-INFO-02|elsewhere.test").is_none());
+        assert!(store.similar("other-engagement", &key).is_none());
+
+        let at = "2026-11-24T03:00:00Z";
+        let c = store
+            .seen_again(
+                "e",
+                "c-1",
+                Sighting {
+                    by: "agent:T-4".into(),
+                    at: at.into(),
+                    exchanges: vec!["ex-1".into(), "ex-9".into()],
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            c.exchanges(),
+            ["ex-1", "ex-9"],
+            "new exchanges join, none twice"
+        );
+        assert_eq!(c.seen_again.len(), 1);
+        assert_eq!(c.finding.extra[OCCURRENCES], 2);
+        assert_eq!(
+            c.finding
+                .provenance
+                .as_ref()
+                .unwrap()
+                .last_detection_time_utc
+                .as_deref(),
+            Some(at)
+        );
+        assert!(
+            c.finding.is_suppressed(),
+            "still rejected: seeing it again decides nothing"
+        );
+        // Kept, and still valid flux.
+        let again = Store::open(dir.path()).unwrap().get("e", "c-1").unwrap();
+        assert_eq!(again, c);
+        let mut driver = flux::ToolComponent::tool("spall", "0.4.0");
+        driver.rules = rules::flux_rules([c.finding.rule_id.as_str()]);
+        assert_eq!(
+            flux::validate::validate(&flux::Report::new(driver, vec![c.finding.clone()])),
+            vec![]
+        );
+        assert!(matches!(
+            store.seen_again(
+                "e",
+                "c-404",
+                Sighting {
+                    by: "human".into(),
+                    at: at.into(),
+                    exchanges: vec![]
+                }
+            ),
+            Err(Error::NotFound(_))
+        ));
     }
 
     #[test]

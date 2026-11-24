@@ -2,8 +2,9 @@
 // tests run spall in log mode, which keeps no candidates, so
 // /api/candidates* and /api/status are mocked here with the server's
 // rules: a matching fingerprint (endpoint without query, parameter, rule)
-// answers 409 with the existing candidate; triage steps change flux
-// fields the way src/candidates.rs does.
+// answers 409 with the existing candidate; so does a host-level rule on the
+// same host (#78, `match: "similar"`) unless `force`; triage steps change
+// flux fields the way src/candidates.rs does.
 import { expect } from "./fixtures.ts";
 import type { Page, Route } from "@playwright/test";
 import type { TrafficEntry } from "../src/types.ts";
@@ -16,8 +17,15 @@ export interface Stored {
   updated: string;
   flagged_by: string;
   promoted?: string | null;
+  possible_duplicate_of?: string;
+  seen_again?: { by: string; at: string; exchanges: string[] }[];
   finding: Json & { properties: Json; suppressions?: Json[]; correlationGuid?: string };
 }
+
+/** Host-level rules in src/rules.rs that the browser tests use. */
+const HOST_RULES = ["WSTG-INFO-02", "WSTG-CONF-07"];
+const hostOf = (url: unknown) => (typeof url === "string" ? new URL(url).host : "");
+const urlOf = (c: Stored) => ((c.finding.locations as Json[])[0] as { physicalLocation: { artifactLocation: { uri: string } } }).physicalLocation.artifactLocation.uri;
 
 const CWE: Record<string, number> = { "WSTG-INPV-05": 89, "WSTG-INPV-01": 79, "WSTG-ATHZ-04": 639 };
 
@@ -80,7 +88,7 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
     const req = r.request();
     if (req.method() === "POST") {
       expect(req.headers()["content-type"]).toBe("application/json");
-      const b = req.postDataJSON() as { exchange: string; rule: string; parameter?: string; replays?: string[]; level?: string; message?: string };
+      const b = req.postDataJSON() as { exchange: string; rule: string; parameter?: string; replays?: string[]; level?: string; message?: string; force?: boolean };
       state.calls.push({ method: "POST", path: "/api/candidates", body: b });
       const e = state.entries.get(b.exchange);
       if (!e) return r.fulfill({ status: 404, json: { error: `no exchange ${b.exchange}` } });
@@ -90,8 +98,16 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
       f.properties["flux/replayIds"] = [e.id, ...(b.replays ?? [])];
       const fp = (f.fingerprints as Json)["flux/dast/v1"];
       const existing = state.list.find((c) => (c.finding.fingerprints as Json)["flux/dast/v1"] === fp);
-      if (existing) return r.fulfill({ status: 409, json: { error: `already flagged as ${existing.id}`, existing } });
+      if (existing) return r.fulfill({ status: 409, json: { error: `already flagged as ${existing.id}`, match: "exact", existing } });
+      const similar = HOST_RULES.includes(b.rule) ? state.list.find((c) => c.finding.ruleId === b.rule && hostOf(urlOf(c)) === hostOf(e.url)) : undefined;
+      if (similar && !b.force) {
+        return r.fulfill({
+          status: 409,
+          json: { error: `possibly a duplicate of ${similar.id} (${b.rule}): the same rule on host ${hostOf(e.url)}. Add this exchange to its evidence, or flag anyway if it's a different issue.`, match: "similar", existing: similar },
+        });
+      }
       const c: Stored = { id: `c-${String(state.list.length + 1).padStart(8, "0")}`, created: new Date().toISOString(), updated: new Date().toISOString(), flagged_by: "human", finding: f };
+      if (similar) c.possible_duplicate_of = similar.id;
       state.list.push(c);
       return r.fulfill({ status: 201, json: c });
     }

@@ -486,6 +486,19 @@ impl Tools {
             evidence: Vec<String>,
         }
         let a: A = args("propose_finding", a)?;
+        // A name, so the same input isn't a new finding each time it's
+        // described differently (#78).
+        if let Some(p) = &a.parameter {
+            let name_ok = !p.is_empty()
+                && p.len() <= 100
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.[]$:@".contains(c));
+            if !name_ok {
+                return Err(err(format!(
+                    "parameter must be the name of the query parameter, header, cookie or field it's about (like `id`, `Server` or `session`), not a description: {p:?}. Describe it in message; leave parameter out for a whole-host or whole-endpoint issue."
+                )));
+            }
+        }
         let proposed = t
             .log
             .iter()
@@ -542,16 +555,24 @@ impl Tools {
             StatusCode::CONFLICT => {
                 let ex = &v["existing"];
                 let id = ex["id"].as_str().unwrap_or("?");
+                let place = v["place"].as_str().unwrap_or("the same place");
+                let added = if v["seen_again"] == true {
+                    "; your evidence was added to it"
+                } else {
+                    ""
+                };
                 let sup = ex["finding"]["suppressions"].as_array().and_then(|s| s.first()).cloned();
                 Err(err(match sup {
                     Some(s) => format!(
-                        "already decided: {id} matches this (same endpoint, parameter and rule) and the tester set it aside ({}): {}. Don't propose it again.",
+                        "already decided: {id} covers this ({}, {place}) and the tester set it aside ({}): {}{added}. Don't propose it again.",
+                        a.rule,
                         s["properties"]["flux/disposition"].as_str().unwrap_or("suppressed"),
                         s["justification"].as_str().unwrap_or("")
                     ),
                     None => format!(
-                        "duplicate: {id} already covers this (same endpoint, parameter and rule; {}). It's in the tester's queue.",
-                        ex["finding"]["properties"]["flux/status"].as_str().unwrap_or("candidate")
+                        "duplicate: {id} ({}) already covers {} on {place}{added}. It's in the tester's hands; don't propose it again (this doesn't count against your cap).",
+                        ex["finding"]["properties"]["flux/status"].as_str().unwrap_or("candidate"),
+                        a.rule
                     ),
                 }))
             }

@@ -76,9 +76,25 @@ test("parseFlagArgs", () => {
     message: "SQLi",
   });
   assert.deepEqual(parseFlagArgs(["e1", "--rule", "spall/other", "--cwe", "CWE-693"]), { exchange: "e1", rule: "spall/other", cwe: 693 });
+  assert.deepEqual(parseFlagArgs(["e1", "--anyway", "--rule", "R", "--param", "p"]), { exchange: "e1", rule: "R", parameter: "p", force: true });
+  assert.deepEqual(flagBody({ exchange: "e1", rule: "R", force: true }), { exchange: "e1", rule: "R", force: true });
+  assert.deepEqual(flagBody({ exchange: "e1", rule: "R", force: false }), { exchange: "e1", rule: "R" });
   for (const bad of [[], ["--rule", "x"], ["e1"], ["e1", "--rule"], ["e1", "--rule", "R", "--level", "high"], ["e1", "--rule", "R", "--rank", "101"], ["e1", "--rule", "R", "--cwe", "x"], ["e1", "--rule", "R", "--nope", "1"]]) {
     assert.equal(typeof parseFlagArgs(bad), "string", bad.join(" "));
   }
+});
+
+test("a candidate's possible duplicate and sightings (#78), read defensively", () => {
+  const c = asCandidate({
+    ...RAW,
+    possible_duplicate_of: "c-orig",
+    seen_again: [{ by: "agent:T-4", at: "2026-11-24T03:00:00Z", exchanges: ["e9", 5] }, { by: 1 }, "junk"],
+  })!;
+  assert.equal(c.possibleDuplicateOf, "c-orig");
+  assert.deepEqual(c.seenAgain, [{ by: "agent:T-4", at: "2026-11-24T03:00:00Z", exchanges: ["e9"] }]);
+  const plain = asCandidate(RAW)!;
+  assert.equal(plain.possibleDuplicateOf, null);
+  assert.deepEqual(plain.seenAgain, []);
 });
 
 test("paramNames from a URL's query", () => {

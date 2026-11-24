@@ -606,9 +606,20 @@ test("flag files a candidate; a match says where it stands; never MCP", async ()
   assert.deepEqual(calls, ['flag:{"exchange":"e1","rule":"WSTG-INPV-05","parameter":"sort","level":"error"}']);
   assert.deepEqual(lines.slice(1).map(([t]) => t), ["flagged c-0a1b2c3d: WSTG-INPV-05 · GET https://shop.test/api/p/17 · parameter sort", "waiting for triage in Findings (5)"]);
   const rejected = asCandidate({ ...RAW, finding: { ...RAW.finding, suppressions: [{ kind: "external", status: "accepted", justification: "output is encoded", properties: { "flux/disposition": "falsePositive" } }] } })!;
-  const dup = fakeCtx({ flag: async () => ({ kind: "exists", candidate: rejected, message: "already" }) });
+  const dup = fakeCtx({ flag: async () => ({ kind: "exists", candidate: rejected, message: "already", similar: false }) });
   await execute("flag e1 --rule WSTG-INPV-05", dup.ctx);
   assert.deepEqual(dup.lines[1], ["flag: already flagged as c-0a1b2c3d (WSTG-INPV-05, rejected): output is encoded", "warn"]);
+  // The same issue in other words (#78): say so; --anyway flags it.
+  const near = fakeCtx({
+    flag: async (i) => (i.force ? { kind: "created", candidate: asCandidate(RAW)! } : { kind: "exists", candidate: asCandidate(RAW)!, message: "possibly a duplicate of c-0a1b2c3d (WSTG-INPV-05): the same rule on shop.test/api/p/17, parameter sort.", similar: true }),
+  });
+  await execute("flag e1 --rule WSTG-INPV-05 --param Sort", near.ctx);
+  assert.deepEqual(near.lines.slice(1), [
+    ["flag: possibly a duplicate of c-0a1b2c3d (WSTG-INPV-05): the same rule on shop.test/api/p/17, parameter sort.", "warn"],
+    ["flag it as its own with --anyway, or add this exchange to c-0a1b2c3d's evidence from the inspector (f)", "sys"],
+  ]);
+  await execute("flag e1 --rule WSTG-INPV-05 --param Sort --anyway", near.ctx);
+  assert.match(near.lines.at(-2)![0], /^flagged c-0a1b2c3d/);
   const bad = fakeCtx();
   await execute("flag e1", bad.ctx);
   assert.equal(bad.lines[1]![1], "warn");

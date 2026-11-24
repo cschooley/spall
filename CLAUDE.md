@@ -219,7 +219,13 @@ carrying traffic goes through `src/untrusted.rs`: nonce-wrapped, labeled,
 4 KiB bodies by default, credentials masked with flux's redaction (always,
 for agents; replay by id doesn't need them). `propose_finding` needs
 evidence the task sent or read (`Event::Request`/`Event::Read`), is
-`flagged_by: agent:T-n`, capped at `agent::MAX_PROPOSALS` per task. The
+`flagged_by: agent:T-n`, capped at `agent::MAX_PROPOSALS` per task.
+Dedupe (#78): besides the exact `flux/dast/v1` 409, `candidates::dedupe_key`
+matches the rule at its granularity (`rules::Granularity`: host, endpoint,
+parameter) in any state. An agent's match becomes a `Sighting` on the
+original (`seen_again`; evidence, `lastDetectionTimeUtc`,
+`occurrenceCount`), never a candidate. A human's warns, and `force` flags
+it with `possible_duplicate_of`. An agent's `parameter` must be a name. The
 registry's `ui` flag marks agent-only commands (`propose_finding`).
 `tests/fixtures/injection-corpus.txt` is the injection corpus.
 

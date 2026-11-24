@@ -31,7 +31,68 @@ pub struct Entry {
     path: &'static str,
 }
 
+/// How much of a place one finding of a rule covers, for spotting the
+/// same issue described twice (#78): a server banner is one finding per
+/// host, missing authorization one per endpoint, an injection one per
+/// parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Granularity {
+    Host,
+    Endpoint,
+    Parameter,
+}
+
+/// Rules whose finding is about the whole host: response headers and
+/// configuration that a server sends everywhere.
+const HOST_RULES: &[&str] = &[
+    "WSTG-INFO-02",
+    "WSTG-CONF-05",
+    "WSTG-CONF-07",
+    "WSTG-CONF-10",
+    "WSTG-CONF-11",
+    "WSTG-CRYP-01",
+    "WSTG-CLNT-09",
+];
+
+/// Rules whose finding is about one input: a parameter, header or cookie.
+/// `spall/other` too: the narrowest, so unknown kinds never merge.
+const PARAMETER_RULES: &[&str] = &[
+    "WSTG-ATHZ-01",
+    "WSTG-ATHZ-04",
+    "WSTG-SESS-02",
+    "WSTG-INPV-01",
+    "WSTG-INPV-02",
+    "WSTG-INPV-04",
+    "WSTG-INPV-05",
+    "WSTG-INPV-06",
+    "WSTG-INPV-07",
+    "WSTG-INPV-08",
+    "WSTG-INPV-09",
+    "WSTG-INPV-10",
+    "WSTG-INPV-11",
+    "WSTG-INPV-12",
+    "WSTG-INPV-18",
+    "WSTG-INPV-19",
+    "WSTG-CLNT-01",
+    "WSTG-CLNT-03",
+    "WSTG-CLNT-04",
+    "WSTG-CLNT-05",
+    OTHER,
+];
+
 impl Entry {
+    /// Everything else is one finding per endpoint (host and path).
+    pub fn granularity(&self) -> Granularity {
+        if HOST_RULES.contains(&self.id) {
+            Granularity::Host
+        } else if PARAMETER_RULES.contains(&self.id) {
+            Granularity::Parameter
+        } else {
+            Granularity::Endpoint
+        }
+    }
+
     pub fn help_uri(&self) -> Option<String> {
         (!self.path.is_empty()).then(|| format!("{HELP_BASE}{}", self.path))
     }
@@ -185,6 +246,20 @@ mod tests {
             && b[5..9].iter().all(u8::is_ascii_uppercase)
             && b[9] == b'-'
             && b[10..].iter().all(u8::is_ascii_digit)
+    }
+
+    #[test]
+    fn every_rule_has_a_granularity_and_the_lists_name_real_rules() {
+        for id in HOST_RULES.iter().chain(PARAMETER_RULES) {
+            assert!(find(id).is_some(), "{id} isn't in the catalog");
+        }
+        let g = |id: &str| find(id).unwrap().granularity();
+        assert_eq!(g("WSTG-INFO-02"), Granularity::Host, "a server banner");
+        assert_eq!(g("WSTG-CONF-07"), Granularity::Host, "HSTS");
+        assert_eq!(g("WSTG-ATHZ-02"), Granularity::Endpoint);
+        assert_eq!(g("WSTG-CONF-06"), Granularity::Endpoint);
+        assert_eq!(g("WSTG-INPV-05"), Granularity::Parameter);
+        assert_eq!(g(OTHER), Granularity::Parameter);
     }
 
     #[test]

@@ -10,7 +10,7 @@ import { loadCatalog, OTHER, ruleLine, searchRules, type Rule } from "../lib/rul
 import { shortId } from "../lib/format.ts";
 import type { TrafficEntry } from "../types.ts";
 
-type Outcome = { kind: "created" | "evidence" | "reopened"; candidate: Candidate } | { kind: "exists"; candidate: Candidate } | null;
+type Outcome = { kind: "created" | "evidence" | "reopened"; candidate: Candidate } | { kind: "exists"; candidate: Candidate; similar: string | null } | null;
 
 export function FlagForm({
   entry,
@@ -49,7 +49,7 @@ export function FlagForm({
   const params = useMemo(() => paramNames(entry.url), [entry.url]);
   const chosen = Array.isArray(rules) ? rules.find((r) => r.id === rule) : undefined;
 
-  const submit = async () => {
+  const submit = async (force = false) => {
     if (!rule) return setErr("pick a rule");
     const r = rank.trim() ? Number(rank) : undefined;
     if (r !== undefined && (!Number.isFinite(r) || r < 0 || r > 100)) return setErr("confidence: 0-100");
@@ -66,10 +66,11 @@ export function FlagForm({
       message,
       replays: [...picked],
       cwe: rule === OTHER ? c : undefined,
+      force,
     });
     setBusy(false);
     if (res.kind === "error") return setErr(res.message);
-    setOutcome(res.kind === "created" ? { kind: "created", candidate: res.candidate } : { kind: "exists", candidate: res.candidate });
+    setOutcome(res.kind === "created" ? { kind: "created", candidate: res.candidate } : { kind: "exists", candidate: res.candidate, similar: res.similar ? res.message : null });
     if (res.kind === "created") onChanged(res.candidate);
   };
 
@@ -88,7 +89,12 @@ export function FlagForm({
     return (
       <div className="flag" role="group" aria-label="Flag as candidate">
         {outcome.kind === "exists" ? (
-          c.suppressed ? (
+          outcome.similar ? (
+            <>
+              <p className="badge-prev" role="status">{`Possibly a duplicate of ${c.id} (${c.ruleId}, ${state})`}</p>
+              <p className="note wrap">{outcome.similar}</p>
+            </>
+          ) : c.suppressed ? (
             <>
               <p className="badge-prev" role="status">{`Previously ${state}: ${c.id} (${c.ruleId})`}</p>
               <p className="why">{c.suppressed.justification}</p>
@@ -112,12 +118,17 @@ export function FlagForm({
           </p>
         ) : null}
         <div className="row-actions">
-          {outcome.kind === "exists" && !c.suppressed ? (
+          {outcome.kind === "exists" && (!c.suppressed || outcome.similar) ? (
             <button type="button" disabled={busy || c.exchanges.includes(entry.id)} onClick={() => void follow(c, "evidence")}>
               {c.exchanges.includes(entry.id) ? "this exchange is already evidence" : "add as evidence"}
             </button>
           ) : null}
-          {outcome.kind === "exists" && c.suppressed ? (
+          {outcome.kind === "exists" && outcome.similar ? (
+            <button type="button" disabled={busy} onClick={() => void submit(true)}>
+              flag anyway
+            </button>
+          ) : null}
+          {outcome.kind === "exists" && c.suppressed && !outcome.similar ? (
             <button type="button" disabled={busy} onClick={() => void follow(c, "reopen")}>
               reopen it
             </button>
