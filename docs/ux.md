@@ -96,7 +96,7 @@ The orchestrator hands tasks to **roles**. A role is a bundle of skills plus a p
 | Tester | Unsafe methods, payloads, OOB callbacks | unsafe; confirmation per #22 |
 | Reporter | Draft candidates and evidence | `propose_finding` only |
 
-The orchestrator can plan anything, but it cannot hand a role a task the engagement's rules of engagement don't allow. Role skills are the same WSTG/ASVS skills the academy uses (M9), loaded by the same content-pack loader.
+The orchestrator can plan anything, but it cannot hand a role a task the engagement's rules of engagement don't allow. Role skills are the same WSTG/ASVS skills the academy uses (M9), loaded by the same content-pack loader. What a role, a skill, a tool, a check and a primitive each are, and which of them may grant anything: architecture.md, *Building blocks*.
 
 ### 5. Findings
 

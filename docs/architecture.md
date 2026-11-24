@@ -71,6 +71,60 @@ Rules for both:
 
 Open vs. enterprise: bring-your-own-key, both hosts, roles and the gate are open. Org-wide model policy, shared agent budgets and central audit of agent runs across testers are enterprise.
 
+## Building blocks: what's code, what's text (decided Nov 2026)
+
+Six kinds of thing make up agent work in spall. The line between them is one question: **does the gate have to see it?** If yes, it is code, reviewed like the gate. If no, it is text, and text never grants anything. The names follow Anthropic's agent architecture (harness, tools, skills, subagents, MCP) so the same content works in Claude Code and in spall's own host (M6b).
+
+| Block | What it is | Form | Lives in | Anthropic's name |
+|---|---|---|---|---|
+| **Primitive** | The only things that touch a target or the outside world: `replay`, later `fetch`, `sweep`, ... Every one goes through the gate. | Rust | `src/` (e.g. `Replayer::agent_replay`) | the side effect behind a dedicated tool |
+| **Tool** | A command offered to an agent: typed arguments, a risk class. Reads (`filter`, `open`, `hosts`, `rules`, `task`), records (`propose_finding`) and the tools that drive primitives (`replay`). | Rust, one registry | `src/commands.rs` (`mcp: true`), run by `src/agent.rs` | tool (MCP tool for external hosts) |
+| **Check** | What to send and how to judge the answer: a wordlist plus matchers, naming a WSTG rule. Run by a primitive (`sweep`); never sends by itself. | Data file | a vetted set in the repo; engagement-local ones imported by a human (`policy`) | none (closest: a scanner template) |
+| **Rule** | What a finding is about: WSTG test to CWE. A taxonomy, not something that runs. | Rust table | `src/rules.rs` | none |
+| **Skill** | How to do a kind of work: method, what to look for, which tools and checks to use, how to judge and report. | `SKILL.md` folder (frontmatter `name`, `description`; body loaded on demand; may bundle reference files) | spall-shipped and content packs (#64, shared with M9) | Agent Skill |
+| **Role** | A kind of agent (Scoper, Mapper, Tester, Reporter): a prompt, the skills it loads, the tools and risk classes it may use, its model. | Markdown with frontmatter | spall-shipped; the host loads it (#64) | subagent |
+
+Around them: the **agent host** runs the loop (Claude Code over MCP today; spall itself in M6b; Anthropic's *harness*), the **task** is the agent's credentials and limits (`src/tasks.rs`), and the **gate** is the policy layer every primitive passes (Anthropic's harness hooks and permission checks play this part in Claude Code).
+
+How they compose: a **role** takes a **task**, reads **skills** to decide how to work, and calls **tools**; tools that send run **primitives** through the gate, sometimes driven by **checks**; what it finds becomes a candidate under a **rule**, and a human promotes it.
+
+### Invariants
+
+- **Only primitives send.** No tool, skill, role or check reaches a target except through a primitive, and every primitive goes through the gate. No shell tool: the agent gets dedicated tools the gate can read, not an opaque command string (the sandbox, #13, contains tools; it does not hand out a shell on the host).
+- **Text never grants.** A skill can say "sweep with the backup-files check"; whether that runs is the role's tools, the task's constraints, the RoE and scope. A skill or role file asking for more than that gets the same refusal as anyone.
+- **Permissions come from the role, the task and the RoE, never from a skill.** A role lists risk classes; `policy` and `export` are never among them (`commands::admit`).
+- **Data is bounded.** A check holds paths relative to an in-scope base, a method (GET/HEAD unless the RoE says otherwise) and simple matchers (status, size, substring, differs from baseline). No hosts, no code, no heavy regex. Nuclei-style templates that send anywhere or run multi-step logic are out; at most a safe subset, later.
+- **Where content comes from matters.** spall ships vetted skills, roles and checks. Engagement-local checks are a `policy` import. Content packs show their source and license (M9); a skill is instructions to a model, so a pack is treated like code you'd run.
+- **One format, two hosts.** Skills and roles use Claude Code's file shapes so the same files work in an external host and in spall's (a spall plugin for Claude Code bundling the MCP server config, roles and skills is the natural package).
+
+### Is it a primitive?
+
+When something new comes up, it is a **primitive** if any of these is yes:
+
+1. Do bytes leave for a target (or anywhere) that the gate would not otherwise see?
+2. Does input arrive from outside (a listener, callbacks, mail)?
+3. Does it hold secrets the agent must never see?
+4. Does it change volume, timing or concurrency beyond what budget and rate express?
+5. Does it run code other than spall's own?
+
+If it only decides *what* to send or *how to judge*, it is a **check**. If it is *how to work*, it is a **skill**. If it only reads what is recorded, it is a plain `read` **tool**. Every primitive needs a stop path (e-stop and halt end it mid-run), a budget charge and attribution in taphttp `meta`; if one of those doesn't fit, it is probably two primitives.
+
+| Primitive | Why it is one | Where |
+|---|---|---|
+| `replay` | resend a captured request, edited | done (#55) |
+| `fetch` | a new GET/HEAD to an in-scope URL; a crawl is `fetch` in a loop | #74 |
+| `sweep` | many requests from a list (with a check), bounded, soft-404 baseline | #75 |
+| `session` | log in as a test user and keep the session; holds credentials the agent never sees | #76 |
+| `burst` | N requests released together (race conditions); breaks the rate limit by design, so its own RoE approval | #77 |
+| intercept | hold and change a live request in flight | M7 (taphttp hook) |
+| OOB listener | receive callbacks (blind SSRF, XXE) | #1 |
+| inbox | receive mail for sign-up and reset flows | #2 |
+| sandbox exec | run nmap, sqlmap, ...; HTTP egress forced through taphttp | #13 |
+| browser | a headless browser driving the app (SPAs, DOM XSS); its traffic through the proxy, attributed | not filed |
+| raw send | exact bytes (smuggling, HTTP/2 quirks, WebSockets); needs taphttp | not filed, later |
+
+Not primitives: payload lists, wordlists, encoders and matchers (checks); compare/diff and extracting links (read tools); proposing a finding (a record tool); a crawl or fuzzing strategy (a skill). Every primitive refuses to target the stack itself (#73).
+
 ## Sensors: where the work happens
 
 spall is the controller. The work happens in **sensors**, small deployable components that run wherever the target's traffic is: on the tester's laptop, on a compose network, on a VPS, or inside a client network.

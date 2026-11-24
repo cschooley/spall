@@ -20,7 +20,9 @@ When taphttp needs a change, file it there (and note it in
 `docs/taphttp-requests.md`) instead of working around it here.
 
 Read `docs/architecture.md` before designing anything beyond the
-current milestone. Read `docs/ux.md` before building any UI: spall is
+current milestone. Before adding any agent capability, read its *Building
+blocks* section: only primitives send, text (skills, roles, checks) never
+grants, and its five questions decide whether something is a primitive. Read `docs/ux.md` before building any UI: spall is
 object-centric (exchanges, endpoints, tasks, findings), not a set of
 Burp-style tool tabs. Read `docs/flux/SPEC.md` (vendored from the flux
 repo) before touching findings.
