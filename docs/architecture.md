@@ -56,7 +56,7 @@ Promotion flows toward Jira. An agent must not file tickets against dev teams un
 An LLM reached through an API doesn't speak MCP; an **agent host** (the loop that calls the model and executes its tool calls) does. Two hosts, both supported:
 
 1. **External host.** Claude Code, Claude Desktop or any MCP client runs the loop and connects to spall's MCP server. spall never holds a model key.
-2. **spall as host.** The intake and Tasks view (ux.md) run the loop inside spall: an orchestrator decomposes a request into a plan of role tasks, and spall calls the model API with the tester's key (server-side only, never in the browser). Tool definitions come straight from the command registry; no MCP hop internally.
+2. **spall as host.** The intake and Tasks view (ux.md) run the loop inside spall: an orchestrator decomposes a request into a plan of role tasks, and spall calls the model API with the tester's key (server-side only, never in the browser). Tool definitions come straight from the command registry; no MCP hop internally. Providers (decided 2026-11-24): Anthropic's Messages API, and any OpenAI-compatible endpoint, so a local model can keep captured traffic on the tester's machine. The loop (`src/host.rs`, #63) runs tools through the same `agent::Tools::call` as MCP sessions, counts each model call on the task (tokens against a per-task cap) and stops mid-call on a halt or the e-stop.
 
 Not supported: a model provider's API calling spall's MCP server remotely. That needs spall reachable from the internet, breaks localhost-by-default, and routes captured traffic through someone else's infrastructure.
 
@@ -84,7 +84,7 @@ Six kinds of thing make up agent work in spall. The line between them is one que
 | **Skill** | How to do a kind of work: method, what to look for, which tools and checks to use, how to judge and report. | `SKILL.md` folder (frontmatter `name`, `description`; body loaded on demand; may bundle reference files) | spall-shipped and content packs (#64, shared with M9) | Agent Skill |
 | **Role** | A kind of agent (Scoper, Mapper, Tester, Reporter): a prompt, the skills it loads, the tools and risk classes it may use, its model. | Markdown with frontmatter | spall-shipped; the host loads it (#64) | subagent |
 
-Around them: the **agent host** runs the loop (Claude Code over MCP today; spall itself in M6b; Anthropic's *harness*), the **task** is the agent's credentials and limits (`src/tasks.rs`), and the **gate** is the policy layer every primitive passes (Anthropic's harness hooks and permission checks play this part in Claude Code).
+Around them: the **agent host** runs the loop (Claude Code over MCP, or spall itself since #63; Anthropic's *harness*), the **task** is the agent's credentials and limits (`src/tasks.rs`), and the **gate** is the policy layer every primitive passes (Anthropic's harness hooks and permission checks play this part in Claude Code).
 
 How they compose: a **role** takes a **task**, reads **skills** to decide how to work, and calls **tools**; tools that send run **primitives** through the gate, sometimes driven by **checks**; what it finds becomes a candidate under a **rule**, and a human promotes it.
 

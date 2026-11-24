@@ -67,6 +67,16 @@ pub struct AppState {
     pub replayer: Option<Arc<crate::replay::Replayer>>,
     /// The MCP server (#58); `None` without the lever API.
     pub mcp: Option<Arc<crate::mcp::Server>>,
+    /// spall's own agent host (#63); `None` without a model configured.
+    pub host: Option<Arc<crate::host::Host>>,
+}
+
+/// A task for spall's host when there's no model to run it.
+fn no_host() -> Response {
+    json_error(
+        StatusCode::CONFLICT,
+        "spall has no model configured to run a task itself: start it with --model-provider (and a key), or leave the task to an outside MCP client",
+    )
 }
 
 pub fn router(state: AppState) -> Router {
@@ -310,6 +320,11 @@ async fn api_status(State(state): State<AppState>) -> Response {
     // Tasks waiting on a human's approval (#56).
     body["waiting_approval"] = match &state.replayer {
         Some(r) => r.tasks.waiting(&r.engagements.active().id).into(),
+        None => serde_json::Value::Null,
+    };
+    // spall's own agent host (#63): null, or {model}. Never the key.
+    body["agent_host"] = match &state.host {
+        Some(h) => serde_json::json!({ "model": h.describe() }),
         None => serde_json::Value::Null,
     };
     // The agent e-stop (#57): null, or {since, by, reason}.
@@ -595,6 +610,9 @@ async fn api_tasks_new(State(state): State<AppState>, body: axum::body::Bytes) -
         return no_tasks();
     };
     match serde_json::from_slice::<crate::tasks::New>(&body) {
+        Ok(new) if new.runner == Some(crate::tasks::Runner::Spall) && state.host.is_none() => {
+            no_host()
+        }
         Ok(new) => r.create_task(new),
         Err(e) => json_error(
             StatusCode::BAD_REQUEST,
@@ -626,6 +644,16 @@ async fn api_task_patch(
         return no_tasks();
     };
     if let Ok(op) = serde_json::from_slice::<crate::tasks::Op>(&body) {
+        if matches!(
+            op,
+            crate::tasks::Op::Edit {
+                runner: Some(crate::tasks::Runner::Spall),
+                ..
+            }
+        ) && state.host.is_none()
+        {
+            return no_host();
+        }
         return r.task_op(&id, op);
     }
     match serde_json::from_slice::<crate::tasks::Decision>(&body) {
@@ -1076,6 +1104,7 @@ mod tests {
             proxy_address: Arc::from("127.0.0.1:8080"),
             replayer: None,
             mcp: None,
+            host: None,
         })
     }
 

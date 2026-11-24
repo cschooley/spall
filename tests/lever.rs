@@ -4190,3 +4190,364 @@ async fn an_approved_task_starts_with_its_agent_and_steering_reaches_it() {
         "{text}"
     );
 }
+
+// ---- spall as agent host (#63): a scripted model drives a task ----
+
+use spall::model::{Call, Conversation, Model, ModelError, Stop, ToolDef, Turn, Usage};
+
+enum Step {
+    Turn(Turn),
+    /// A model call that never comes back (until something stops it).
+    Hang,
+}
+
+/// A model that plays back recorded turns and keeps what it was shown.
+#[derive(Default)]
+struct Scripted {
+    steps: Mutex<std::collections::VecDeque<Step>>,
+    /// The conversation as it stood at each turn.
+    seen: Mutex<Vec<Conversation>>,
+}
+
+impl Scripted {
+    fn new(steps: Vec<Step>) -> Arc<Scripted> {
+        Arc::new(Scripted {
+            steps: Mutex::new(steps.into()),
+            seen: Mutex::default(),
+        })
+    }
+    fn seen(&self) -> Vec<Conversation> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Model for Scripted {
+    fn describe(&self) -> String {
+        "scripted".into()
+    }
+    fn start(&self, text: &str) -> Conversation {
+        Conversation {
+            messages: vec![serde_json::json!({"role": "user", "content": text})],
+        }
+    }
+    fn turn<'a>(
+        &'a self,
+        _system: &'a str,
+        tools: &'a [ToolDef],
+        c: &'a mut Conversation,
+    ) -> spall::model::BoxFuture<'a, Result<Turn, ModelError>> {
+        assert!(tools.iter().any(|t| t.name == "replay"));
+        assert!(
+            !tools
+                .iter()
+                .any(|t| t.name == "scope" || t.name == "promote"),
+            "policy and export are never offered"
+        );
+        self.seen.lock().unwrap().push(c.clone());
+        let step = self.steps.lock().unwrap().pop_front();
+        Box::pin(async move {
+            match step {
+                Some(Step::Turn(t)) => {
+                    c.messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "text": t.text,
+                        "calls": t.calls.iter().map(|x| &x.name).collect::<Vec<_>>(),
+                    }));
+                    Ok(t)
+                }
+                Some(Step::Hang) | None => std::future::pending().await,
+            }
+        })
+    }
+    fn answer(
+        &self,
+        c: &mut Conversation,
+        results: &[(String, spall::agent::Output)],
+        note: Option<&str>,
+    ) {
+        c.messages.push(serde_json::json!({
+            "role": "user",
+            "results": results.iter().map(|(id, o)| serde_json::json!({"id": id, "text": o.text, "error": o.is_error})).collect::<Vec<_>>(),
+            "note": note,
+        }));
+    }
+}
+
+fn call(id: &str, name: &str, input: serde_json::Value) -> Call {
+    Call {
+        id: id.into(),
+        name: name.into(),
+        input: Ok(input),
+    }
+}
+
+fn turn(text: &str, calls: Vec<Call>) -> Step {
+    let stop = if calls.is_empty() {
+        Stop::EndTurn
+    } else {
+        Stop::ToolUse
+    };
+    Step::Turn(Turn {
+        text: text.into(),
+        calls,
+        stop,
+        usage: Usage {
+            input_tokens: 100,
+            output_tokens: 10,
+        },
+    })
+}
+
+/// spall with `model` as its agent host, and T-1 made for it (run by
+/// spall) and approved: the host starts it.
+async fn host_setup(
+    model: Arc<Scripted>,
+    constraints: &str,
+) -> (
+    tempfile::TempDir,
+    Stub,
+    SocketAddr,
+    Arc<spall::replay::Replayer>,
+) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let spall = listener.local_addr().unwrap();
+    let app = spall::build(spall_config(Some(api), &token, &["--scope", "example.com"]))
+        .unwrap()
+        .with_model(model);
+    let r = app.replayer.clone().unwrap();
+    tokio::spawn(app.run(listener));
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        &format!(r#"{{"goal":"replay e1","role":"tester","runner":"spall","constraints":{constraints},"note":"start with e1"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    assert_eq!(body_json(&res)["runner"], "spall");
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    (dir, stub, spall, r)
+}
+
+fn task_now(r: &spall::replay::Replayer) -> spall::tasks::Task {
+    r.tasks.get(&r.engagements.active().id, "T-1").unwrap()
+}
+
+#[tokio::test]
+async fn spall_runs_a_task_end_to_end_through_the_gate_and_waits_for_approval() {
+    let model = Scripted::new(vec![
+        turn(
+            "Looking at e1.",
+            vec![
+                call("c1", "task", serde_json::json!({})),
+                call("c2", "open", serde_json::json!({"id": "e1"})),
+            ],
+        ),
+        turn(
+            "",
+            vec![call("c3", "replay", serde_json::json!({"id": "e1"}))],
+        ),
+        turn(
+            "",
+            vec![call(
+                "c4",
+                "replay",
+                serde_json::json!({"id": "e1", "method": "POST"}),
+            )],
+        ),
+        turn(
+            "",
+            vec![call(
+                "c5",
+                "replay",
+                serde_json::json!({"id": "e1", "method": "POST"}),
+            )],
+        ),
+        turn("Done: e1 replayed, and as a POST once approved.", vec![]),
+    ]);
+    let (dir, stub, spall, r) = host_setup(model.clone(), "{}").await;
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["agent_host"]["model"],
+        "scripted"
+    );
+
+    // The POST is outside the task (GET only without asking): it pauses,
+    // and the model isn't called again while it waits.
+    eventually_async("paused", || async {
+        task_now(&r).status == spall::tasks::Status::WaitingOnApproval
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(model.seen().len(), 3, "no model call while waiting");
+    assert_eq!(stub.replays().len(), 1);
+    assert_eq!(
+        stub.replays()[0]["meta"],
+        serde_json::json!({"actor": "agent", "task": "T-1"})
+    );
+
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_once"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    eventually_async("done", || async {
+        task_now(&r).status == spall::tasks::Status::Done
+    })
+    .await;
+    let replays = stub.replays();
+    assert_eq!(replays.len(), 2);
+    assert_eq!(replays[1]["method"], "POST");
+
+    // What the model was shown: the task, the untrusted exchange, the
+    // pause, then the tester's decision before it tried again.
+    let seen = model.seen();
+    let first = seen[0].messages[0]["content"].as_str().unwrap();
+    assert!(
+        first.starts_with("Task T-1: replay e1") && first.contains("start with e1"),
+        "{first}"
+    );
+    let opened = serde_json::to_string(&seen[1].messages).unwrap();
+    assert!(opened.contains("untrusted"), "{opened}");
+    let paused = serde_json::to_string(&seen[3].messages).unwrap();
+    assert!(paused.contains("paused"), "{paused}");
+    assert!(
+        paused.contains("approved once"),
+        "the decision is news: {paused}"
+    );
+
+    let t = task_now(&r);
+    assert_eq!(t.spent, 2);
+    assert_eq!(
+        t.usage,
+        spall::tasks::ModelUsage {
+            calls: 5,
+            input_tokens: 500,
+            output_tokens: 50,
+            model_ms: t.usage.model_ms
+        }
+    );
+    let turns: Vec<String> = t
+        .log
+        .iter()
+        .filter_map(|e| match &e.event {
+            spall::tasks::Event::Turn { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            "Looking at e1.",
+            "Done: e1 replayed, and as a POST once approved."
+        ]
+    );
+    let transcript = dir
+        .path()
+        .join("engagements/tasks/transcripts")
+        .join(&t.engagement)
+        .join("T-1.json");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&transcript).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+    }
+    let saved: Conversation = serde_json::from_slice(&std::fs::read(&transcript).unwrap()).unwrap();
+    assert!(saved.messages.len() > seen[4].messages.len());
+}
+
+#[tokio::test]
+async fn the_e_stop_ends_a_model_call_in_flight() {
+    let model = Scripted::new(vec![
+        turn(
+            "",
+            vec![call("c1", "replay", serde_json::json!({"id": "e1"}))],
+        ),
+        Step::Hang,
+    ]);
+    let (_dir, stub, spall, r) = host_setup(model.clone(), "{}").await;
+    eventually("second model call", || model.seen().len() == 2).await;
+    let res = post_text(spall, "/api/estop", r#"{"reason":"stop it"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let t = task_now(&r);
+    assert_eq!(t.status, spall::tasks::Status::Halted);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(model.seen().len(), 2);
+    assert_eq!(stub.replays().len(), 1);
+    assert_eq!(
+        task_now(&r).usage.calls,
+        1,
+        "the dropped call was never answered"
+    );
+}
+
+#[tokio::test]
+async fn a_task_halts_at_its_model_token_budget() {
+    let model = Scripted::new(vec![
+        turn("", vec![call("c1", "task", serde_json::json!({}))]),
+        turn("", vec![call("c2", "task", serde_json::json!({}))]),
+        turn(
+            "",
+            vec![call("c3", "replay", serde_json::json!({"id": "e1"}))],
+        ),
+    ]);
+    let (_dir, stub, _spall, r) = host_setup(model.clone(), r#"{"tokens":150}"#).await;
+    eventually_async("halted", || async {
+        task_now(&r).status == spall::tasks::Status::Halted
+    })
+    .await;
+    let t = task_now(&r);
+    assert!(t.reason.unwrap().contains("token budget"));
+    assert_eq!(t.usage.calls, 2);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert_eq!(model.seen().len(), 2);
+    assert!(stub.replays().is_empty());
+}
+
+#[tokio::test]
+async fn without_a_model_spall_wont_take_a_task_itself() {
+    let (_dir, _stub, spall, _r) = agent_setup("{}").await;
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["agent_host"],
+        serde_json::Value::Null
+    );
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"g","role":"tester","runner":"spall"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 409"), "{res}");
+    assert!(res.contains("--model-provider"), "{res}");
+    let res = post_text(spall, "/api/tasks", r#"{"goal":"g","role":"tester"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    assert_eq!(body_json(&res)["runner"], "external");
+}

@@ -28,6 +28,11 @@ http-body-util = "0.1"
 jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bundle-always"] }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+# HTTPS to a model API (#63, spall as agent host). rustls on ring (no
+# cmake/C toolchain beyond ring's own); the image is FROM scratch, so the
+# CA roots are bundled (webpki-roots) rather than read from the system.
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # Findings: Kudzu's one set of finding types (SARIF 2.1.0 profile). spall

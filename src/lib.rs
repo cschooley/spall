@@ -11,11 +11,13 @@ pub mod confirm;
 pub mod csrf;
 pub mod engagement;
 pub mod gate;
+pub mod host;
 pub mod hosts;
 pub mod hub;
 pub mod lever;
 pub mod mcp;
 pub mod mcp_bridge;
+pub mod model;
 pub mod openapi;
 pub mod replay;
 pub mod roe;
@@ -169,6 +171,8 @@ pub struct App {
     lever: Option<Arc<lever::Lever>>,
     pub replayer: Option<Arc<replay::Replayer>>,
     pub mcp: Option<Arc<mcp::Server>>,
+    /// spall's own agent host (#63), with a model configured.
+    pub host: Option<Arc<host::Host>>,
 }
 
 /// Open the stores and the audit log for `config`; errors stop spall.
@@ -267,16 +271,61 @@ pub fn build(config: Config) -> anyhow::Result<App> {
         }
         None => None,
     };
-    Ok(App {
+    let key = model::Key::load(
+        config.model_key_file.as_deref(),
+        std::env::var("SPALL_MODEL_KEY").ok(),
+    )?;
+    let settings = model::Settings::resolve(
+        config.model_provider,
+        config.model.as_deref(),
+        config.model_url.as_deref(),
+        config.model_max_tokens,
+        key.as_ref(),
+    )?;
+    let mut app = App {
         config,
         hub,
         lever,
         replayer,
         mcp,
-    })
+        host: None,
+    };
+    if let Some(settings) = settings {
+        if app.replayer.is_none() {
+            anyhow::bail!("spall's agent host needs taphttp's lever API (--taphttp-api)");
+        }
+        tracing::info!(
+            "agent host: {} {} at {}",
+            settings.provider.as_str(),
+            settings.model,
+            settings.url
+        );
+        if !settings.url.starts_with("http://") {
+            tracing::warn!(
+                "spall-run tasks send what their agent reads (captured traffic, credentials masked) to {}",
+                settings.url
+            );
+        }
+        app = app.with_model(Arc::new(model::Client::new(settings, key)?));
+    }
+    Ok(app)
 }
 
 impl App {
+    /// Run spall's agent host on `model` (#63); tests pass a scripted one.
+    /// Without the lever API there's nothing for it to drive.
+    pub fn with_model(mut self, model: Arc<dyn model::Model>) -> App {
+        if let Some(r) = &self.replayer {
+            let tools = agent::Tools {
+                replayer: r.clone(),
+                hub: self.hub.clone(),
+            };
+            let dir = self.config.engagements.join("tasks").join("transcripts");
+            self.host = Some(host::Host::new(tools, model, &dir));
+        }
+        self
+    }
+
     pub async fn run(self, listener: TcpListener) -> anyhow::Result<()> {
         let App {
             config,
@@ -284,6 +333,7 @@ impl App {
             lever,
             replayer,
             mcp,
+            host,
         } = self;
         let state = web::AppState {
             hub: hub.clone(),
@@ -293,6 +343,13 @@ impl App {
             proxy_address: Arc::from(config.proxy_address.as_str()),
             replayer,
             mcp,
+            host: host.clone(),
+        };
+        let agents = async {
+            match host {
+                Some(h) => h.run().await,
+                None => std::future::pending().await,
+            }
         };
         let source = async {
             match lever {
@@ -313,6 +370,7 @@ impl App {
         tokio::select! {
             r = axum::serve(listener, web::router(state)) => r.context("web server failed"),
             r = source => r,
+            r = agents => r,
         }
     }
 }

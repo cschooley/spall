@@ -149,7 +149,7 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host, #64 roles, #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host (done), #64 roles, #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
@@ -246,6 +246,24 @@ default (log mode has none).
 
 Engagement is the home view (#71, done in M6a): a bare URL opens it.
 Browser tests that exercise Traffic open `/#traffic`.
+
+Agent host (#63, done): `src/model.rs` holds the key (`Key`: 0600 file or
+`SPALL_MODEL_KEY`, never printed, scrubbed from errors) and one client per
+provider: Anthropic Messages API (raw HTTP, `anthropic-version`
+2026-10-21, top-level `cache_control`) and OpenAI-compatible chat
+completions (decided 2026-11-24: both, so a local model keeps traffic on
+the machine). HTTPS is hyper-rustls on ring with webpki roots (the image
+is FROM scratch). A `Conversation` stays in the provider's wire format and
+is append-only: thinking blocks go back verbatim, and a task's system
+prompt and tools never change mid-conversation. `src/host.rs` drives tasks
+with `runner: spall` through `agent::Tools::call` (the same path as MCP; no
+side door): it parks while waiting on approval and passes the decision and
+notes as news, ends `done` when the model stops calling tools, and drops a
+model call in flight on halt or e-stop. Each call is charged with
+`tasks::Store::charge_model` (`usage`; past `constraints.tokens` the task
+halts). Turns go in the log (4,000 characters) and the whole conversation
+in `<engagements>/tasks/transcripts/<eng>/<T-n>.json`. Tests drive it with
+a scripted `model::Model` via `App::with_model` (tests/lever.rs).
 
 ## Testing
 

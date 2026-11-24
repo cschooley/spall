@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { asTask, asTasks, asWaiting, chipOf, costText, decide, forTaskText, messages, requestRows, taskFromHash, taskLines, taskListLines } from "./tasks.ts";
+import { asTask, asTasks, asWaiting, chipOf, costText, createTask, decide, forTaskText, messages, requestRows, taskFromHash, taskLines, taskListLines, usageText } from "./tasks.ts";
 
 const P = `<img src=x onerror="window.__pwned=1">`;
 
@@ -119,4 +119,26 @@ test("chips and hashes", () => {
   assert.equal(taskFromHash("#tasks/T-12"), "T-12");
   assert.equal(taskFromHash("#tasks/../x"), null);
   assert.equal(taskFromHash("#tasks"), null);
+});
+
+test("who runs a task, and what its model has used (#63)", async () => {
+  const t = asTask({ ...FULL, runner: "spall", constraints: { ...FULL.constraints, tokens: 2000000 }, usage: { calls: 12, input_tokens: 182340, output_tokens: 9120, model_ms: 95400 } })!;
+  assert.equal(t.runner, "spall");
+  assert.deepEqual(t.usage, { calls: 12, inputTokens: 182340, outputTokens: 9120, modelMs: 95400, cap: 2000000 });
+  assert.equal(usageText(t.usage), "12 model calls · 191k of 2.0M tokens (182k in, 9.1k out) · 1m 35s");
+  const old = asTask(FULL)!;
+  assert.equal(old.runner, "external", "older tasks were all run by an outside client");
+  assert.equal(usageText(old.usage), "no model calls yet");
+  assert.equal(asTask({ ...FULL, runner: "<b>x</b>" })!.runner, "external");
+
+  const sent: string[] = [];
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    sent.push(init?.body as string);
+    return new Response(JSON.stringify(FULL), { status: 201 });
+  }) as typeof fetch;
+  await createTask({ goal: "g", role: "tester", runner: "spall", tokens: 50000 });
+  await createTask({ goal: "g", role: "tester" });
+  assert.deepEqual(JSON.parse(sent[0]!), { goal: "g", role: "tester", runner: "spall", constraints: { tokens: 50000 }, note: "" });
+  assert.deepEqual(JSON.parse(sent[1]!), { goal: "g", role: "tester", constraints: {}, note: "" });
+  assert.ok(taskLines({ ...FULL, runner: "spall", usage: { calls: 1, input_tokens: 10, output_tokens: 2, model_ms: 900 } }).some((l) => l === "run by spall · 1 model call · 12 of 2.0M tokens (10 in, 2 out) · 0s"));
 });

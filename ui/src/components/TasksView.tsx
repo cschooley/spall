@@ -18,6 +18,7 @@ import {
   messages,
   requestRows,
   taskFromHash,
+  usageText,
   type Task,
 } from "../lib/tasks.ts";
 import { Card } from "./Approvals.tsx";
@@ -47,7 +48,24 @@ function Budget({ spent, budget }: { spent: number; budget: number }) {
   );
 }
 
-export function TasksView({ available, onChanged, onOpenExchange }: { available: boolean; onChanged(): void; onOpenExchange(id: string): void }) {
+/** Who runs a task, in words. */
+function runBy(t: Task, agentModel: string | null): string {
+  if (t.runner === "external") return "run by an MCP client";
+  return agentModel ? `run by spall (${agentModel})` : "run by spall (no model configured)";
+}
+
+export function TasksView({
+  available,
+  agentModel,
+  onChanged,
+  onOpenExchange,
+}: {
+  available: boolean;
+  /** The model spall's own host runs (#63); null without one. */
+  agentModel: string | null;
+  onChanged(): void;
+  onOpenExchange(id: string): void;
+}) {
   const [list, setList] = useState<Task[] | string | null>(null);
   const [sel, setSel] = useState<string | null>(() => taskFromHash(window.location.hash));
   const [open, setOpen] = useState<Task | string | null>(null);
@@ -115,7 +133,7 @@ export function TasksView({ available, onChanged, onOpenExchange }: { available:
                 <span className="row1">
                   <span className="id">{t.id}</span>
                   <Chip status={t.status} />
-                  <span className="note">{t.role}</span>
+                  <span className="note">{t.runner === "spall" ? `${t.role} · ◆ spall` : t.role}</span>
                 </span>
                 <span className="name">{t.goal}</span>
                 <Budget spent={t.spent} budget={t.budget} />
@@ -126,6 +144,7 @@ export function TasksView({ available, onChanged, onOpenExchange }: { available:
       </section>
       {creating ? (
         <NewTaskForm
+          agentModel={agentModel}
           onCancel={() => setCreating(false)}
           onCreated={(id) => {
             setCreating(false);
@@ -135,7 +154,7 @@ export function TasksView({ available, onChanged, onOpenExchange }: { available:
         />
       ) : sel && open && typeof open !== "string" && open.id === sel ? (
         <>
-          <TaskCard t={open} onChanged={done} onOpenExchange={onOpenExchange} />
+          <TaskCard t={open} agentModel={agentModel} onChanged={done} onOpenExchange={onOpenExchange} />
           <Steer t={open} onChanged={done} />
         </>
       ) : (
@@ -147,7 +166,7 @@ export function TasksView({ available, onChanged, onOpenExchange }: { available:
   );
 }
 
-function TaskCard({ t, onChanged, onOpenExchange }: { t: Task; onChanged(): void; onOpenExchange(id: string): void }) {
+function TaskCard({ t, agentModel, onChanged, onOpenExchange }: { t: Task; agentModel: string | null; onChanged(): void; onOpenExchange(id: string): void }) {
   const [armed, setArmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cands, setCands] = useState<Candidate[]>([]);
@@ -177,7 +196,7 @@ function TaskCard({ t, onChanged, onOpenExchange }: { t: Task; onChanged(): void
         <div className="row1">
           <span className="id">{t.id}</span>
           <Chip status={t.status} />
-          <span className="note">{`${t.role} · asked by ${t.askedBy}`}</span>
+          <span className="note">{`${t.role} · asked by ${t.askedBy} · ${runBy(t, agentModel)}`}</span>
           <span className="spacer" />
           {t.status === "draft" ? (
             <button type="button" className="btn primary" onClick={() => void act({ op: "approve" })}>
@@ -232,6 +251,12 @@ function TaskCard({ t, onChanged, onOpenExchange }: { t: Task; onChanged(): void
             <dd>
               <Budget spent={t.spent} budget={t.budget} />
             </dd>
+            {t.runner === "spall" ? (
+              <>
+                <dt>model</dt>
+                <dd data-testid="model-usage">{usageText(t.usage)}</dd>
+              </>
+            ) : null}
           </dl>
         </div>
         <div className="sect">
@@ -377,8 +402,10 @@ function Steer({ t, onChanged }: { t: Task; onChanged(): void }) {
   );
 }
 
-function NewTaskForm({ onCancel, onCreated }: { onCancel(): void; onCreated(id: string): void }) {
+function NewTaskForm({ agentModel, onCancel, onCreated }: { agentModel: string | null; onCancel(): void; onCreated(id: string): void }) {
   const [goal, setGoal] = useState("");
+  const [bySpall, setBySpall] = useState(false);
+  const [tokens, setTokens] = useState("2000000");
   const [role, setRole] = useState("mapper");
   const [budget, setBudget] = useState("100");
   const [time, setTime] = useState("60");
@@ -393,7 +420,17 @@ function NewTaskForm({ onCancel, onCreated }: { onCancel(): void; onCreated(id: 
       .filter(Boolean);
   const submit = async () => {
     const n = (s: string) => (/^\d+$/.test(s.trim()) ? Number(s) : undefined);
-    const r = await createTask({ goal, role, budget: n(budget), timeLimit: n(time), hosts: split(hosts), methods: split(methods).map((m) => m.toUpperCase()), note });
+    const spall = bySpall && agentModel !== null;
+    const r = await createTask({
+      goal,
+      role,
+      budget: n(budget),
+      timeLimit: n(time),
+      hosts: split(hosts),
+      methods: split(methods).map((m) => m.toUpperCase()),
+      note,
+      ...(spall ? { runner: "spall" as const, tokens: n(tokens) } : {}),
+    });
     if (typeof r === "string") setError(r);
     else onCreated(r.id);
   };
@@ -412,6 +449,31 @@ function NewTaskForm({ onCancel, onCreated }: { onCancel(): void; onCreated(id: 
           Goal
           <textarea autoFocus value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Map the /v1 API from traffic and replay its GETs" />
         </label>
+        <fieldset className="run-by">
+          <legend>Run by</legend>
+          <label>
+            <input type="radio" name="run-by" checked={!bySpall || agentModel === null} onChange={() => setBySpall(false)} />
+            an MCP client <span className="note">(Claude Code, Claude Desktop, … connects to this task)</span>
+          </label>
+          <label>
+            <input type="radio" name="run-by" disabled={agentModel === null} checked={bySpall && agentModel !== null} onChange={() => setBySpall(true)} />
+            {agentModel ? (
+              <>
+                spall <span className="note">{`(${agentModel}, with your key; starts when you approve)`}</span>
+              </>
+            ) : (
+              <>
+                spall <span className="note">(no model configured: start spall with --model-provider)</span>
+              </>
+            )}
+          </label>
+          {bySpall && agentModel !== null ? (
+            <label>
+              Model tokens <span className="note">(in and out; past this it halts)</span>
+              <input inputMode="numeric" value={tokens} onChange={(e) => setTokens(e.target.value)} />
+            </label>
+          ) : null}
+        </fieldset>
         <div className="row">
           <label>
             Role

@@ -720,6 +720,7 @@ export function App() {
         <main className="tasks-main">
           <TasksView
             available={status.replay}
+            agentModel={status.agentModel}
             onChanged={() => setStatusNonce((n) => n + 1)}
             onOpenExchange={(id) => {
               window.location.hash = "traffic";

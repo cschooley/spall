@@ -38,6 +38,9 @@ pub const DEFAULT_BUDGET: u32 = 100;
 /// Minutes a task may run, at most (a day) and by default.
 pub const MAX_MINUTES: u32 = 24 * 60;
 pub const DEFAULT_MINUTES: u32 = 60;
+/// Model tokens (in and out) a task run by spall's host may use (#63).
+pub const DEFAULT_TOKENS: u64 = 2_000_000;
+pub const MAX_TOKENS: u64 = 100_000_000;
 
 /// Where a task stands. `draft` → `approved` → `running` ⇄
 /// `waiting_on_approval` → `done` / `halted` / `failed`; anything not yet
@@ -109,6 +112,38 @@ pub enum Role {
     Reporter,
 }
 
+/// Who runs a task's agent loop (#63).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Runner {
+    /// An outside MCP client (Claude Code, Claude Desktop, ...).
+    #[default]
+    External,
+    /// spall's own host, with the tester's model key.
+    Spall,
+}
+
+/// What a task's model has used (#63): only spall's host counts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelUsage {
+    pub calls: u32,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Time spent waiting on the model.
+    pub model_ms: u64,
+}
+
+impl ModelUsage {
+    pub fn tokens(&self) -> u64 {
+        self.input_tokens.saturating_add(self.output_tokens)
+    }
+}
+
+fn default_tokens() -> u64 {
+    DEFAULT_TOKENS
+}
+
 /// Stop the task when one of these happens (#55 enforces them).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,6 +177,10 @@ pub struct Constraints {
     pub time_limit_minutes: u32,
     #[serde(default)]
     pub stop: Stop,
+    /// Model tokens (in and out) spall's host may use on it; past this it
+    /// halts. An outside client's model isn't spall's to count.
+    #[serde(default = "default_tokens")]
+    pub tokens: u64,
 }
 
 /// Asked-for constraints: anything left out comes from the RoE (or the
@@ -157,6 +196,7 @@ pub struct Requested {
     pub budget: Option<u32>,
     pub time_limit_minutes: Option<u32>,
     pub stop: Option<Stop>,
+    pub tokens: Option<u64>,
 }
 
 fn method_token(m: &str) -> bool {
@@ -285,6 +325,11 @@ pub fn resolve(req: &Requested, rules: &Rules, scope: &Scope) -> Result<Constrai
         return Err("stop: a count of at least 1".into());
     }
 
+    let tokens = req.tokens.unwrap_or(DEFAULT_TOKENS);
+    if !(1..=MAX_TOKENS).contains(&tokens) {
+        return Err(format!("tokens: 1 to {MAX_TOKENS}"));
+    }
+
     Ok(Constraints {
         hosts,
         methods,
@@ -294,6 +339,7 @@ pub fn resolve(req: &Requested, rules: &Rules, scope: &Scope) -> Result<Constrai
         budget,
         time_limit_minutes,
         stop,
+        tokens,
     })
 }
 
@@ -409,6 +455,9 @@ pub struct Task {
     pub engagement: String,
     pub goal: String,
     pub role: Role,
+    /// Who runs it: an outside MCP client, or spall's own host.
+    #[serde(default)]
+    pub runner: Runner,
     pub constraints: Constraints,
     pub plan: Vec<Step>,
     pub status: Status,
@@ -432,6 +481,9 @@ pub struct Task {
     /// An "approve once" not yet used (#56).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<Grant>,
+    /// What its model has used, when spall's host runs it (#63).
+    #[serde(default)]
+    pub usage: ModelUsage,
 }
 
 /// A request a task paused on, exactly as it would be sent.
@@ -521,6 +573,7 @@ impl Constraints {
             budget: Some(self.budget),
             time_limit_minutes: Some(self.time_limit_minutes),
             stop: Some(self.stop.clone()),
+            tokens: Some(self.tokens),
         }
     }
 
@@ -578,6 +631,9 @@ impl Task {
 pub struct New {
     pub goal: String,
     pub role: Role,
+    /// Who runs it; an outside MCP client when left out.
+    #[serde(default)]
+    pub runner: Option<Runner>,
     #[serde(default)]
     pub constraints: Requested,
     #[serde(default)]
@@ -652,6 +708,7 @@ pub enum Op {
     Edit {
         goal: Option<String>,
         role: Option<Role>,
+        runner: Option<Runner>,
         constraints: Option<Requested>,
         plan: Option<Vec<String>>,
         note: Option<String>,
@@ -924,6 +981,7 @@ impl Store {
                 engagement: engagement.into(),
                 goal,
                 role: new.role,
+                runner: new.runner.unwrap_or_default(),
                 constraints,
                 plan,
                 status: Status::Draft,
@@ -938,6 +996,7 @@ impl Store {
                 log: Vec::new(),
                 pending: None,
                 grant: None,
+                usage: ModelUsage::default(),
             };
             book.next += 1;
             book.tasks.push(t.clone());
@@ -993,6 +1052,7 @@ impl Store {
                 Op::Edit {
                     goal,
                     role,
+                    runner,
                     constraints,
                     plan,
                     note,
@@ -1009,6 +1069,9 @@ impl Store {
                     }
                     if let Some(r) = role {
                         t.role = *r;
+                    }
+                    if let Some(r) = runner {
+                        t.runner = *r;
                     }
                     if let Some(c) = constraints {
                         t.constraints = resolve(c, cx.rules, cx.scope).map_err(Error::Invalid)?;
@@ -1234,6 +1297,40 @@ impl Store {
     /// Charge one request to task `id`: only while it runs and has budget
     /// left. Checked and counted under one lock, so racing sends can't
     /// overspend.
+    /// Count one model call against task `id` (#63), whatever its status:
+    /// the tokens were spent. Past its token cap an unfinished task is
+    /// halted, for good. Returns the task after.
+    pub fn charge_model(
+        &self,
+        engagement: &str,
+        id: &str,
+        used: crate::model::Usage,
+        ms: u64,
+        now: &str,
+    ) -> Result<Task, Error> {
+        self.change(engagement, |book| {
+            let t = find(book, id)?;
+            let u = &mut t.usage;
+            u.calls = u.calls.saturating_add(1);
+            u.input_tokens = u.input_tokens.saturating_add(used.input_tokens);
+            u.output_tokens = u.output_tokens.saturating_add(used.output_tokens);
+            u.model_ms = u.model_ms.saturating_add(ms);
+            t.updated = now.into();
+            let (spent, cap) = (t.usage.tokens(), t.constraints.tokens);
+            if spent >= cap && !t.status.finished() {
+                move_to(
+                    t,
+                    Status::Halted,
+                    Some(format!(
+                        "used its model token budget ({spent} of {cap} tokens)"
+                    )),
+                    now,
+                )?;
+            }
+            Ok(t.clone())
+        })
+    }
+
     pub fn charge(&self, engagement: &str, id: &str, now: &str) -> Result<u32, Error> {
         self.charge_as(engagement, id, now, None)
     }
@@ -1461,6 +1558,7 @@ mod tests {
         New {
             goal: goal.into(),
             role: Role::Mapper,
+            runner: None,
             constraints: Requested::default(),
             plan: vec!["crawl".into(), "replay GETs".into()],
             note: String::new(),
@@ -1853,6 +1951,7 @@ mod tests {
         let edit = Op::Edit {
             goal: Some("  map the v1 API ".into()),
             role: Some(Role::Tester),
+            runner: None,
             constraints: Some(Requested {
                 budget: Some(10),
                 ..Default::default()
@@ -1868,6 +1967,7 @@ mod tests {
         let wide = Op::Edit {
             goal: None,
             role: None,
+            runner: None,
             constraints: Some(Requested {
                 rate_limit: Some(99.0),
                 ..Default::default()
@@ -2155,6 +2255,91 @@ mod tests {
         store
             .transition("e", "T-1", Status::Running, None, NOW)
             .unwrap();
+    }
+
+    #[test]
+    fn who_runs_a_task_and_what_its_model_costs() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (r, s) = (rules(), scope());
+        let t = store.create("e", &new("t"), "human", &cx(&r, &s)).unwrap();
+        assert_eq!(
+            t.runner,
+            Runner::External,
+            "an outside MCP client, unless asked"
+        );
+        assert_eq!(t.constraints.tokens, DEFAULT_TOKENS);
+        let n = New {
+            runner: Some(Runner::Spall),
+            constraints: Requested {
+                tokens: Some(5000),
+                ..Requested::default()
+            },
+            ..new("t2")
+        };
+        let t = store.create("e", &n, "human", &cx(&r, &s)).unwrap();
+        assert_eq!((t.runner, t.constraints.tokens), (Runner::Spall, 5000));
+        for bad in [0, MAX_TOKENS + 1] {
+            let n = New {
+                constraints: Requested {
+                    tokens: Some(bad),
+                    ..Requested::default()
+                },
+                ..new("t3")
+            };
+            assert!(matches!(
+                store.create("e", &n, "human", &cx(&r, &s)),
+                Err(Error::Invalid(_))
+            ));
+        }
+        // A draft can change hands; an approved task can't.
+        let (_, t) = store
+            .apply(
+                "e",
+                "T-1",
+                &Op::Edit {
+                    goal: None,
+                    role: None,
+                    runner: Some(Runner::Spall),
+                    constraints: None,
+                    plan: None,
+                    note: None,
+                },
+                &cx(&r, &s),
+            )
+            .unwrap();
+        assert_eq!(t.runner, Runner::Spall);
+
+        // Each model call is counted; past the token cap the task halts.
+        store.apply("e", "T-2", &Op::Approve, &cx(&r, &s)).unwrap();
+        store
+            .transition("e", "T-2", Status::Running, None, NOW)
+            .unwrap();
+        let used = crate::model::Usage {
+            input_tokens: 3000,
+            output_tokens: 1000,
+        };
+        let t = store.charge_model("e", "T-2", used, 1500, NOW).unwrap();
+        assert_eq!(
+            t.usage,
+            ModelUsage {
+                calls: 1,
+                input_tokens: 3000,
+                output_tokens: 1000,
+                model_ms: 1500
+            }
+        );
+        assert_eq!(t.status, Status::Running);
+        let t = store.charge_model("e", "T-2", used, 500, NOW).unwrap();
+        assert_eq!(t.usage.calls, 2);
+        assert_eq!(t.status, Status::Halted, "8000 tokens of 5000");
+        assert!(t.reason.unwrap().contains("token budget"));
+        // Still counted after it ends: the tokens were spent.
+        let t = store.charge_model("e", "T-2", used, 1, NOW).unwrap();
+        assert_eq!(t.usage.calls, 3);
+        // Kept across a restart; an older file without them reads as zero.
+        let store = Store::open(dir.path()).unwrap();
+        assert_eq!(store.get("e", "T-2").unwrap().usage.calls, 3);
     }
 
     fn sent(status: u16) -> Event {

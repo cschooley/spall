@@ -107,6 +107,33 @@ pub struct Config {
     #[arg(long, env = "SPALL_MCP_TOKEN_FILE", default_value = "/data/mcp-token")]
     pub mcp_token_file: PathBuf,
 
+    /// The model behind spall's own agent host (#63): `anthropic`, or
+    /// `openai` for any OpenAI-compatible endpoint (a local model). Unset,
+    /// spall runs no agent itself; outside MCP clients still can.
+    #[arg(long, env = "SPALL_MODEL_PROVIDER", value_enum)]
+    pub model_provider: Option<crate::model::Provider>,
+
+    /// The model to use (Anthropic: claude-opus-5-5 unless set; openai:
+    /// required, the name the endpoint serves).
+    #[arg(long, env = "SPALL_MODEL")]
+    pub model: Option<String>,
+
+    /// The model API's base URL (Anthropic: https://api.anthropic.com;
+    /// openai: required, e.g. http://host.docker.internal:11434/v1). Plain
+    /// http only to this machine or a private network.
+    #[arg(long, env = "SPALL_MODEL_URL", value_parser = crate::model::parse_url)]
+    pub model_url: Option<String>,
+
+    /// File holding the model API key (mode 0600 or stricter). Without it,
+    /// SPALL_MODEL_KEY is read. The key stays in spall: never sent to the
+    /// browser, logged, or put in a task.
+    #[arg(long, env = "SPALL_MODEL_KEY_FILE")]
+    pub model_key_file: Option<PathBuf>,
+
+    /// Output tokens one model turn may use, thinking included.
+    #[arg(long, env = "SPALL_MODEL_MAX_TOKENS", default_value_t = crate::model::DEFAULT_MAX_TOKENS, value_parser = clap::value_parser!(u32).range(1024..=128_000))]
+    pub model_max_tokens: u32,
+
     /// How often to check the log file for new data, in milliseconds
     #[arg(long, env = "SPALL_POLL_MS", default_value_t = 250, value_parser = clap::value_parser!(u64).range(10..))]
     pub poll_ms: u64,
@@ -244,6 +271,32 @@ mod tests {
         assert_eq!(c.safe_methods, MethodPolicy::new(["GET", "HEAD"]));
         assert_eq!(c.audit_log, PathBuf::from("/tmp/a.jsonl"));
         assert!(Config::try_parse_from(["spall", "--scope", "http://x.test/"]).is_err());
+    }
+
+    #[test]
+    fn no_model_by_default() {
+        let c = Config::try_parse_from(["spall"]).unwrap();
+        assert_eq!(c.model_provider, None);
+        assert_eq!(c.model_max_tokens, crate::model::DEFAULT_MAX_TOKENS);
+        let c = Config::try_parse_from([
+            "spall",
+            "--model-provider",
+            "openai",
+            "--model",
+            "qwen3",
+            "--model-url",
+            "http://host.docker.internal:11434/v1/",
+        ])
+        .unwrap();
+        assert_eq!(c.model_provider, Some(crate::model::Provider::Openai));
+        assert_eq!(
+            c.model_url.as_deref(),
+            Some("http://host.docker.internal:11434/v1")
+        );
+        assert!(
+            Config::try_parse_from(["spall", "--model-url", "http://api.example.com/v1"]).is_err()
+        );
+        assert!(Config::try_parse_from(["spall", "--model-provider", "gemini"]).is_err());
     }
 
     #[test]

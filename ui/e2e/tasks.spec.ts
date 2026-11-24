@@ -34,11 +34,23 @@ function task(id: string, status: string, over: Json = {}): Json {
   };
 }
 
-function tasksApi(page: Page, tasks: Json[]) {
+function tasksApi(page: Page, tasks: Json[], agentModel: string | null = null) {
   const state = { tasks, calls: [] as [string, string, unknown][], created: 0 };
   void page.route("**/api/status", (r) =>
     r.fulfill({
-      json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.acme.test"], scope_all: false, engagement: { id: "acme-1a2b", name: "ACME" }, testing: { allowed: true, reason: null }, to_triage: 0, waiting_approval: 0 },
+      json: {
+        source: "log",
+        connected: null,
+        proxy: "127.0.0.1:8080",
+        replay: true,
+        scope: ["*.acme.test"],
+        scope_all: false,
+        engagement: { id: "acme-1a2b", name: "ACME" },
+        testing: { allowed: true, reason: null },
+        to_triage: 0,
+        waiting_approval: 0,
+        agent_host: agentModel ? { model: agentModel } : null,
+      },
     }),
   );
   void page.route(/\/api\/tasks$/, async (r) => {
@@ -46,7 +58,7 @@ function tasksApi(page: Page, tasks: Json[]) {
       const body = r.request().postDataJSON() as Json;
       state.calls.push(["POST", "/api/tasks", body]);
       if ((body.constraints as Json)?.budget === 999999) return r.fulfill({ status: 400, json: { error: "budget: 1 to 100000 requests" } });
-      const t = task(`T-${10 + ++state.created}`, "draft", { goal: body.goal, role: body.role });
+      const t = task(`T-${10 + ++state.created}`, "draft", { goal: body.goal, role: body.role, runner: body.runner ?? "external" });
       state.tasks.unshift(t);
       return r.fulfill({ status: 201, json: t });
     }
@@ -228,4 +240,51 @@ test("Findings shows an agent's proposal as ◆ agent · T-n, linked to its task
   await expect(queue.locator(".by-agent")).toHaveText(["◆ T-3"]);
   await page.goto("/#findings/c-00000002");
   await expect(page.getByRole("complementary", { name: "Candidate" }).locator(".by")).toContainText("flagged by you");
+});
+
+test("spall runs a task itself when a model is configured: chosen in the form, its model use on the card (#63)", async ({ page }) => {
+  const running = task("T-5", "running", {
+    runner: "spall",
+    constraints: { hosts: [], methods: ["GET"], safe_methods: ["GET"], rate_limit: null, destructive: false, budget: 20, time_limit_minutes: 60, stop: {}, tokens: 2000000 },
+    usage: { calls: 12, input_tokens: 182340, output_tokens: 9120, model_ms: 95400 },
+    log: [{ ts: "2026-11-23T20:00:10Z", kind: "turn", text: `Mapped 4 endpoints ${P}` }],
+  });
+  const api = tasksApi(page, [running], "anthropic claude-opus-5-5");
+  await page.goto("/#tasks/T-5");
+  const card = page.getByRole("region", { name: "Task detail" });
+  await expect(card).toContainText("run by spall (anthropic claude-opus-5-5)");
+  await expect(card.getByTestId("model-usage")).toHaveText("12 model calls · 191k of 2.0M tokens (182k in, 9.1k out) · 1m 35s");
+  await expect(page.getByRole("link", { name: /T-5/ })).toContainText("◆ spall");
+  await expect(page.getByRole("complementary", { name: "Steer T-5" })).toContainText(`Mapped 4 endpoints ${P}`);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+
+  await page.getByRole("button", { name: "+ New task" }).click();
+  const form = page.getByRole("region", { name: "New task" });
+  await form.getByLabel("Goal").fill("Map the cart API");
+  await expect(form.getByLabel(/^an MCP client/)).toBeChecked();
+  await form.getByLabel(/^spall/).check();
+  await form.getByLabel(/^Model tokens/).fill("500000");
+  await form.getByRole("button", { name: "Create draft" }).click();
+  await expect(page).toHaveURL(/#tasks\/T-11$/);
+  expect(api.calls.filter(([m]) => m === "POST").at(-1)).toEqual([
+    "POST",
+    "/api/tasks",
+    { goal: "Map the cart API", role: "mapper", runner: "spall", constraints: { budget: 100, time_limit_minutes: 60, tokens: 500000 }, note: "" },
+  ]);
+  await expect(card).toContainText("run by spall");
+});
+
+test("without a model, spall can't be picked to run a task", async ({ page }) => {
+  const api = tasksApi(page, []);
+  await page.goto("/#tasks");
+  await page.getByRole("button", { name: "+ New task" }).click();
+  const form = page.getByRole("region", { name: "New task" });
+  await expect(form.getByLabel(/^spall/)).toBeDisabled();
+  await expect(form).toContainText("no model configured: start spall with --model-provider");
+  await form.getByLabel("Goal").fill("g");
+  await form.getByRole("button", { name: "Create draft" }).click();
+  await expect(page).toHaveURL(/#tasks\/T-11$/);
+  const sent = api.calls.filter(([m]) => m === "POST").at(-1)![2] as Json;
+  expect(sent.runner).toBeUndefined();
+  await expect(page.getByRole("region", { name: "Task detail" })).toContainText("run by an MCP client");
 });

@@ -7,14 +7,20 @@ RUN npm ci
 COPY ui/ ./
 RUN npm run lint && npm test && npm run build
 
-# Stage 2: build spall as a static musl binary with the UI embedded. spall
-# is pure Rust (no OpenSSL or other C dependencies), so it needs no libc at
-# run time.
+# Stage 2: build spall as a static musl binary with the UI embedded. No
+# OpenSSL: TLS to a model API (#63) is rustls on ring, whose C and assembly
+# are compiled in statically, so it needs no libc at run time.
 FROM rust:1.90-slim-bookworm AS build
 WORKDIR /src
+# musl-gcc compiles ring's C for the musl target (build stage only).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends musl-tools \
+ && rm -rf /var/lib/apt/lists/*
 RUN TARGET="$(uname -m)-unknown-linux-musl" \
  && rustup target add "$TARGET" \
  && echo "$TARGET" > /target
+ENV CC_x86_64_unknown_linux_musl=musl-gcc \
+    CC_aarch64_unknown_linux_musl=musl-gcc
 # Build dependencies in their own layer so source edits rebuild fast.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && touch src/lib.rs \
@@ -30,8 +36,9 @@ RUN touch src/main.rs src/lib.rs \
 
 # Stage 3: runtime. Nothing but the binary: no shell, no package manager, no
 # libc, so no OS packages to carry CVEs (#28).
-# - No CA bundle: spall makes no outbound TLS connections (the lever API is
-#   plain HTTP on the compose network). Add one if that ever changes.
+# - No CA bundle: the lever API is plain HTTP on the compose network, and
+#   the one outbound TLS connection (a model API, #63) checks against the
+#   Mozilla roots compiled into the binary (webpki-roots).
 # - DNS for `taphttp` works: Docker mounts /etc/resolv.conf and /etc/hosts.
 FROM scratch
 COPY --from=build /spall /spall

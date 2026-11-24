@@ -720,5 +720,8 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .tasks .new-task label { display: grid; gap: var(--vg-space-1); font: var(--vg-text-sm) var(--vg-font-sans); }
 .tasks .new-task textarea { min-height: 72px; }
 .tasks .new-task .row { display: flex; flex-wrap: wrap; gap: var(--vg-space-4); }
+.tasks .new-task .run-by { border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm); padding: var(--vg-space-3); display: grid; gap: var(--vg-space-2); margin: 0; }
+.tasks .new-task .run-by legend { font: var(--vg-text-sm) var(--vg-font-sans); padding: 0 var(--vg-space-1); }
+.tasks .new-task .run-by label:has(input[type="radio"]) { display: flex; align-items: baseline; gap: var(--vg-space-2); }
 .tasks .actions { display: flex; flex-wrap: wrap; gap: var(--vg-space-3); }
 @media (max-width: 1100px) { .tasks { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); } .tasks .steer { grid-column: 2; border-left: 0; border-top: 1px solid var(--vg-border-subtle); } .tasks .cols { grid-template-columns: 1fr; } }

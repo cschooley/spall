@@ -137,6 +137,7 @@ export function taskLines(v: unknown): string[] {
     `spent ${num(t.spent)} of ${num(c.budget)} requests · time limit ${num(c.time_limit_minutes)} min`,
     `hosts: ${list("hosts", "the engagement's scope")} · methods: ${list("methods", "any the RoE allows")} · without asking: ${list("safe_methods", "none")}`,
   ];
+  if (t.runner === "spall") out.push(`run by spall · ${usageText(asUsage(t.usage, c.tokens))}`);
   if (str(t.reason)) out.push(`why: ${str(t.reason)}`);
   if (str(t.note)) out.push(`note: ${str(t.note)}`);
   const p = (t.pending ?? null) as Record<string, unknown> | null;
@@ -172,6 +173,55 @@ export interface Task {
   logLen: number;
   /** The request it waits on, in the server's shape (for asWaiting). */
   pendingRaw: unknown;
+  /** Who runs its agent loop: an outside MCP client, or spall itself (#63). */
+  runner: "external" | "spall";
+  /** What its model has used, against its token cap; spall-run tasks only. */
+  usage: Usage;
+}
+
+export interface Usage {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  modelMs: number;
+  /** The task's model token cap (in and out). */
+  cap: number;
+}
+
+/** The server's default token cap, for a task that doesn't say. */
+const DEFAULT_TOKENS = 2_000_000;
+
+/** 950, 9.1k, 182k, 2.0M. */
+function compact(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 10_000) return `${(n / 1000).toFixed(1)}k`;
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+function duration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** A task's model use in one line. */
+export function usageText(u: Usage): string {
+  if (u.calls === 0) return "no model calls yet";
+  const tokens = u.inputTokens + u.outputTokens;
+  return `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${compact(tokens)} of ${compact(u.cap)} tokens (${compact(u.inputTokens)} in, ${compact(u.outputTokens)} out) · ${duration(u.modelMs)}`;
+}
+
+function asUsage(v: unknown, cap: unknown): Usage {
+  const u = (v ?? {}) as Record<string, unknown>;
+  return {
+    calls: num(u.calls),
+    inputTokens: num(u.input_tokens),
+    outputTokens: num(u.output_tokens),
+    modelMs: num(u.model_ms),
+    cap: typeof cap === "number" && Number.isFinite(cap) ? cap : DEFAULT_TOKENS,
+  };
 }
 
 const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
@@ -207,6 +257,8 @@ export function asTask(v: unknown): Task | null {
     log,
     logLen: typeof t.log_len === "number" ? t.log_len : log.length,
     pendingRaw: t.pending ?? null,
+    runner: t.runner === "spall" ? "spall" : "external",
+    usage: asUsage(t.usage, c.tokens),
   };
 }
 
@@ -303,6 +355,10 @@ export interface NewTask {
   hosts?: string[];
   methods?: string[];
   note?: string;
+  /** Run by spall's own agent host; an outside MCP client when left out. */
+  runner?: "spall";
+  /** Model token cap, for a spall-run task. */
+  tokens?: number;
 }
 
 /** POST /api/tasks: the new draft, or the server's message. */
@@ -312,7 +368,10 @@ export async function createTask(n: NewTask): Promise<Task | string> {
   if (n.timeLimit !== undefined) constraints.time_limit_minutes = n.timeLimit;
   if (n.hosts?.length) constraints.hosts = n.hosts;
   if (n.methods?.length) constraints.methods = n.methods;
-  const body = await apiJson("/api/tasks", { method: "POST", body: { goal: n.goal, role: n.role, constraints, note: n.note ?? "" } });
+  if (n.tokens !== undefined) constraints.tokens = n.tokens;
+  const ask: Record<string, unknown> = { goal: n.goal, role: n.role };
+  if (n.runner) ask.runner = n.runner;
+  const body = await apiJson("/api/tasks", { method: "POST", body: { ...ask, constraints, note: n.note ?? "" } });
   if (typeof body === "string") return body;
   return asTask(body) ?? "unexpected answer from spall";
 }

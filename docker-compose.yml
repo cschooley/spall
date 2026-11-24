@@ -59,7 +59,22 @@ services:
       SPALL_SELF_ADDRESS: 127.0.0.1:${SPALL_PORT:-3000}
       # Hosts replay may send to (exact, *.wildcard, IP, CIDR). Empty: none.
       SPALL_SCOPE: ${SPALL_SCOPE:-}
+      # spall as agent host (#63), off unless set in your shell. Left
+      # blank, each is passed through only when set: e.g.
+      #   SPALL_MODEL_PROVIDER=anthropic SPALL_MODEL_KEY=sk-ant-... docker compose up -d
+      #   SPALL_MODEL_PROVIDER=openai SPALL_MODEL=qwen3 \
+      #     SPALL_MODEL_URL=http://host.docker.internal:11434/v1 docker compose up -d
+      # The key in the environment shows in `docker inspect`; a 0600 key
+      # file mounted read-only (SPALL_MODEL_KEY_FILE) keeps it out of there.
+      SPALL_MODEL_PROVIDER:
+      SPALL_MODEL:
+      SPALL_MODEL_URL:
+      SPALL_MODEL_KEY:
+      SPALL_MODEL_KEY_FILE:
       RUST_LOG: info
+    # A local model on this machine (Ollama, llama.cpp) at host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:${SPALL_PORT:-3000}:3000"
     volumes:

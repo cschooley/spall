@@ -153,7 +153,7 @@ Everything shown comes from captured traffic, so it's treated as hostile: render
 
 ## Connect an agent (MCP)
 
-spall has an MCP server, so an MCP client such as Claude Code or Claude Desktop can work an engagement under a task you approve. The client runs the agent loop; spall never holds a model key. Over MCP an agent can list and read traffic (`filter`, `open`), replay through the same gate you use (`replay`), send a new GET or HEAD to a URL in scope through that gate too (`fetch`; a crawl is `fetch` in a loop), see hosts and their scope state (`hosts`), search the rule catalog (`rules`), see its own task (`task`) and propose findings (`propose_finding`). It can't change scope, the rules or engagements, can't confirm its own sends, and can't promote or export anything.
+spall has an MCP server, so an MCP client such as Claude Code or Claude Desktop can work an engagement under a task you approve. The client runs the agent loop and holds its own model key. (spall can also run the loop itself: see [Let spall run the agent](#let-spall-run-the-agent).) Over MCP an agent can list and read traffic (`filter`, `open`), replay through the same gate you use (`replay`), send a new GET or HEAD to a URL in scope through that gate too (`fetch`; a crawl is `fetch` in a loop), see hosts and their scope state (`hosts`), search the rule catalog (`rules`), see its own task (`task`) and propose findings (`propose_finding`). It can't change scope, the rules or engagements, can't confirm its own sends, and can't promote or export anything.
 
 1. Let agents act on the engagement: `roe set agents yes` in the console.
 2. Make a task and approve it (or let the client's first connection make a draft and approve that). Until a task is approved and running, nothing the agent does sends anything.
@@ -174,6 +174,28 @@ What it can't get around:
 - **STOP AGENTS** in the top bar (or `Shift+Esc`) halts every task at once, for good.
 
 Everything an agent does, or is refused, is in the audit log with its task.
+
+## Let spall run the agent
+
+spall can also run the agent loop itself, with your own model key, so there's no MCP client to set up. The agent gets the same tools and goes through the same gate as an MCP client (task constraints, approvals, the e-stop, untrusted output); there is no other way in. Two kinds of model:
+
+- **Anthropic** (Claude): `SPALL_MODEL_PROVIDER=anthropic` and your API key. The model is `claude-opus-5-5` unless `SPALL_MODEL` says otherwise.
+- **Any OpenAI-compatible endpoint**, usually a model on your own machine (Ollama, llama.cpp, vLLM): `SPALL_MODEL_PROVIDER=openai`, `SPALL_MODEL` (the name the endpoint serves) and `SPALL_MODEL_URL`. With a local model, captured traffic never leaves your machine.
+
+```sh
+SPALL_MODEL_PROVIDER=anthropic SPALL_MODEL_KEY=sk-ant-... docker compose up -d --build
+# or a local model:
+SPALL_MODEL_PROVIDER=openai SPALL_MODEL=qwen3 \
+  SPALL_MODEL_URL=http://host.docker.internal:11434/v1 docker compose up -d --build
+```
+
+Then, in Tasks, make a task with **Run by: spall** and approve it. spall starts it at once. What it costs is on the task card: model calls, tokens in and out, and time. A task stops when the model says it's done, at its **model token** cap (2,000,000 by default; past it the task halts), on a halt or the e-stop (even mid-call), or after 500 turns. While it waits on your approval, it waits; your decision and any steering notes reach it before its next turn.
+
+What to know:
+
+- **Your key stays in spall.** It's read from a file (`SPALL_MODEL_KEY_FILE`, which must be mode 0600) or `SPALL_MODEL_KEY`, sent only to the model URL, and never shown in the UI, logged, or put in a task; it's scrubbed from any error. A key in the environment shows in `docker inspect`; a key file mounted read-only doesn't.
+- **What the agent reads goes to the model.** With a hosted model, that's captured traffic (credentials masked, bodies truncated) leaving your machine for the model's provider. Plain `http` is allowed only to a model on this machine or a private network.
+- **Every turn is recorded.** The model's text goes in the task's log (cut at 4,000 characters), and the whole conversation is kept (0600) at `/data/engagements/tasks/transcripts/<engagement>/<task>.json`.
 
 ## Configuration
 
@@ -217,6 +239,11 @@ cargo run -- --log-file ./traffic.jsonl
 | `--audit-log` | `SPALL_AUDIT_LOG` | `/data/audit.jsonl` (lever API mode; spall won't start if it can't write it) |
 | `--engagements` | `SPALL_ENGAGEMENTS` | `/data/engagements` (lever API mode; created if missing) |
 | `--allow-unredacted-export` | `SPALL_ALLOW_UNREDACTED_EXPORT` | off. Lets an export ask to skip redaction; the file then holds captured credentials |
+| `--model-provider` | `SPALL_MODEL_PROVIDER` | unset: spall runs no agent itself. `anthropic` or `openai` (any OpenAI-compatible endpoint); see [Let spall run the agent](#let-spall-run-the-agent) |
+| `--model` | `SPALL_MODEL` | `claude-opus-5-5` for `anthropic`; required for `openai` |
+| `--model-url` | `SPALL_MODEL_URL` | `https://api.anthropic.com` for `anthropic`; required for `openai`. `http` only to this machine or a private network |
+| `--model-key-file` | `SPALL_MODEL_KEY_FILE` | unset: `SPALL_MODEL_KEY` is read instead. Must be mode 0600 or stricter |
+| `--model-max-tokens` | `SPALL_MODEL_MAX_TOKENS` | `16000` (output tokens per model turn, thinking included) |
 
 `--allowed-host` is checked against the request's `Host` header to block DNS-rebinding attacks on the local console. Requests for any other host get a 403.
 
@@ -266,7 +293,7 @@ Each engagement carries rules that the gate enforces on every replay and fetch. 
 - `GET /events`: Server-Sent Events, one event per taphttp `TrafficEntry` (JSON); recent history first, then live
 - `GET /api/exchanges`: history, newest first, proxied to taphttp's `GET /exchanges`. Accepts `limit`, `before`, `host`, `method`, `status`, `q`, `since`, `until`, `replay_of`; other parameters are dropped. 503 without `--taphttp-api`
 - `GET /api/exchanges/{id}`: one exchange, or 404
-- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null, "testing": {"allowed", "reason"} | null, "to_triage": n | null, "export": {"promoted", "unredacted_allowed"} | null, "waiting_approval": n | null, "estop": {"since", "by", "reason"} | null, "flux": {"crate", "spec", "rules"}}` for the status bar
+- `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null, "testing": {"allowed", "reason"} | null, "to_triage": n | null, "export": {"promoted", "unredacted_allowed"} | null, "waiting_approval": n | null, "estop": {"since", "by", "reason"} | null, "agent_host": {"model"} | null, "flux": {"crate", "spec", "rules"}}` for the status bar
 - `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope or outside the rules of engagement; 429 over the rate ceiling (`Retry-After`); 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
 - `POST /api/fetch`: `{"url", "method"?: "GET" | "HEAD", "req_headers"?: [[name, value], ...], "confirm"?}`. A new request (taphttp's `POST /send`), not a replay: an absolute `http`/`https` URL with no user info. The same gate and answers as `/api/replay` (no 404: there's no exchange to look up). Agents get it as the `fetch` tool; a crawl is `fetch` in a loop
 - `POST /api/scope`: `{"op": "add" | "exclude" | "remove", "entry": "..."}` or `{"op": "all", "on": bool}`. Same-origin JSON only; audited with the entries before and after; entries are saved on the active engagement, `all` lasts until restart. Returns `{"scope": [...], "all": bool, "changed": bool}`; exclusions are listed as `!entry`
@@ -285,7 +312,7 @@ Each engagement carries rules that the gate enforces on every replay and fetch. 
 - `GET /api/engagement`: the active engagement, with `testing_now: {allowed, reason}`. `PATCH /api/engagement`: change any of `name`, `client`, `starts`, `ends`, `expires`, `contacts`, `notes`, `target_notes`, `api_specs` and `rules` (any of `methods`, `safe_methods`, `rate_limit` (0 is off), `time_zone`, `windows`, `blackouts`, `agents_allowed`, `destructive_allowed`), but not `scope`: use `/api/scope`. Returns `{"engagement", "changed"}`
 - `GET /api/engagements`: `[{"id", "name", "client", "active"}]`. `POST /api/engagements`: `{"name", "client"?, "scope"?: [...]}` creates one and makes it active (201). `POST /api/engagements/active`: `{"id": id or name}` switches. All same-origin JSON, audited; 400 bad input, 404 no such engagement, 503 without `--taphttp-api`
 - `GET /api/commands`: the command registry the palette, console and MCP server share: `{"risks": [...], "commands": [{"name", "usage", "desc", "risk", "mcp", "hidden", "ui", "args"}]}`
-- `GET /api/tasks`: the active engagement's agent tasks, newest first, without logs. `POST /api/tasks`: `{"goal", "role": "scoper" | "mapper" | "tester" | "reporter", "constraints"?: {"hosts"?, "methods"?, "safe_methods"?, "rate_limit"?, "destructive"?, "budget"?, "time_limit_minutes"?, "stop"?}, "plan"?: [...], "note"?}` makes a draft (201); constraints default to the rules of engagement and anything wider is refused. `GET /api/tasks/{id}`: one, with its log. `PATCH /api/tasks/{id}`: `{"op": "approve"}`, `{"op": "edit", ...}` (drafts only), `{"op": "halt", "reason"?}` (for good), or, for a task waiting on approval, `{"op": "approve_once"}`, `{"op": "approve_for_task"}` or `{"op": "deny", "reason"}`. Same-origin JSON, audited; 409 when the task can't do that from where it stands
+- `GET /api/tasks`: the active engagement's agent tasks, newest first, without logs. `POST /api/tasks`: `{"goal", "role": "scoper" | "mapper" | "tester" | "reporter", "runner"?: "external" | "spall", "constraints"?: {"hosts"?, "methods"?, "safe_methods"?, "rate_limit"?, "destructive"?, "budget"?, "time_limit_minutes"?, "stop"?, "tokens"?}, "plan"?: [...], "note"?}` makes a draft (201); constraints default to the rules of engagement and anything wider is refused. `"runner": "spall"` (spall runs it; 409 without a model configured) adds `usage: {"calls", "input_tokens", "output_tokens", "model_ms"}` to the task. `GET /api/tasks/{id}`: one, with its log. `PATCH /api/tasks/{id}`: `{"op": "approve"}`, `{"op": "edit", ...}` (drafts only), `{"op": "halt", "reason"?}` (for good), or, for a task waiting on approval, `{"op": "approve_once"}`, `{"op": "approve_for_task"}` or `{"op": "deny", "reason"}`. Same-origin JSON, audited; 409 when the task can't do that from where it stands
 - `POST /api/estop`: `{"reason"?}` halts every agent task in every engagement, for good, and revokes every confirmation token; it holds across restarts. `POST /api/estop/clear` lets new tasks run. `estop` in `/api/status` shows it
 - `POST /mcp`: the MCP server (streamable HTTP, JSON responses; protocol 2025-06-18 or 2025-03-26). Needs `Authorization: Bearer <the token in --mcp-token-file>`; the session is bound to `?task=T-n` or a new draft (`?goal=...&role=...`). `DELETE /mcp` ends a session. See [Connect an agent](#connect-an-agent-mcp)
 - `GET /api/audit?last=N`: the newest replay attempts from the audit log, oldest first (default 20, at most 500). 503 without `--taphttp-api`
