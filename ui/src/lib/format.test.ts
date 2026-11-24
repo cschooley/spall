@@ -8,7 +8,6 @@ import {
   hexRows,
   HEX_BYTES_PER_ROW,
   pathOf,
-  prettyBody,
   statusClass,
   statusText,
   timeOf,
@@ -121,17 +120,16 @@ test("base64Bytes decodes, and rejects garbage", () => {
   assert.throws(() => base64Bytes("!!!not base64"));
 });
 
-test("prettyBody pretty-prints JSON, leaves text alone, truncates for display", () => {
-  assert.deepEqual(prettyBody('{"a":1}', "application/json"), {
-    text: '{\n  "a": 1\n}',
-    truncated: false,
-  });
-  assert.equal(prettyBody("[1,2]", null).text, "[\n  1,\n  2\n]", "sniffed JSON");
-  assert.equal(prettyBody("{not json", "application/json").text, "{not json");
-  assert.equal(prettyBody("<h1>hi</h1>", "text/html").text, "<h1>hi</h1>");
-  const big = prettyBody("x".repeat(300_000), "text/plain", 1000);
-  assert.equal(big.truncated, true);
-  assert.equal(big.text.length, 1000);
+test("body views: json when it parses, raw always, binary as lossy text", async () => {
+  const { bodyText, jsonView } = await import("./format.ts");
+  assert.equal(jsonView('{"a":1,"b":[2]}'), '{\n  "a": 1,\n  "b": [\n    2\n  ]\n}');
+  assert.equal(jsonView(" [1] "), "[\n  1\n]");
+  assert.equal(jsonView("{not json"), null);
+  assert.equal(jsonView("42"), null, "a bare scalar isn't worth a JSON view");
+  assert.equal(jsonView("<p>hi</p>"), null);
+  // Binary as text: UTF-8, bad bytes as U+FFFD, never thrown.
+  assert.equal(bodyText("aGkg4pyTIP8="), "hi ✓ \uFFFD");
+  assert.equal(bodyText("!!!not base64"), null);
 });
 
 test("matchesFilter checks method, host, path and status, case-insensitively", async () => {

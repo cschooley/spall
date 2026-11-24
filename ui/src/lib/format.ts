@@ -104,23 +104,23 @@ export function hexRows(bytes: Uint8Array, startRow: number, rowCount: number): 
 
 export const MAX_BODY_CHARS = 256 * 1024;
 
-/** Text body for display: JSON pretty-printed when it parses, then truncated. */
-export function prettyBody(
-  body: string,
-  contentType: string | null,
-  maxChars = MAX_BODY_CHARS,
-): { text: string; truncated: boolean } {
-  let text = body;
-  if ((contentType && /json/i.test(contentType)) || /^\s*[[{]/.test(body)) {
-    try {
-      text = JSON.stringify(JSON.parse(body), null, 2);
-    } catch {
-      // not JSON after all; show as-is
-    }
+/** A body pretty-printed as JSON, or null if it isn't a JSON object or array. */
+export function jsonView(body: string): string | null {
+  if (!/^\s*[[{]/.test(body)) return null;
+  try {
+    return JSON.stringify(JSON.parse(body), null, 2);
+  } catch {
+    return null;
   }
-  return text.length > maxChars
-    ? { text: text.slice(0, maxChars), truncated: true }
-    : { text, truncated: false };
+}
+
+/** A base64 body decoded as UTF-8 for reading (bad bytes become U+FFFD); null if it isn't base64. */
+export function bodyText(b64: string): string | null {
+  try {
+    return new TextDecoder("utf-8", { fatal: false }).decode(base64Bytes(b64));
+  } catch {
+    return null;
+  }
 }
 
 export async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {

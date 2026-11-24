@@ -246,6 +246,14 @@ pre {
   font: var(--vg-text-sm)/1.5 var(--vg-font-mono); white-space: pre-wrap; word-break: break-all;
 }
 .none { color: var(--vg-text-tertiary); font-style: italic; }
+.body-views { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vg-space-1); margin: 0 0 var(--vg-space-2); }
+.body-views button {
+  height: auto; padding: 1px var(--vg-space-2); border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm);
+  background: none; color: var(--vg-text-secondary); font: var(--vg-text-xs) var(--vg-font-mono);
+}
+.body-views button[aria-pressed="true"] { color: var(--vg-text-primary); border-color: var(--vg-accent-rust); }
+.body-views button:disabled { opacity: .45; }
+.body-views .note { margin-left: var(--vg-space-2); color: var(--vg-text-tertiary); font-size: var(--vg-text-xs); }
 .binary {
   margin: 0 0 var(--vg-space-4); padding: var(--vg-space-4); border: 1px dashed var(--vg-border-strong); border-radius: var(--vg-radius-sm);
   background: var(--vg-bg-sunken); color: var(--vg-text-secondary); font: var(--vg-text-sm)/1.5 var(--vg-font-mono);

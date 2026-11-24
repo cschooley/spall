@@ -94,3 +94,41 @@ test("JSON bodies are pretty-printed; bad base64 is reported, not rendered", asy
   await page.getByRole("tab", { name: "response" }).click();
   await expect(page.locator(".binary")).toHaveText("binary body (could not decode base64)");
 });
+
+test("a body can be read as JSON or raw, and a binary one as text; every view is text", async ({ page }) => {
+  const t = token();
+  const hostile = `{"x":"<img src=x onerror=\\"window.__pwned=1\\">","n":1}`;
+  append(
+    entry({ host: `${t}.json`, res_headers: [["content-type", "application/json"]], res_body: hostile }),
+    entry({ host: `${t}.html`, res_headers: [["content-type", "application/json"]], res_body: "<b>not json</b>" }),
+    entry({ host: `${t}.bin`, res_body: Buffer.from("hi ✓ <script>window.__pwned=1</script>").toString("base64"), res_body_encoding: "base64" }),
+  );
+  const views = page.getByRole("group", { name: "Body view" });
+  const pre = page.locator(".pane pre");
+
+  await openResponse(page, `host:${t}.json`);
+  await expect(views.getByRole("button", { name: "json" })).toHaveAttribute("aria-pressed", "true");
+  await expect(pre).toHaveText('{\n  "x": "<img src=x onerror=\\"window.__pwned=1\\">",\n  "n": 1\n}');
+  await views.getByRole("button", { name: "raw" }).click();
+  await expect(pre).toHaveText(hostile, { useInnerText: false });
+  await expect(views.getByRole("button", { name: "raw" })).toHaveAttribute("aria-pressed", "true");
+
+  // Not JSON: raw only, and the mismatch is said.
+  await filterTo(page, `host:${t}.html`);
+  await page.locator("tr.row").first().click();
+  await page.getByRole("tab", { name: "response" }).click();
+  await expect(views.getByRole("button", { name: "json" })).toBeDisabled();
+  await expect(views).toContainText("content-type says JSON, but it doesn't parse");
+  await expect(pre).toHaveText("<b>not json</b>");
+
+  // Binary: the hex view by default; as text on request.
+  await filterTo(page, `host:${t}.bin`);
+  await page.locator("tr.row").first().click();
+  await page.getByRole("tab", { name: "response" }).click();
+  await expect(page.locator(".binary")).toContainText("BINARY");
+  await views.getByRole("button", { name: "text" }).click();
+  await expect(pre).toHaveText("hi ✓ <script>window.__pwned=1</script>");
+
+  expect(await page.locator(".pane img, .pane b, .pane script").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});
