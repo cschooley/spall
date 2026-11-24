@@ -5,6 +5,10 @@ here.
 
 ## Open
 
+### Capture filter
+
+[taphttp#23](https://github.com/cschooley/taphttp/issues/23): proxy without recording chosen hosts: record all, only matching, all except matching, or nothing. A host that isn't captured is tunneled without TLS interception. `GET`/`PUT /capture` on the lever API, with per-host counts of what went through uncaptured. `/replay` and `/send` are always recorded. spall#80 sets the filter from the engagement, including "capture only what's in scope".
+
 ### Distinct hosts in history
 
 [taphttp#21](https://github.com/cschooley/taphttp/issues/21): `GET /hosts`, the distinct hosts in history with counts and first/last seen. spall#39 builds scope from traffic, but spall only sees its backfill (the newest `--history` exchanges) and the live feed, so a host seen once early in a long engagement never reaches its list. spall keeps the scope state; taphttp only counts.
