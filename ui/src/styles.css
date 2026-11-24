@@ -623,6 +623,7 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .approval header b { font-family: var(--vg-font-mono); }
 .approval .goal { color: var(--vg-text-primary); overflow-wrap: anywhere; }
 .approval .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--vg-space-1) var(--vg-space-3); margin: 0; font: var(--vg-text-xs) var(--vg-font-mono); }
+.approval .once-only { margin: 0; font-size: var(--vg-text-xs); color: var(--vg-text-secondary); }
 .approval .kv dt { color: var(--vg-text-tertiary); }
 .approval .kv dd { margin: 0; overflow-wrap: anywhere; }
 .approval .req .method { font-weight: 600; color: var(--vg-accent-rust); }

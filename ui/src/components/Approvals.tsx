@@ -80,7 +80,8 @@ export function Card({ w, onDone }: { w: Waiting; onDone(): void }) {
           type="button"
           disabled={busy || forTask === null}
           onClick={() => void go({ op: "approve_for_task" })}
-          title={forTask === null ? "The rules of engagement want this confirmed each time: only once" : "Within the rules of engagement"}
+          aria-describedby={forTask === null ? `${w.id}-once-only` : undefined}
+          title={forTask === null ? undefined : "Within the rules of engagement"}
         >
           {forTask === null ? "Approve for the task" : `Approve for the task: ${forTask}`}
         </button>
@@ -90,6 +91,11 @@ export function Card({ w, onDone }: { w: Waiting; onDone(): void }) {
           </button>
         ) : null}
       </div>
+      {forTask === null ? (
+        <p className="note once-only" id={`${w.id}-once-only`}>
+          Only once: the rules of engagement want this confirmed every time it's sent, and a task can't widen them.
+        </p>
+      ) : null}
       {denying ? (
         <form
           className="deny"

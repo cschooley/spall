@@ -3232,7 +3232,10 @@ async fn an_mcp_session_without_a_task_gets_a_draft_that_sends_nothing() {
     assert!(is_err && text.contains("T-2 is draft"), "{text}");
     assert!(stub.replays().is_empty());
     let (text, _) = m.call("task", serde_json::json!({})).await;
-    assert!(text.starts_with("It hasn't started"), "{text}");
+    assert!(
+        text.starts_with("A draft: nothing sends until the tester approves it."),
+        "{text}"
+    );
 
     // A finished task can't be bound; nor any task once agents are off.
     send_text(spall, "PATCH", "/api/tasks/T-1", r#"{"op":"halt"}"#, None).await;
@@ -3593,8 +3596,8 @@ async fn an_approved_task_starts_with_its_agent_and_steering_reaches_it() {
     m.initialize("?task=T-2").await;
     let (text, _) = m.call("task", serde_json::json!({})).await;
     assert!(
-        text.starts_with("It hasn't started"),
-        "reading its task doesn't start it: {text}"
+        text.starts_with("Approved: it starts with your first action"),
+        "reading its task doesn't start it, nor say it's waiting on the tester: {text}"
     );
     assert_eq!(task_of(&r, "T-2").status, spall::tasks::Status::Approved);
     let (_, is_err) = m.call("open", serde_json::json!({"id": "e1"})).await;

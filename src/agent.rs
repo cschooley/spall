@@ -405,8 +405,9 @@ impl Tools {
             },
         });
         let what_now = match t.status {
-            Status::Draft | Status::Approved => {
-                "It hasn't started: nothing sends until the tester approves and starts it."
+            Status::Draft => "A draft: nothing sends until the tester approves it.",
+            Status::Approved => {
+                "Approved: it starts with your first action; act within its constraints."
             }
             Status::Running => "Running: you may act within its constraints.",
             Status::WaitingOnApproval => {

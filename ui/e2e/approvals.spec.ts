@@ -69,12 +69,18 @@ test("waiting tasks show exactly what would be sent, as text; approve once and a
   await expect(t1.locator("dd").nth(1)).toHaveText(P);
   await expect(t1).toContainText("1 request · 4 of 20 spent");
   await expect(t1.getByRole("button", { name: "Approve for the task" })).toBeDisabled();
+  // Why, said on the card, not only in a tooltip.
+  await expect(t1.locator(".once-only")).toHaveText(
+    "Only once: the rules of engagement want this confirmed every time it's sent, and a task can't widen them.",
+  );
+  await expect(t1.getByRole("button", { name: "Approve for the task" })).toHaveAccessibleDescription(/Only once:/);
   expect(await page.locator(".approval img").count()).toBe(0);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 
   await t1.getByRole("button", { name: "Approve once" }).click();
   await expect(cards).toHaveCount(1);
   const t2 = cards.nth(0);
+  await expect(t2.locator(".once-only")).toHaveCount(0);
   await t2.getByRole("button", { name: "Approve for the task: let T-2 send POST without asking" }).click();
   await expect(group).toContainText("No task is waiting on you.");
   expect(api.calls).toEqual([
