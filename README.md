@@ -5,7 +5,7 @@
 
 An assessment workbench for web application security testing: a web UI for interactive testing and an MCP server for agentic testing, built on top of [taphttp](https://github.com/cschooley/taphttp). Findings are exported as [flux](https://github.com/cschooley/flux), a SARIF 2.1.0 profile.
 
-**Status:** pre-alpha, v0.6.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement), M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types) and M5 (redacted flux export). Next: M6a (the agent, over MCP). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
+**Status:** pre-alpha, v0.7.0. Done: M1 (traffic workbench), M2 (replay), M3 (engagement), M4 (candidates and triage, on [flux](https://github.com/cschooley/flux) types), M5 (redacted flux export) and M6a (an agent over MCP, held to the gate). Next: M6b (spall runs the agent itself). See [Roadmap](#roadmap) and [docs/architecture.md](docs/architecture.md).
 
 **For authorized testing and local development only.** spall displays raw captured traffic, including credentials. It binds to localhost by default; keep it that way unless you have added authentication.
 
@@ -43,7 +43,7 @@ Screenshots use fixture traffic and a sample engagement; regenerate them with `n
 
 Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu's design system. The interactive versions live in [`verdigris/mockups`](https://github.com/cschooley/verdigris/tree/main/mockups); the UX behind them is in [docs/ux.md](docs/ux.md).
 
-**Traffic.** Still to come: attribution on every exchange (you or the agent, M6a).
+**Traffic.** Every exchange shows who sent it: you or the agent, and which task.
 
 ![Mockup: Traffic view](docs/screenshots/mockup-traffic.png)
 
@@ -51,7 +51,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 
 ![Mockup: Tasks view](docs/screenshots/mockup-tasks.png)
 
-**Findings.** The agent proposes (M6a), a human confirms, rejects or marks duplicate, with evidence and a redacted export preview (M5).
+**Findings.** The agent proposes, a human confirms, rejects or marks duplicate, with evidence and a redacted export preview (M5).
 
 ![Mockup: Findings view](docs/screenshots/mockup-findings.png)
 
@@ -245,7 +245,7 @@ The engagement is what you're testing under: a name, the client, start and end d
 
 ### Rules of engagement
 
-Each engagement carries rules that the gate enforces on every replay. Agents will be held to the same rules (M6a). A task can narrow them but never widen them.
+Each engagement carries rules that the gate enforces on every replay and fetch. Agents are held to the same rules. A task can narrow them but never widen them.
 
 | Rule | Default | Console |
 |---|---|---|
@@ -338,8 +338,8 @@ Every action is pinned to a commit SHA (the repository requires it: a workflow u
 | M3 engagement | The engagement as root object: scope with exclusions, rules of engagement the gate enforces (windows, rate, methods), paste a scope list, hosts from traffic, OpenAPI import, browser setup with the CA; Engagement view | done, `v0.4.0` |
 | M4 candidates | Flag candidates, keyboard triage, evidence, suppressions, on [flux](https://github.com/cschooley/flux) crate types; WSTG v4.2 rule ids (#48) | done, `v0.5.0` |
 | M5 export | Promotion, redacted flux export (redaction in the flux crate), redaction preview | done, `v0.6.0` |
-| M6a agent over MCP | Agent tasks driven by an outside MCP client: read traffic, replay through the gate, propose findings (never promote); approvals, e-stop, Tasks view, attribution | next |
-| M6b agent host | spall runs the agent: your own model key, roles, intake chat and plans, quad, agent buttons | |
+| M6a agent over MCP | Agent tasks driven by an outside MCP client: read traffic, replay through the gate, propose findings (never promote); approvals, e-stop, Tasks view, attribution | done, `v0.7.0` |
+| M6b agent host | spall runs the agent: your own model key, roles, intake chat and plans, quad, agent buttons | next |
 | M6c sensors | Execution sandbox, OOB listener, disposable inboxes | |
 | M7 intercept | Pause and modify requests via taphttp | |
 | M8 flux in | Suppressions and retests from the Kudzu platform; scurf hypotheses; route maps (Surface) | |

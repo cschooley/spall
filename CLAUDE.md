@@ -135,18 +135,21 @@ redacted, validated flux report (`POST /api/export`,
 and an explicit ask, marked `flux/redacted: false`. The inspector's
 credential highlighting comes from flux (`/api/redaction`).
 
-## Current milestone: M6a "agent over MCP"
+## Current milestone: M6b "agent host"
+
+**M6a "agent over MCP": done** (tag `v0.7.0`, #68: #53-#62, #73,
+#74, #78). Its notes stay below: M6b builds on all of it.
 
 M6 is split in three (2026-11-23), lettered so M7 onward keep their
 numbers. Read docs/architecture.md (agent sections) and docs/ux.md
 (Tasks, intake, roles) first.
 
-- **M6a agent over MCP** (#68, current): #53 server-side registry
+- **M6a agent over MCP** (#68, done): #53 server-side registry
   (first: the UI registry is TS-only), #54 tasks, #55 gate for agents,
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69): #63 host, #64 roles, #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host, #64 roles, #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
