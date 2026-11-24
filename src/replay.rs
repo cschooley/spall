@@ -213,6 +213,8 @@ pub struct Replayer {
     /// `--allow-unredacted-export`: the opt-in an unredacted export needs
     /// on top of asking for one (#51).
     pub allow_unredacted_export: bool,
+    /// spall's and taphttp's own addresses: never an agent's target (#73).
+    pub stack: crate::stack::Stack,
 }
 
 fn json(status: StatusCode, body: serde_json::Value) -> Response {
@@ -1004,6 +1006,15 @@ impl Replayer {
     /// human instead; agents never get or use a confirmation token. The
     /// MCP server (#58) and the agent host (#63) call this; there is no
     /// HTTP route to it.
+    /// Agents only, for now: a human replaying to spall itself is odd but
+    /// theirs to do (#73).
+    async fn stack_refusal(&self, who: &Who<'_>, url: &str) -> Option<String> {
+        match who {
+            Who::Human => None,
+            Who::Agent { .. } => self.stack.refuses(url).await,
+        }
+    }
+
     pub async fn agent_replay(&self, task: &str, req: ReplayRequest) -> Response {
         self.replay(Who::Agent { task }, req).await
     }
@@ -1134,6 +1145,27 @@ impl Replayer {
         rec.host_header = eff.host_header.clone();
         let scope = self.scope_now();
         rec.scope_all = scope.allows_all();
+        // Before scope, the RoE and the task: no scope reaches the stack, and
+        // it is a refusal, never a pause a human could approve (#73).
+        if let (Some(t), Some(why)) = (&task, self.stack_refusal(&who, &eff.url).await) {
+            rec.outcome = Outcome::Denied;
+            rec.decision = Some("deny");
+            rec.reason = Some(why.clone());
+            self.audit(&rec);
+            let ev = crate::tasks::Event::Request {
+                exchange: None,
+                method: eff.method.clone(),
+                target: eff.url.clone(),
+                check: None,
+                outcome: "denied".into(),
+                status: None,
+            };
+            self.task_log(&engagement.id, Some((t.id.clone(), ev)));
+            return json(
+                StatusCode::FORBIDDEN,
+                serde_json::json!({ "error": why, "decision": "deny" }),
+            );
+        }
         let layers = [&engagement.rules];
         let decision = gate::decide(
             &scope,

@@ -2256,6 +2256,20 @@ async fn agent_setup(
     SocketAddr,
     Arc<spall::replay::Replayer>,
 ) {
+    agent_setup_with(constraints, &["--scope", "example.com"], &[]).await
+}
+
+/// [`agent_setup`] with spall's flags and extra exchanges `(id, url)`.
+async fn agent_setup_with(
+    constraints: &str,
+    flags: &[&str],
+    urls: &[(&str, &str)],
+) -> (
+    tempfile::TempDir,
+    Stub,
+    SocketAddr,
+    Arc<spall::replay::Replayer>,
+) {
     let dir = tempfile::TempDir::new().unwrap();
     let token = dir.path().join("api-token");
     write_token(&token);
@@ -2265,7 +2279,20 @@ async fn agent_setup(
         "offsite",
         entry("offsite").replace("http://example.com/", "http://evil.test/"),
     );
-    let (spall, r) = start_agent_spall(api, &token, &["--scope", "example.com"]).await;
+    for (id, url) in urls {
+        let host = url
+            .split("://")
+            .nth(1)
+            .and_then(|r| r.split('/').next())
+            .unwrap();
+        stub.push_json(
+            id,
+            entry(id)
+                .replace(&format!("http://example.com/{id}"), url)
+                .replace(r#""host":"example.com""#, &format!(r#""host":"{host}""#)),
+        );
+    }
+    let (spall, r) = start_agent_spall(api, &token, flags).await;
     eventually("backfill", || !stub.exchange_queries().is_empty()).await;
     let res = send_text(
         spall,
@@ -2319,6 +2346,78 @@ async fn agent_send(
 
 fn task_of(r: &spall::replay::Replayer, id: &str) -> spall::tasks::Task {
     r.tasks.get(&r.engagements.active().id, id).unwrap()
+}
+
+#[tokio::test]
+async fn agents_never_target_the_stack_whatever_the_scope() {
+    // Everything in scope, the task allowing every host: only the stack
+    // guard (#73) stands between an agent and spall's or taphttp's own API.
+    let flags = [
+        "--scope",
+        "example.com,*",
+        "--listen",
+        "127.0.0.1:3000",
+        "--proxy-address",
+        "127.0.0.1:18080",
+        "--self-address",
+        "127.0.0.1:13000",
+    ];
+    let stack = [
+        ("s1", "http://spall:3000/api/status"),
+        ("s2", "http://taphttp:8081/info"),
+        ("s3", "http://SPALL./api/engagement"),
+        ("s4", "http://127.0.0.1:3000/api/estop/clear"),
+        ("s5", "http://localhost:13000/api/tasks"),
+        ("s6", "http://host.docker.internal:18080/"),
+        ("s7", "http://[::1]:3000/"),
+        ("s8", "http://0.0.0.0:3000/"),
+        ("s9", "http://app.localhost:13000/"),
+    ];
+    let mut urls = stack.to_vec();
+    // A dev app on this machine is a normal target.
+    urls.push(("dev", "http://localhost:5173/"));
+    let (dir, stub, _spall, r) = agent_setup_with(r#"{"budget":50}"#, &flags, &urls).await;
+    // The lever API's own address (the stub, here) is the stack too.
+    let lever = stub_addr(&stub);
+    stub.push_json(
+        "s10",
+        entry("s10")
+            .replace(
+                "http://example.com/s10",
+                &format!("http://{lever}/exchanges"),
+            )
+            .replace(r#""host":"example.com""#, &format!(r#""host":"{lever}""#)),
+    );
+    let mut ids: Vec<&str> = stack.iter().map(|(id, _)| *id).collect();
+    ids.push("s10");
+    for id in &ids {
+        let (status, body) = agent_send(&r, "T-1", &format!(r#"{{"id":"{id}"}}"#)).await;
+        assert_eq!(status, 403, "{id}: {body}");
+        assert_eq!(body["decision"], "deny", "{id}: {body}");
+        let err = body["error"].as_str().unwrap();
+        assert!(err.contains("spall's own stack"), "{id}: {err}");
+        assert!(err.contains("can't be approved"), "{id}: {err}");
+    }
+    // A POST to the stack is refused too, not paused for approval.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"s4","method":"POST","body":"{}"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(task_of(&r, "T-1").status, spall::tasks::Status::Running);
+    assert!(task_of(&r, "T-1").pending.is_none());
+    assert!(stub.replays().is_empty(), "{:?}", stub.replays());
+
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"dev"}"#).await;
+    assert_eq!(status, 200, "a local dev app isn't the stack: {body}");
+    assert_eq!(stub.replays().len(), 1);
+
+    let token = dir.path().join("api-token");
+    let refused: Vec<_> = audit_records(&token)
+        .into_iter()
+        .filter(|a| a["outcome"] == "denied")
+        .collect();
+    assert_eq!(refused.len(), ids.len() + 1, "{refused:?}");
+    assert!(refused
+        .iter()
+        .all(|a| a["task"] == "T-1" && a["actor"] == "agent"));
 }
 
 #[tokio::test]

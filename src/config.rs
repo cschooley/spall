@@ -33,6 +33,23 @@ pub struct Config {
     #[arg(long, env = "SPALL_LOG_FILE", default_value = "/data/traffic.jsonl")]
     pub log_file: PathBuf,
 
+    /// Where clients reach spall (e.g. compose's published
+    /// `127.0.0.1:${SPALL_PORT}`), comma-separated. Its ports join the
+    /// stack agents may never target (#73).
+    #[arg(long, env = "SPALL_SELF_ADDRESS", value_delimiter = ',')]
+    pub self_address: Vec<String>,
+
+    /// Names of the stack's own services (compose service names), which
+    /// agents may never target on any port (#73). The lever API's host is
+    /// added to these.
+    #[arg(
+        long = "stack-host",
+        env = "SPALL_STACK_HOSTS",
+        value_delimiter = ',',
+        default_value = "spall,taphttp"
+    )]
+    pub stack_hosts: Vec<String>,
+
     /// Address for the web UI. Keep this on loopback: the UI shows raw
     /// traffic, including credentials, and has no authentication.
     #[arg(long, env = "SPALL_LISTEN", default_value = "127.0.0.1:3000")]

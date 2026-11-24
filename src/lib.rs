@@ -21,6 +21,7 @@ pub mod replay;
 pub mod roe;
 pub mod rules;
 pub mod scope_list;
+pub mod stack;
 pub mod tailer;
 pub mod tasks;
 pub mod untrusted;
@@ -245,6 +246,7 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 candidates,
                 tasks,
                 allow_unredacted_export: config.allow_unredacted_export,
+                stack: stack::Stack::from_config(&config),
             }))
         }
         None => None,

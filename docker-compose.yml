@@ -55,6 +55,8 @@ services:
       SPALL_TAPHTTP_TOKEN_FILE: /token/api-token
       # Shown in the status bar; keep in step with taphttp's published port.
       SPALL_PROXY_ADDRESS: 127.0.0.1:${TAPHTTP_PORT:-8080}
+      # spall's own published address: agents may never target it (#73).
+      SPALL_SELF_ADDRESS: 127.0.0.1:${SPALL_PORT:-3000}
       # Hosts replay may send to (exact, *.wildcard, IP, CIDR). Empty: none.
       SPALL_SCOPE: ${SPALL_SCOPE:-}
       RUST_LOG: info

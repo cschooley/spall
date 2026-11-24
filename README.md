@@ -168,6 +168,7 @@ claude mcp add spall -- docker compose -f /path/to/spall/docker-compose.yml exec
 What it can't get around:
 
 - **Every session is bound to a task.** The task's constraints (hosts, methods, budget, time, what it sends without asking) only narrow the rules of engagement. Anything outside the task pauses it, and the request waits in **Waiting on you** on the Engagement view: approve it once, approve it for the task (within the rules of engagement), or deny it with a reason the agent reads. Anything outside the engagement's scope or rules is simply refused.
+- **Agents never target the stack.** Whatever the scope says, an agent's request to spall itself, taphttp's proxy or taphttp's API is refused, and that refusal can't be approved: by name (`spall`, `taphttp`, `--stack-host`) on any port, and as this machine (`localhost`, `127.0.0.1`, `host.docker.internal`) on the ports the stack listens on. A dev app on another local port is a normal target.
 - **Traffic comes back as untrusted data.** Every exchange handed to the agent is wrapped in markers with a random id, labeled as data rather than instructions, truncated (4 KiB of body by default), and has its credentials masked: the agent sees *that* there is a session cookie, not its value. It doesn't need the value: a replay is by exchange id, and taphttp sends the captured headers.
 - **It proposes, you decide.** A proposed finding needs evidence the task actually sent or read, is attributed to the task (`agent:T-1`), and waits in Findings like one you flagged. A task can propose at most 20.
 - **STOP AGENTS** in the top bar (or `Shift+Esc`) halts every task at once, for good.
@@ -205,7 +206,9 @@ cargo run -- --log-file ./traffic.jsonl
 | `--taphttp-token-file` | `SPALL_TAPHTTP_TOKEN_FILE` | `/token/api-token` |
 | `--log-file` | `SPALL_LOG_FILE` | `/data/traffic.jsonl` (used only without `--taphttp-api`) |
 | `--listen` | `SPALL_LISTEN` | `127.0.0.1:3000` |
-| `--proxy-address` | `SPALL_PROXY_ADDRESS` | `127.0.0.1:8080` (shown in the status bar; display only) |
+| `--proxy-address` | `SPALL_PROXY_ADDRESS` | `127.0.0.1:8080` (shown in the status bar; its port is also one agents may never target) |
+| `--self-address` | `SPALL_SELF_ADDRESS` | none (where clients reach spall; agents may never target it) |
+| `--stack-host` | `SPALL_STACK_HOSTS` | `spall,taphttp` (the stack's service names; agents may never target them) |
 | `--allowed-host` | `SPALL_ALLOWED_HOSTS` | `localhost,127.0.0.1,[::1]` |
 | `--history` | `SPALL_HISTORY` | `1000` (entries replayed to a newly opened page) |
 | `--poll-ms` | `SPALL_POLL_MS` | `250` (log tailing only) |

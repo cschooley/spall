@@ -175,7 +175,10 @@ is the only agent send path and has no HTTP route (tests reach it via
 `spall::build` + `App::run`). Outside the RoE or scope denies; outside
 the task (host, method, unsafe send, time limit, budget) pauses the task
 to `waiting_on_approval` with the exact request in `Task::pending`.
-Agents never get or use a confirm token. The budget is charged under the
+Agents never get or use a confirm token. Before any of that, `src/stack.rs`
+refuses an agent target that is the stack itself (#73: spall, taphttp's
+proxy and lever API, by name on any port or as this machine on stack ports);
+not approvable, whatever the scope. The budget is charged under the
 task store's lock just before sending; taphttp `meta` is
 `{"actor":"agent","task":"T-n"}`; audit records carry `task`.
 
