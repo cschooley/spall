@@ -590,6 +590,9 @@ function HostsPanel({ listing, onChanged }: { listing: HostListing | null; onCha
         </label>
       }
     >
+      {listing.hosts.some((h) => h.by === "*") ? (
+        <p className="note wrap">Scope all is on: every host counts as in scope, so none are undecided.</p>
+      ) : null}
       <p className="note wrap">{`${c.in} in scope · ${c.out} excluded · ${c.unknown} undecided, from recent and live traffic${listing.dropped ? ` (${listing.dropped} more not tracked)` : ""}`}</p>
       {shown.length ? (
         <ul className="entries hosts" aria-label={all ? "Hosts" : "Undecided hosts"}>
@@ -683,7 +686,7 @@ function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | 
             {waiting.slice(0, WAITING_SHOWN).map((c) => (
               <li key={c.id}>
                 <a href={`#findings/${encodeURIComponent(c.id)}`}>{`${c.id} · ${c.ruleId}`}</a>
-                <span className="note">{`${where(c)} · ${timeOf(c.created)}`}</span>
+                <span className="note" title={where(c)}>{`${where(c)} · ${timeOf(c.created)}`}</span>
               </li>
             ))}
           </ol>

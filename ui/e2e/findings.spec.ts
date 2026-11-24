@@ -174,3 +174,28 @@ test("Waiting on you lists candidates to triage, oldest first, and clears (#47)"
   await expect(panel).toContainText("Nothing waiting: the queue is clear.");
   await expect(page.locator(".statusbar .to-triage")).toHaveCount(0);
 });
+
+test("a long candidate line stays inside Waiting on you, at two columns and at phone width (#72)", async ({ page }) => {
+  const { engagementApi } = await import("./engagement-api.ts");
+  const t = token();
+  const e = entry({ host: `host.docker.internal`, url: `http://host.docker.internal:8080/${t}/a/rather/long/path/to/something` });
+  append(e);
+  engagementApi(page);
+  const long = "Server response header / error-page footer, and the X-Powered-By header on every response";
+  const list: Stored[] = [{ id: "c-0000000a", created: e.ts, updated: e.ts, flagged_by: "agent:T-3", finding: findingFor("WSTG-INFO-02", e, long) }];
+  candidatesApi(page, { entries: [e], seed: list });
+  for (const width of [1100, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/#engagement");
+    const panel = page.getByRole("group", { name: "Candidates to triage" });
+    const line = panel.locator("li .note");
+    await expect(line).toContainText("Server response header");
+    const box = (await panel.boundingBox())!;
+    for (const el of [line, panel.locator("li a")]) {
+      const b = (await el.boundingBox())!;
+      expect(b.x + b.width, `${width}px: ${await el.textContent()}`).toBeLessThanOrEqual(box.x + box.width + 0.5);
+    }
+    // Whatever is cut is still there to read.
+    await expect(line).toHaveAttribute("title", /X-Powered-By header on every response/);
+  }
+});

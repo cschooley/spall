@@ -432,7 +432,7 @@ main.eng-main { display: block; overflow: auto; background: var(--vg-bg-base); }
 .eng dt { color: var(--vg-text-secondary); }
 .eng dd { color: var(--vg-text-primary); overflow-wrap: anywhere; }
 .eng dd.pre { white-space: pre-wrap; }
-.eng .entries { list-style: none; margin: 0 0 var(--vg-space-3); padding: 0; display: grid; gap: 2px; }
+.eng .entries { list-style: none; margin: 0 0 var(--vg-space-3); padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; }
 .eng .entries li { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr) auto; gap: var(--vg-space-3); align-items: center; padding: 3px var(--vg-space-2); border-radius: var(--vg-radius-sm); }
 .eng .entries li:hover { background: var(--vg-bg-surface); }
 .eng .entries .entry { font: var(--vg-text-sm) var(--vg-font-mono); color: var(--vg-text-primary); overflow-wrap: anywhere; }
@@ -582,6 +582,7 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .eng .waiting h4 { margin: 0 0 var(--vg-space-2); font: 500 var(--vg-text-sm) var(--vg-font-sans); }
 .eng .waiting h4 a { color: var(--vg-accent-rust); text-decoration: none; }
 .eng .waiting .entries li { display: flex; flex-wrap: wrap; gap: var(--vg-space-1) var(--vg-space-3); }
+.eng .waiting .entries li > * { min-width: 0; max-width: 100%; }
 .eng .waiting a { color: var(--vg-text-primary); }
 /* Export (#51) and the redaction preview (#49). */
 .findings .toolbar .export { white-space: nowrap; }

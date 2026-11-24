@@ -260,6 +260,13 @@ test("hosts from traffic: rows show their scope state, scope: filters, the Engag
   await panel.getByRole("checkbox").check();
   await expect(panel.getByRole("list", { name: "Hosts" }).locator("li")).toHaveCount(4);
   expect(await page.locator(".eng img").count()).toBe(0);
+
+  // With scope all on, nothing is undecided, and the panel says why (#72).
+  await page.unroute("**/api/hosts");
+  const allIn = hosts.map((h) => ({ ...h, state: "in", by: "*" }));
+  await page.route("**/api/hosts", (r) => r.fulfill({ json: { hosts: allIn, counts: { in: allIn.length, out: 0, unknown: 0 }, dropped: 0 } }));
+  await page.reload();
+  await expect(panel.locator(".note.wrap").first()).toContainText("Scope all is on: every host counts as in scope, so none are undecided.");
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
 
