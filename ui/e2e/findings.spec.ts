@@ -248,3 +248,33 @@ test("a long candidate line stays inside Waiting on you, at two columns and at p
     await expect(line).toHaveAttribute("title", /X-Powered-By header on every response/);
   }
 });
+
+test("notes: added, shown as text, deleted, and in the export only when ticked (#82)", async ({ page }) => {
+  const t = token();
+  const s = seed(t);
+  append(...s.entries);
+  const api = candidatesApi(page, { entries: s.entries, seed: s.list });
+  await page.goto("/#findings/c-00000001");
+  const notes = page.getByRole("region", { name: "Notes" });
+  await expect(notes).toContainText("None yet.");
+  const box = notes.getByRole("checkbox", { name: /Include with export/ });
+  await expect(box).not.toBeChecked();
+
+  // Typing c, r or a in the note doesn't triage.
+  await notes.getByLabel("New note").fill(`car? ad network ${P}\nask the client`);
+  await notes.getByRole("button", { name: "Add note" }).click();
+  await expect(notes.locator(".note-text")).toHaveText(`car? ad network ${P}\nask the client`);
+  expect(await notes.locator("img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+  await expect(notes.getByLabel("New note")).toHaveValue("");
+  expect(api.calls.filter((c) => c.method === "PATCH").map((c) => c.body)).toEqual([{ op: "note", text: `car? ad network ${P}\nask the client` }]);
+  await expect(page.locator(".findings")).toContainText("to triage");
+
+  await box.check();
+  await expect.poll(() => api.calls.at(-1)?.body).toEqual({ op: "notes_in_export", on: true });
+  await expect(box).toBeChecked();
+
+  await notes.getByRole("button", { name: /^Delete note/ }).click();
+  await expect(notes).toContainText("None yet.");
+  expect(api.calls.at(-1)?.body).toMatchObject({ op: "unnote" });
+});

@@ -51,6 +51,16 @@ export interface Candidate {
   possibleDuplicateOf: string | null;
   /** Each later time the same issue was proposed or flagged (#78). */
   seenAgain: Sighting[];
+  /** The tester's notes (#82): spall's, exported only when notesInExport. */
+  notes: CandidateNote[];
+  notesInExport: boolean;
+}
+
+/** A tester's note on a candidate (#82); `at` identifies it. */
+export interface CandidateNote {
+  by: string;
+  at: string;
+  text: string;
 }
 
 /** One more time an issue was seen (#78). */
@@ -117,6 +127,14 @@ export function asCandidate(v: unknown): Candidate | null {
       const at = str(o.at);
       return by !== null && at !== null ? [{ by, at, exchanges: strs(o.exchanges) }] : [];
     }),
+    notes: (Array.isArray(c.notes) ? c.notes : []).flatMap((x) => {
+      const o = obj(x);
+      const by = str(o.by);
+      const at = str(o.at);
+      const text = str(o.text);
+      return by !== null && at !== null && text !== null ? [{ by, at, text }] : [];
+    }),
+    notesInExport: c.notes_in_export === true,
     evidence:
       f.webRequest || f.webResponse
         ? {
@@ -213,7 +231,10 @@ export type Op =
   | { op: "edit"; level?: Level; rank?: number; message?: string }
   | { op: "evidence"; exchanges: string[] }
   | { op: "promote" }
-  | { op: "unpromote" };
+  | { op: "unpromote" }
+  | { op: "note"; text: string }
+  | { op: "unnote"; at: string }
+  | { op: "notes_in_export"; on: boolean };
 
 /** Can be promoted: confirmed (or suspected) and not suppressed. */
 export function promotable(c: Candidate): boolean {

@@ -19,6 +19,8 @@ export interface Stored {
   promoted?: string | null;
   possible_duplicate_of?: string;
   seen_again?: { by: string; at: string; exchanges: string[] }[];
+  notes?: { by: string; at: string; text: string }[];
+  notes_in_export?: boolean;
   finding: Json & { properties: Json; suppressions?: Json[]; correlationGuid?: string };
 }
 
@@ -179,6 +181,14 @@ export function candidatesApi(page: Page, opts: { entries?: TrafficEntry[]; seed
       if (b.level) f.level = b.level;
       if (typeof b.rank === "number") f.rank = b.rank;
       if (typeof b.message === "string") f.message = { text: b.message };
+    } else if (b.op === "note") {
+      const text = typeof b.text === "string" ? b.text.trim() : "";
+      if (!text) return r.fulfill({ status: 400, json: { error: "note: 1-2000 characters, no control characters" } });
+      c.notes = [...(c.notes ?? []), { by: "human", at: new Date().toISOString(), text }];
+    } else if (b.op === "unnote") {
+      c.notes = (c.notes ?? []).filter((n) => n.at !== b.at);
+    } else if (b.op === "notes_in_export") {
+      c.notes_in_export = b.on === true;
     } else return r.fulfill({ status: 400, json: { error: "not a candidate change" } });
     c.updated = new Date().toISOString();
     return r.fulfill({ json: c });

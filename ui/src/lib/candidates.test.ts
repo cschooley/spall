@@ -114,3 +114,14 @@ test("promotion, export names", async () => {
   assert.equal(exportName('attachment; filename="../../etc/passwd"'), "spall-export.sarif");
   assert.equal(exportName(null), "spall-export.sarif");
 });
+
+test("a candidate's notes, and whether they're exported (#82)", () => {
+  const raw = (extra: Record<string, unknown>) => ({ id: "c-1", created: "t", updated: "t", flagged_by: "human", finding: { ruleId: "WSTG-INFO-02", message: { text: "m" }, properties: {} }, ...extra });
+  const c = asCandidate(raw({ notes: [{ by: "human", at: "2026-11-24T19:00:00Z", text: "ad network?\nask" }, { by: 1, at: "x", text: "bad" }, "junk"], notes_in_export: true }))!;
+  assert.deepEqual(c.notes, [{ by: "human", at: "2026-11-24T19:00:00Z", text: "ad network?\nask" }]);
+  assert.equal(c.notesInExport, true);
+  const none = asCandidate(raw({}))!;
+  assert.deepEqual(none.notes, []);
+  assert.equal(none.notesInExport, false, "off unless the server says on");
+  assert.equal(asCandidate(raw({ notes_in_export: "true" }))!.notesInExport, false);
+});

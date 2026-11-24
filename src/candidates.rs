@@ -29,6 +29,9 @@ pub const MAX_INLINE_BODY: usize = 256 * 1024;
 pub const MAX_MESSAGE: usize = 4000;
 pub const MAX_JUSTIFICATION: usize = 2000;
 pub const MAX_EVIDENCE: usize = 200;
+/// A tester's note on a candidate (#82), in characters.
+pub const MAX_NOTE: usize = 2000;
+pub const MAX_NOTES: usize = 50;
 /// The parameter the candidate is about, in the finding's property bag.
 pub const PARAMETER_KEY: &str = "spall/parameter";
 
@@ -51,7 +54,22 @@ pub struct Candidate {
     /// this one instead of as a sibling. Its exchanges join the evidence.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub seen_again: Vec<Sighting>,
+    /// The tester's notes (#82): spall's, not the finding's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
+    /// Append the notes to the exported message. Off unless the tester
+    /// ticks it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notes_in_export: bool,
     pub finding: Finding,
+}
+
+/// A tester's note on a candidate (#82). `at` identifies it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Note {
+    pub by: String,
+    pub at: String,
+    pub text: String,
 }
 
 /// One more time an issue was seen (#78): by whom, when, which exchanges.
@@ -93,6 +111,18 @@ pub fn dedupe_key(rule: &Entry, url: &str, parameter: Option<&str>) -> String {
 }
 
 impl Candidate {
+    /// The finding as it's exported (before redaction): with the tester's
+    /// notes appended to its message only when they asked for that (#82).
+    /// flux has no notes field, so they go where flux has one.
+    pub fn exported(&self) -> Finding {
+        let mut f = self.finding.clone();
+        if self.notes_in_export && !self.notes.is_empty() {
+            let notes: Vec<String> = self.notes.iter().map(|n| format!("- {}", n.text)).collect();
+            f.message.text = format!("{}\n\nTester notes:\n{}", f.message.text, notes.join("\n"));
+        }
+        f
+    }
+
     /// Can be promoted: confirmed (or suspected) and not suppressed (flux
     /// SPEC.md, "Flows": promotion).
     pub fn promotable(&self) -> bool {
@@ -231,6 +261,19 @@ pub enum Op {
     /// Mark it for export (#50). A human's call, never an agent's.
     Promote,
     Unpromote,
+    /// A tester's note (#82).
+    Note {
+        text: String,
+    },
+    /// Remove the note made at `at`.
+    Unnote {
+        at: String,
+    },
+    /// Whether the notes go into the export.
+    #[serde(rename = "notes_in_export")]
+    NotesInExport {
+        on: bool,
+    },
 }
 
 impl Op {
@@ -245,6 +288,9 @@ impl Op {
             Op::Evidence { .. } => "evidence",
             Op::Promote => "promote",
             Op::Unpromote => "unpromote",
+            Op::Note { .. } => "note",
+            Op::Unnote { .. } => "unnote",
+            Op::NotesInExport { .. } => "notes_in_export",
         }
     }
 }
@@ -483,6 +529,42 @@ fn step(
             }
             return Ok(());
         }
+        // Notes are the tester's, beside the finding: no triage effect.
+        Op::Note { text } => {
+            let text = text.replace("\r\n", "\n");
+            let text = text.trim();
+            if text.is_empty()
+                || text.chars().count() > MAX_NOTE
+                || text
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t')
+            {
+                return Err(Error::Invalid(format!(
+                    "note: 1-{MAX_NOTE} characters, no control characters"
+                )));
+            }
+            if c.notes.len() >= MAX_NOTES {
+                return Err(Error::Invalid(format!("at most {MAX_NOTES} notes")));
+            }
+            c.notes.push(Note {
+                by: "human".into(),
+                at: now.into(),
+                text: text.into(),
+            });
+            return Ok(());
+        }
+        Op::Unnote { at } => {
+            let n = c.notes.len();
+            c.notes.retain(|x| &x.at != at);
+            if c.notes.len() == n {
+                return Err(Error::Invalid(format!("no note made at {at}")));
+            }
+            return Ok(());
+        }
+        Op::NotesInExport { on } => {
+            c.notes_in_export = *on;
+            return Ok(());
+        }
         _ => {}
     }
     // A decision against it takes it out of the export.
@@ -570,7 +652,11 @@ fn step(
             let p = f.provenance.get_or_insert_with(Provenance::default);
             p.last_detection_time_utc = Some(now.into());
         }
-        Op::Promote | Op::Unpromote => {}
+        Op::Promote
+        | Op::Unpromote
+        | Op::Note { .. }
+        | Op::Unnote { .. }
+        | Op::NotesInExport { .. } => {}
     }
     Ok(())
 }
@@ -591,7 +677,7 @@ pub fn export(list: &[Candidate], redacted: bool, version: &str) -> Result<Expor
     let mut findings: Vec<Finding> = list
         .iter()
         .filter(|c| c.promoted.is_some() && c.promotable())
-        .map(|c| c.finding.clone())
+        .map(Candidate::exported)
         .collect();
     let mut redactions = 0;
     for f in &mut findings {
@@ -863,6 +949,8 @@ mod tests {
             promoted: None,
             possible_duplicate_of: None,
             seen_again: Vec::new(),
+            notes: Vec::new(),
+            notes_in_export: false,
             finding: finding_for(rule, &flag(rule.id, param), &entry("ex-1", url), NOW),
         }
     }
@@ -1471,6 +1559,110 @@ mod tests {
                 .is_err(),
             "suppressed"
         );
+    }
+
+    #[test]
+    fn tester_notes_stay_in_spall_unless_asked_for_in_the_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let mut g = || "guid".to_string();
+        let mut c = candidate("c-1", "https://a.test/x", None);
+        c.finding.properties.status = Some(Status::Confirmed);
+        c.promoted = Some(NOW.into());
+        store.add("eng", c).unwrap();
+        let note = |t: &str| Op::Note { text: t.into() };
+
+        let (_, c) = store
+            .apply(
+                "eng",
+                "c-1",
+                &note("  looks like an ad network\n"),
+                "t1",
+                &mut g,
+            )
+            .unwrap();
+        store
+            .apply("eng", "c-1", &note("ask the client"), "t2", &mut g)
+            .unwrap();
+        let (_, c2) = store
+            .apply("eng", "c-1", &note("scratch"), "t3", &mut g)
+            .unwrap();
+        assert_eq!(
+            c.notes[0],
+            Note {
+                by: "human".into(),
+                at: "t1".into(),
+                text: "looks like an ad network".into()
+            }
+        );
+        assert_eq!(c2.notes.len(), 3);
+        assert!(!c2.notes_in_export, "off by default");
+        let (_, c) = store
+            .apply("eng", "c-1", &Op::Unnote { at: "t3".into() }, "t4", &mut g)
+            .unwrap();
+        assert_eq!(
+            c.notes.iter().map(|n| n.text.as_str()).collect::<Vec<_>>(),
+            ["looks like an ad network", "ask the client"]
+        );
+        for bad in [
+            note(""),
+            note("  "),
+            note(&"x".repeat(MAX_NOTE + 1)),
+            Op::Unnote { at: "nope".into() },
+        ] {
+            assert!(
+                matches!(
+                    store.apply("eng", "c-1", &bad, "t5", &mut g),
+                    Err(Error::Invalid(_))
+                ),
+                "{bad:?}"
+            );
+        }
+        // Kept across a reopen, in spall's record, not the flux finding.
+        let store = Store::open(dir.path()).unwrap();
+        let c = store.get("eng", "c-1").unwrap();
+        assert_eq!(c.notes.len(), 2);
+        assert!(!c.finding.message.text.contains("ad network"));
+
+        // Not exported unless asked.
+        let ex = export(&store.list("eng"), true, "0.8.0").unwrap();
+        let text = &ex.report.findings().next().unwrap().message.text;
+        assert!(
+            !text.contains("ad network") && !text.contains("Tester notes"),
+            "{text}"
+        );
+        assert!(!c.exported().message.text.contains("Tester notes"));
+
+        let (_, c) = store
+            .apply("eng", "c-1", &Op::NotesInExport { on: true }, "t6", &mut g)
+            .unwrap();
+        assert!(c.notes_in_export);
+        let ex = export(&store.list("eng"), true, "0.8.0").unwrap();
+        let text = &ex.report.findings().next().unwrap().message.text;
+        assert!(
+            text.ends_with("\n\nTester notes:\n- looks like an ad network\n- ask the client"),
+            "{text}"
+        );
+        assert_eq!(flux::validate::validate(&ex.report), vec![]);
+        assert_eq!(
+            c.exported().message.text,
+            *text,
+            "the preview shows what's exported"
+        );
+
+        // Notes are redacted like the rest of the finding.
+        store
+            .apply(
+                "eng",
+                "c-1",
+                &note("key in page: AKIAIOSFODNN7EXAMPLE"),
+                "t7",
+                &mut g,
+            ) // gitleaks:allow
+            .unwrap();
+        let ex = export(&store.list("eng"), true, "0.8.0").unwrap();
+        let text = &ex.report.findings().next().unwrap().message.text;
+        assert!(!text.contains("AKIAIOSFODNN7EXAMPLE"), "{text}"); // gitleaks:allow
     }
 
     #[test]

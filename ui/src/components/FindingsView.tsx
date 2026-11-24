@@ -124,7 +124,13 @@ export function FindingsView({
         return;
       }
       setAsking(null);
-      setMsg({ text: `${res.id}: ${op.op === "evidence" ? "evidence added" : stateOf(res)}`, bad: false });
+      const done: Partial<Record<Op["op"], string>> = {
+        evidence: "evidence added",
+        note: "note added",
+        unnote: "note deleted",
+        notes_in_export: res.notesInExport ? "notes go in the export" : "notes stay out of the export",
+      };
+      setMsg({ text: `${res.id}: ${done[op.op] ?? stateOf(res)}`, bad: false });
       onChanged();
       const fresh = await reload();
       if (Array.isArray(fresh)) setSelected(nextAfter(before, queue(fresh, tab, query), res.id));
@@ -375,6 +381,7 @@ export function FindingsView({
               ) : null}
             </dl>
             <Evidence key={current.id} candidate={current} onOpenExchange={onOpenExchange} onAdd={(ids) => void act({ op: "evidence", exchanges: ids })} />
+            <Notes key={`notes-${current.id}`} candidate={current} onAct={act} />
             <Redaction key={`${current.id}-${current.updated}`} id={current.id} />
             <p className="note wrap">Promotion is always a human's call. Exports are redacted unless spall was started with --allow-unredacted-export and you ask twice.</p>
           </section>
@@ -498,6 +505,66 @@ function Ask({
         </button>
       </div>
     </form>
+  );
+}
+
+/** The tester's notes (#82): kept in spall; in the export only when ticked. */
+function Notes({ candidate: c, onAct }: { candidate: Candidate; onAct(op: Op): Promise<void> }) {
+  const [text, setText] = useState("");
+  // Shown at once while the change is in flight; then the server's answer.
+  const [pending, setPending] = useState<boolean | null>(null);
+  const inExport = pending ?? c.notesInExport;
+  const add = async () => {
+    if (!text.trim()) return;
+    await onAct({ op: "note", text });
+    setText("");
+  };
+  return (
+    <section className="notes" aria-label="Notes">
+      <h3>
+        Notes <span className="note">· yours, kept in spall</span>
+      </h3>
+      {c.notes.length ? (
+        <ul className="note-list">
+          {c.notes.map((n) => (
+            <li key={n.at}>
+              {/* Text only: whitespace kept, never HTML. */}
+              <p className="note-text">{n.text}</p>
+              <span className="note">{timeOf(n.at)}</span>
+              <button type="button" className="hint" aria-label={`Delete note from ${timeOf(n.at)}`} onClick={() => void onAct({ op: "unnote", at: n.at })}>
+                delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="none">None yet.</p>
+      )}
+      <form
+        className="note-add"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void add();
+        }}
+      >
+        <textarea aria-label="New note" rows={2} maxLength={2000} value={text} placeholder="a note for yourself (not exported unless you tick below)" onChange={(e) => setText(e.target.value)} />
+        <button type="submit" className="btn" disabled={!text.trim()}>
+          Add note
+        </button>
+      </form>
+      <label className="note-export">
+        <input
+          type="checkbox"
+          checked={inExport}
+          onChange={(e) => {
+            const on = e.target.checked;
+            setPending(on);
+            void onAct({ op: "notes_in_export", on }).finally(() => setPending(null));
+          }}
+        />
+        Include with export <span className="note">(appended to the finding as "Tester notes", redacted like the rest)</span>
+      </label>
+    </section>
   );
 }
 

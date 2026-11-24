@@ -1914,6 +1914,81 @@ async fn candidates_are_flagged_triaged_audited_and_kept_across_a_restart() {
 }
 
 #[tokio::test]
+async fn tester_notes_on_a_candidate_reach_the_preview_only_when_ticked() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    let spall = start_spall_with(Some(api), &token, &["--scope", "example.com"]).await;
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"e1","rule":"WSTG-INFO-02"}"#,
+        None,
+    )
+    .await;
+    let id = body_json(&res)["id"].as_str().unwrap().to_string();
+    let path = format!("/api/candidates/{id}");
+    let patch = |body: &'static str| {
+        let path = path.clone();
+        async move { send_text(spall, "PATCH", &path, body, None).await }
+    };
+    let preview = || {
+        let id = id.clone();
+        async move {
+            let p = body_json(&get_text(spall, &format!("/api/candidates/{id}/redaction")).await);
+            p["finding"]["message"]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+
+    let res = patch(r#"{"op":"note","text":"looks like an ad network"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let c = body_json(&res);
+    assert_eq!(c["notes"][0]["text"], "looks like an ad network");
+    assert_eq!(c["notes"][0]["by"], "human");
+    assert!(c.get("notes_in_export").is_none(), "off by default: {c}");
+    assert!(!preview().await.contains("Tester notes"));
+
+    let res = patch(r#"{"op":"notes_in_export","on":true}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(preview()
+        .await
+        .ends_with("Tester notes:\n- looks like an ad network"));
+
+    let at = c["notes"][0]["at"].as_str().unwrap().to_string();
+    let res = send_text(
+        spall,
+        "PATCH",
+        &path,
+        &format!(r#"{{"op":"unnote","at":"{at}"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(body_json(&res).get("notes").is_none());
+    assert!(patch(r#"{"op":"note","text":""}"#)
+        .await
+        .starts_with("HTTP/1.1 400"));
+
+    let reasons: Vec<String> = audit_records(&token)
+        .into_iter()
+        .filter(|r| r["action"] == "candidate")
+        .filter_map(|r| r["reason"].as_str().map(String::from))
+        .collect();
+    for op in ["note", "notes_in_export", "unnote"] {
+        assert!(
+            reasons.iter().any(|r| r == &format!("{op} {id}")),
+            "{op} audited: {reasons:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn promoted_candidates_export_as_redacted_flux_and_unredacted_needs_the_opt_in() {
     let dir = tempfile::TempDir::new().unwrap();
     let token = dir.path().join("api-token");

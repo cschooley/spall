@@ -602,6 +602,13 @@ main.findings-main { display: block; min-height: 0; overflow: hidden; }
 .findings .toolbar .export.raw { color: var(--vg-text-tertiary); }
 .findings .toolbar .export.raw.armed { border-color: var(--vg-accent-rust); color: var(--vg-accent-rust); }
 .redaction { margin-top: var(--vg-space-4); }
+.notes { margin-top: var(--vg-space-4); }
+.note-list { list-style: none; margin: 0 0 var(--vg-space-2); padding: 0; display: grid; gap: var(--vg-space-2); }
+.note-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--vg-space-2); border-left: 2px solid var(--vg-border-subtle); padding-left: var(--vg-space-2); }
+.note-text { flex: 1 1 100%; margin: 0; color: var(--vg-text-primary); font: var(--vg-text-sm)/1.5 var(--vg-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-add { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: flex-end; }
+.note-add textarea { flex: 1 1 16rem; min-width: 0; font: var(--vg-text-sm) var(--vg-font-mono); }
+.note-export { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: baseline; margin-top: var(--vg-space-2); font: var(--vg-text-sm) var(--vg-font-mono); color: var(--vg-text-secondary); }
 .red-list { margin: 0 0 var(--vg-space-2); padding: 0; list-style: none; font: var(--vg-text-xs) var(--vg-font-mono); }
 .red-list li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--vg-space-1) var(--vg-space-3); padding: 2px 0; border-bottom: 1px solid var(--vg-bg-surface); }
 .red-list .at { color: var(--vg-text-secondary); overflow-wrap: anywhere; }

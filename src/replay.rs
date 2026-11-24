@@ -601,6 +601,8 @@ impl Replayer {
             promoted: None,
             possible_duplicate_of,
             seen_again: Vec::new(),
+            notes: Vec::new(),
+            notes_in_export: false,
             finding,
         };
         let mut rec = Record::new("candidate", &entry.id, Outcome::CandidateChanged);
@@ -690,7 +692,7 @@ impl Replayer {
         let Some(c) = self.candidates.get(&eng, id) else {
             return error(StatusCode::NOT_FOUND, &format!("no candidate {id}"));
         };
-        let (finding, changes) = flux::redact::preview(&c.finding);
+        let (finding, changes) = flux::redact::preview(&c.exported());
         json(
             StatusCode::OK,
             serde_json::json!({ "id": c.id, "finding": finding, "changes": changes }),
