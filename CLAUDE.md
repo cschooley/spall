@@ -149,7 +149,7 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #67 buttons (done), #66 quad (done), #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #67 buttons (done), #66 quad (done), #65 intake (done), #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
@@ -293,6 +293,19 @@ The e-stop ends it (`engage_estop`); it needs a live task and logs
 `Event::Quad` start/end on each. `Scorecard` has no string field: the
 card is numbers and fixed words, by construction. `POST /api/quad`,
 `quad`/`last_quad` in `/api/status`; UI `lib/quad.ts`, `Quad.tsx`.
+
+Intake (#65, done): `src/intake.rs` is the orchestrator, a model
+conversation on the host's model whose own tools (not registry commands:
+nothing in it acts) read engagements and candidates and build a draft
+`plans::Plan` (`src/plans.rs`, `<engagements>/plans/`). The checks are
+code: `plan_retest` refuses an unauthorized engagement and drafts a
+`Proposal::Extension`, plans one `verbs` retest per open finding, and
+compares each host with `src/addresses.rs` (first lookup at flag time;
+taphttp#24 will give the real peer). `ask` is the pick list, `no` is
+off-topic. `Replayer::plan_op` approves (all or nothing, active engagement
+only; tasks `asked_by: human (plan P-n)`, the request in their note).
+`App::with_resolver` takes a fake in tests. UI: `lib/intake.ts`,
+`Intake.tsx` (Tasks, **Ask…**).
 
 ## Testing
 

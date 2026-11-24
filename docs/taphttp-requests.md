@@ -5,6 +5,10 @@ here.
 
 ## Open
 
+### Upstream peer address on every entry
+
+[taphttp#24](https://github.com/cschooley/taphttp/issues/24): record the address taphttp connected to (`peer`) on every proxy, replay and send entry. spall#65 flags a finding's host that resolves somewhere else at retest time. Until taphttp records the peer, spall keeps its own DNS lookup from when the finding was made (`src/addresses.rs`): a resolver's view, not where taphttp actually went.
+
 ### Capture filter
 
 [taphttp#23](https://github.com/cschooley/taphttp/issues/23): proxy without recording chosen hosts: record all, only matching, all except matching, or nothing. A host that isn't captured is tunneled without TLS interception. `GET`/`PUT /capture` on the lever API, with per-host counts of what went through uncaptured. `/replay` and `/send` are always recorded. spall#80 sets the filter from the engagement, including "capture only what's in scope".

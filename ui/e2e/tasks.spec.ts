@@ -304,3 +304,73 @@ test("an agent's report shows on its task, as text only (#81)", async ({ page })
   await page.goto("/#tasks/T-7");
   await expect(page.getByRole("region", { name: "Task detail" }).getByRole("region", { name: "Report" })).toContainText("None yet");
 });
+
+test("the intake: ask, pick, see the plan's costs and warnings as text, approve with two presses (#65)", async ({ page }) => {
+  const api = tasksApi(page, [], "anthropic: claude-opus-5-5");
+  const plan = (over: Json = {}): Json => ({
+    id: "P-2",
+    engagement: "acme-1a2b",
+    request: `My boss said to re-scan the findings ${P}`,
+    status: "draft",
+    summary: "",
+    tasks: [],
+    warnings: [],
+    estimate: "0 tasks, ~0 requests, safe methods only",
+    made: [],
+    ...over,
+  });
+  const retests = plan({
+    summary: "Two retests.",
+    tasks: [
+      { task: { role: "tester", goal: `Retest candidate c-1 ${P}` }, cost: "~5 requests, safe methods", requests: 5, candidate: "c-00000001" },
+      { task: { role: "tester", goal: "Retest candidate c-2" }, cost: "~5 requests, safe methods", requests: 5, candidate: "c-00000002" },
+    ],
+    warnings: [`app.acme.test resolves to 203.0.113.50 now, not 10.0.0.1 ${P}`],
+    estimate: "2 tasks, ~10 requests, safe methods only",
+  });
+  const asks: Json[] = [];
+  void page.route("**/api/intake", async (r) => {
+    const body = r.request().postDataJSON() as Json;
+    asks.push(body);
+    if (String(body.text).includes("meaning of life")) return r.fulfill({ json: { kind: "no" } });
+    if (!body.pick) return r.fulfill({ json: { kind: "plan", plan: plan({ choice: { question: "Retest which findings?", options: ["all open findings", "only the SQL injection"] } }) } });
+    return r.fulfill({ json: { kind: "plan", plan: retests } });
+  });
+  void page.route(/\/api\/plans\/P-\d+$/, async (r) => {
+    const op = r.request().postDataJSON() as Json;
+    api.calls.push(["PATCH", "P-2", op]);
+    if (op.op === "drop") (retests.tasks as Json[]).splice(op.index as number, 1);
+    if (op.op === "approve") Object.assign(retests, { status: "approved", made: ["T-21"] });
+    return r.fulfill({ json: retests });
+  });
+  await page.goto("/#tasks");
+  await page.getByRole("button", { name: "Ask…" }).click();
+  const panel = page.getByRole("region", { name: "Intake" });
+  await panel.getByLabel("Ask the intake").fill("what's the meaning of life?");
+  await panel.getByRole("button", { name: "Plan it" }).click();
+  await expect(panel.locator(".intake-no")).toHaveText("no.");
+
+  await panel.getByLabel("Ask the intake").fill(`My boss said to re-scan the findings ${P}`);
+  await panel.getByRole("button", { name: "Plan it" }).click();
+  const pick = panel.getByRole("group", { name: "Retest which findings?" });
+  await pick.getByRole("button", { name: "all open findings" }).click();
+  expect(asks.at(-1)).toEqual({ text: `My boss said to re-scan the findings ${P}`, pick: { question: "Retest which findings?", answer: "all open findings" } });
+
+  const card = panel.getByRole("region", { name: "Plan P-2" });
+  await expect(card).toContainText(`You asked: My boss said to re-scan the findings ${P}`);
+  await expect(card.getByRole("list", { name: "Warnings" })).toHaveText(`⚠ app.acme.test resolves to 203.0.113.50 now, not 10.0.0.1 ${P}`);
+  await expect(card).toContainText(`Retest candidate c-1 ${P}`);
+  await expect(card.locator(".plan-estimate")).toHaveText("2 tasks, ~10 requests, safe methods only");
+  expect(await panel.locator("img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+
+  await card.getByRole("button", { name: "Leave out task 2" }).click();
+  expect(api.calls.at(-1)).toEqual(["PATCH", "P-2", { op: "drop", index: 1 }]);
+  const approve = card.getByRole("button", { name: "Approve plan" });
+  await approve.click();
+  await expect(card.getByRole("button", { name: "Press again to make and approve 1 task" })).toBeVisible();
+  expect(api.calls.filter((c) => c[0] === "PATCH" && (c[2] as Json).op === "approve")).toHaveLength(0);
+  await card.getByRole("button", { name: "Press again to make and approve 1 task" }).click();
+  await expect(card.getByRole("status")).toContainText("Made and approved: T-21");
+  expect(api.calls.at(-1)).toEqual(["PATCH", "P-2", { op: "approve" }]);
+});

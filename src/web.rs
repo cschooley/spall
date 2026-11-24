@@ -69,6 +69,8 @@ pub struct AppState {
     pub mcp: Option<Arc<crate::mcp::Server>>,
     /// spall's own agent host (#63); `None` without a model configured.
     pub host: Option<Arc<crate::host::Host>>,
+    /// The intake (#65), on the host's model; `None` without one.
+    pub intake: Option<Arc<crate::intake::Intake>>,
 }
 
 /// A task for spall's host when there's no model to run it.
@@ -110,6 +112,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/tasks", get(api_tasks).post(api_tasks_new))
         .route("/api/estop", post(api_estop))
         .route("/api/quad", post(api_quad))
+        .route("/api/intake", post(api_intake))
+        .route("/api/plans", get(api_plans))
+        .route("/api/plans/{id}", axum::routing::patch(api_plan_patch))
         .route(
             "/mcp",
             post(crate::mcp::handle_post)
@@ -365,6 +370,110 @@ fn card_json(c: &crate::quad::Scorecard) -> serde_json::Value {
     let mut v = serde_json::to_value(c).unwrap_or_default();
     v["card"] = c.card().into();
     v
+}
+
+/// The intake (#65): `{"text", "pick"?: {"question", "answer"}}` in, a draft
+/// plan (or "no.") out. Needs spall's model; plans only, never acts.
+async fn api_intake(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    if state.replayer.is_none() {
+        return no_tasks();
+    }
+    let Some(intake) = &state.intake else {
+        return json_error(
+            StatusCode::CONFLICT,
+            "the intake needs spall's model (--model-provider and a key); the agent buttons and + New task work without one",
+        );
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Pick {
+        question: String,
+        answer: String,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Ask {
+        text: String,
+        pick: Option<Pick>,
+    }
+    let ask: Ask = match serde_json::from_slice(&body) {
+        Ok(a) => a,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"text", "pick"?: {{"question", "answer"}}}}: {e}"#),
+            )
+        }
+    };
+    let pick = ask
+        .pick
+        .as_ref()
+        .map(|p| (p.question.as_str(), p.answer.as_str()));
+    match intake.ask(&ask.text, pick).await {
+        Ok(crate::intake::Answer::Plan { plan }) => {
+            axum::Json(serde_json::json!({ "kind": "plan", "plan": plan_json(&plan) }))
+                .into_response()
+        }
+        Ok(a) => axum::Json(a).into_response(),
+        Err(why) => json_error(StatusCode::CONFLICT, &why),
+    }
+}
+
+/// A plan with its estimate ("2 tasks, ~10 requests, safe methods only").
+fn plan_json(p: &crate::plans::Plan) -> serde_json::Value {
+    let mut v = serde_json::to_value(p).unwrap_or_default();
+    v["estimate"] = crate::plans::estimate(&p.tasks).into();
+    v
+}
+
+/// The intake's plans, newest first, with their estimates.
+async fn api_plans(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let plans: Vec<serde_json::Value> = r
+        .plans
+        .list()
+        .into_iter()
+        .take(50)
+        .map(|p| plan_json(&p))
+        .collect();
+    axum::Json(serde_json::json!({ "plans": plans })).into_response()
+}
+
+/// A human's change to a plan: `{"op": "drop", "index"}`, `{"op":
+/// "budget", "index", "budget"}`, `{"op": "discard"}` or `{"op":
+/// "approve"}` (makes and approves its tasks). Same-origin, audited.
+async fn api_plan_patch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let op: crate::plans::Op = match serde_json::from_slice(&body) {
+        Ok(o) => o,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!("not a plan change (drop, budget, discard, approve): {e}"),
+            )
+        }
+    };
+    let spall_run = matches!(op, crate::plans::Op::Approve)
+        && r.plans.find(&id).is_some_and(|p| {
+            p.tasks
+                .iter()
+                .any(|t| t.task.runner == Some(crate::tasks::Runner::Spall))
+        });
+    if spall_run && state.host.is_none() {
+        return no_host();
+    }
+    match r.plan_op(&id, op) {
+        Ok(p) => axum::Json(plan_json(&p)).into_response(),
+        Err((status, why)) => json_error(status, &why),
+    }
 }
 
 /// Quad mode (#66): `{"seconds"?}` starts a burst, `{"stop": true}` ends it
@@ -1215,6 +1324,7 @@ mod tests {
             replayer: None,
             mcp: None,
             host: None,
+            intake: None,
         })
     }
 

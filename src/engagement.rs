@@ -531,6 +531,16 @@ impl Store {
         Ok((e, changes))
     }
 
+    /// Every engagement on disk, whole (the intake reads them, #65), the
+    /// active one as it stands in memory.
+    pub fn all(&self) -> Vec<Engagement> {
+        let active = self.active();
+        let (mut all, _) = self.load_all();
+        all.retain(|e| e.id != active.id);
+        all.insert(0, active);
+        all
+    }
+
     /// Every engagement on disk, active first then by name.
     pub fn list(&self) -> Vec<Summary> {
         let active = self.lock().active.id.clone();

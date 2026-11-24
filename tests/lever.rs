@@ -4638,7 +4638,10 @@ impl Model for Scripted {
         tools: &'a [ToolDef],
         c: &'a mut Conversation,
     ) -> spall::model::BoxFuture<'a, Result<Turn, ModelError>> {
-        assert!(tools.iter().any(|t| t.name == "replay"));
+        // An agent's tools, or the intake's (#65).
+        assert!(tools
+            .iter()
+            .any(|t| t.name == "replay" || t.name == "plan_retest"));
         assert!(
             !tools
                 .iter()
@@ -5178,4 +5181,371 @@ async fn quad_gives_spalls_host_four_times_the_workers() {
     let res = post_text(spall, "/api/quad", r#"{"seconds":30}"#, None).await;
     assert!(res.starts_with("HTTP/1.1 201"), "{res}");
     eventually("all five in quad", || running() == 5).await;
+}
+
+/// A resolver whose answers a test sets (#65).
+#[derive(Default)]
+struct FakeDns(Mutex<std::collections::HashMap<String, Vec<String>>>);
+
+impl FakeDns {
+    fn set(&self, host: &str, ips: &[&str]) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(host.into(), ips.iter().map(|s| s.to_string()).collect());
+    }
+}
+
+impl spall::addresses::Resolve for FakeDns {
+    fn lookup<'a>(&'a self, host: &'a str) -> spall::model::BoxFuture<'a, Vec<String>> {
+        let ips = self
+            .0
+            .lock()
+            .unwrap()
+            .get(host)
+            .cloned()
+            .unwrap_or_default();
+        Box::pin(async move { ips })
+    }
+}
+
+/// The acceptance test for the intake (#65, docs/ux.md): "My boss said to
+/// re-scan the findings from last week's evilcorp.com test." Resolve the
+/// engagement; refuse while its window is closed and draft an extension
+/// instead; ask when it's ambiguous; flag a host that resolves elsewhere
+/// now; plan one retest per finding; nothing runs until approved; then
+/// through the gate, a non-reproducing one is marked fixed with the retest
+/// exchange as evidence, and who asked is on the task.
+#[tokio::test]
+async fn my_boss_said_to_re_scan_last_weeks_findings() {
+    const ASK: &str = "My boss said to re-scan the findings from last week's evilcorp.com test.";
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    stub.push("e2");
+    let dns = Arc::new(FakeDns::default());
+    dns.set("example.com", &["93.184.215.14"]);
+    let model = Scripted::new(vec![]);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let spall = listener.local_addr().unwrap();
+    let app = spall::build(spall_config(Some(api), &token, &["--scope", "example.com"]))
+        .unwrap()
+        .with_resolver(dns.clone())
+        .with_model(model.clone());
+    let r = app.replayer.clone().unwrap();
+    tokio::spawn(app.run(listener));
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"name":"evilcorp.com web test","client":"EvilCorp","rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let eng = r.engagements.active().id;
+    let mut cands = Vec::new();
+    for (x, rule) in [("e1", "WSTG-INPV-05"), ("e2", "WSTG-INPV-01")] {
+        let res = post_text(
+            spall,
+            "/api/candidates",
+            &format!(r#"{{"exchange":"{x}","rule":"{rule}"}}"#),
+            None,
+        )
+        .await;
+        assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+        cands.push(body_json(&res)["id"].as_str().unwrap().to_string());
+    }
+    // Where the host resolved when its findings were made.
+    eventually("the address baseline", || {
+        r.addresses.get(&eng, "example.com").is_some()
+    })
+    .await;
+    // Last week's test: its window closed yesterday.
+    let today = jiff::Zoned::now().date();
+    let day = |n: i64| {
+        today
+            .checked_add(jiff::Span::new().days(n))
+            .unwrap()
+            .to_string()
+    };
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        &format!(r#"{{"starts":"{}","ends":"{}"}}"#, day(-8), day(-1)),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+
+    let intake = |body: String| async move {
+        let res = post_text(spall, "/api/intake", &body, None).await;
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+        body_json(&res)
+    };
+    let push = |steps: Vec<Step>| model.steps.lock().unwrap().extend(steps);
+
+    // 1. Resolve, then check: the window has closed, so nothing is planned
+    // and an extension is drafted for a human.
+    push(vec![
+        turn("", vec![call("1", "engagements", serde_json::json!({}))]),
+        turn(
+            "",
+            vec![call(
+                "2",
+                "plan_retest",
+                serde_json::json!({"engagement": eng}),
+            )],
+        ),
+        turn(
+            "",
+            vec![call(
+                "3",
+                "done",
+                serde_json::json!({"summary": "Its window has closed: extend it first."}),
+            )],
+        ),
+    ]);
+    let a = intake(serde_json::json!({ "text": ASK }).to_string()).await;
+    assert_eq!(a["kind"], "plan", "{a}");
+    let p = &a["plan"];
+    assert_eq!(p["tasks"].as_array().unwrap().len(), 0, "{p}");
+    assert_eq!(p["proposal"]["kind"], "extension");
+    assert_eq!(p["proposal"]["engagement"], eng.as_str());
+    let w = p["warnings"][0].as_str().unwrap();
+    assert!(
+        w.contains("isn't authorized now") && w.contains("context, not authorization"),
+        "{w}"
+    );
+    // The model saw what the engagement said, and the refusal.
+    let seen = serde_json::to_string(&model.seen().last().unwrap().messages).unwrap();
+    assert!(
+        seen.contains("evilcorp.com web test") && seen.contains("refused"),
+        "{seen}"
+    );
+    let id = p["id"].as_str().unwrap().to_string();
+    let res = send_text(
+        spall,
+        "PATCH",
+        &format!("/api/plans/{id}"),
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 409") && res.contains("no tasks"),
+        "{res}"
+    );
+
+    // A human extends it (policy: theirs). Meanwhile the host moved.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        &format!(r#"{{"ends":"{}"}}"#, day(6)),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    dns.set("example.com", &["203.0.113.50"]);
+
+    // 2. Ambiguity is a pick list, never a guess.
+    push(vec![turn(
+        "",
+        vec![call(
+            "1",
+            "ask",
+            serde_json::json!({"question": "Retest which findings?", "options": ["all open findings", "only the SQL injection"]}),
+        )],
+    )]);
+    let a = intake(serde_json::json!({ "text": ASK }).to_string()).await;
+    assert_eq!(
+        a["plan"]["choice"]["options"][0], "all open findings",
+        "{a}"
+    );
+    assert!(a["plan"]["tasks"].as_array().unwrap().is_empty());
+
+    // 3. Picked: one retest task per finding, the moved host flagged.
+    push(vec![
+        turn(
+            "",
+            vec![call(
+                "1",
+                "plan_retest",
+                serde_json::json!({"engagement": eng}),
+            )],
+        ),
+        turn(
+            "",
+            vec![call(
+                "2",
+                "done",
+                serde_json::json!({"summary": "Two retests."}),
+            )],
+        ),
+    ]);
+    let a = intake(
+        serde_json::json!({ "text": ASK, "pick": {"question": "Retest which findings?", "answer": "all open findings"} }).to_string(),
+    )
+    .await;
+    let opening = serde_json::to_string(&model.seen().last().unwrap().messages[0]).unwrap();
+    assert!(
+        opening.contains("The tester picked: all open findings"),
+        "{opening}"
+    );
+    let p = a["plan"].clone();
+    let tasks = p["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2, "{p}");
+    let planned: Vec<&str> = tasks
+        .iter()
+        .map(|t| t["candidate"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        planned,
+        cands.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    for t in tasks {
+        assert_eq!(t["task"]["role"], "tester");
+        assert_eq!(
+            t["task"]["constraints"]["methods"],
+            serde_json::json!(["GET"])
+        );
+        assert!(t["task"]["note"].as_str().unwrap().contains(ASK));
+    }
+    assert!(
+        p["warnings"].as_array().unwrap().iter().any(|w| {
+            let w = w.as_str().unwrap();
+            w.contains("example.com resolves to 203.0.113.50 now, not 93.184.215.14")
+        }),
+        "{p}"
+    );
+    let plans = body_json(&get_text(spall, "/api/plans").await);
+    let listed = plans["plans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == p["id"])
+        .unwrap()
+        .clone();
+    assert_eq!(
+        listed["estimate"],
+        "2 tasks, ~10 requests, safe methods only"
+    );
+    // Nothing runs before it's approved.
+    assert!(stub.replays().is_empty());
+    assert!(r.tasks.list(&eng).is_empty());
+
+    // Off-topic: no.
+    push(vec![turn("", vec![call("1", "no", serde_json::json!({}))])]);
+    let a = intake(serde_json::json!({ "text": "what's the meaning of life?" }).to_string()).await;
+    assert_eq!(a["kind"], "no");
+
+    // 4. Approved: the tasks are made and approved, and who asked is on them.
+    let id = p["id"].as_str().unwrap().to_string();
+    let res = send_text(
+        spall,
+        "PATCH",
+        &format!("/api/plans/{id}"),
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let made: Vec<String> = body_json(&res)["made"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(made.len(), 2);
+    let t = task_of(&r, &made[0]);
+    assert_eq!(t.asked_by, format!("human (plan {id})"));
+    assert!(t.note.contains("My boss said"), "{}", t.note);
+    let res = send_text(
+        spall,
+        "PATCH",
+        &format!("/api/plans/{id}"),
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 409"), "once: {res}");
+
+    // 5. Run through the gate; the first no longer reproduces: fixed, with
+    // the retest exchange as evidence.
+    eventually("started", || {
+        task_of(&r, &made[0]).status == spall::tasks::Status::Running
+    })
+    .await;
+    let (status, body) = agent_send(&r, &made[0], r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 200, "{body}");
+    let replay = body["id"].as_str().unwrap().to_string();
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let out = tools
+        .call(&made[0], "retest_result", &serde_json::json!({"candidate": cands[0], "verdict": "fixed", "exchange_id": replay, "note": "no SQL error now"}))
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+    let c = r.candidates.get(&eng, &cands[0]).unwrap();
+    assert_eq!(c.finding.status(), Some(flux::Status::Fixed));
+    assert!(c.exchanges().contains(&replay));
+    let audit = audit_records(&token);
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with(&format!("approve {id}: made ")))));
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("intake: P-"))));
+}
+
+/// With no authorized engagement, the only thing the intake can draft is
+/// one (#65); and without a model there's no intake at all.
+#[tokio::test]
+async fn without_an_authorized_engagement_the_intake_drafts_only_one() {
+    let model = Scripted::new(vec![]);
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push("e1");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let spall = listener.local_addr().unwrap();
+    let app = spall::build(spall_config(Some(api), &token, &["--scope", "example.com"]))
+        .unwrap()
+        .with_model(model.clone());
+    tokio::spawn(app.run(listener));
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    // Agents aren't allowed (the default): not authorized for agent work.
+    model.steps.lock().unwrap().extend(vec![
+        turn("", vec![call("1", "plan_task", serde_json::json!({"role": "mapper", "goal": "map the API"}))]),
+        turn("", vec![call("2", "propose_engagement", serde_json::json!({"name": "ACME API", "scope": ["api.acme.test"], "why": "no engagement allows agents"}))]),
+        turn("", vec![call("3", "done", serde_json::json!({"summary": "Create an engagement first."}))]),
+    ]);
+    let res = post_text(spall, "/api/intake", r#"{"text":"map the API"}"#, None).await;
+    let a = body_json(&res);
+    assert!(a["plan"]["tasks"].as_array().unwrap().is_empty(), "{a}");
+    assert_eq!(a["plan"]["proposal"]["kind"], "engagement");
+    assert_eq!(
+        a["plan"]["proposal"]["scope"],
+        serde_json::json!(["api.acme.test"])
+    );
+    let seen = serde_json::to_string(&model.seen().last().unwrap().messages).unwrap();
+    assert!(
+        seen.contains("the only thing you can draft is an engagement"),
+        "{seen}"
+    );
+
+    // No model, no intake.
+    let (_dir, _stub, plain, _r) = agent_setup("{}").await;
+    let res = post_text(plain, "/api/intake", r#"{"text":"map the API"}"#, None).await;
+    assert!(
+        res.starts_with("HTTP/1.1 409") && res.contains("needs spall's model"),
+        "{res}"
+    );
 }

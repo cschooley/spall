@@ -759,3 +759,20 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .quad-card dd { margin: 0; color: var(--vg-text-primary); font-variant-numeric: tabular-nums; }
 .quad-share { margin: 0 0 var(--vg-space-2); font: var(--vg-text-xs) var(--vg-font-mono); overflow-wrap: anywhere; }
 .quad-card .row { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); }
+
+/* The intake (#65): ask, then a draft plan to edit and approve. */
+.intake { overflow: auto; }
+.intake-ask { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: flex-end; margin: var(--vg-space-2) 0; }
+.intake-ask textarea { flex: 1 1 18rem; min-width: 0; font: var(--vg-text-sm) var(--vg-font-mono); }
+.intake-no { font: 600 var(--vg-text-md) var(--vg-font-mono); }
+.plan .btn.armed { border-color: var(--vg-accent-rust); color: var(--vg-accent-rust); }
+.plan { margin-top: var(--vg-space-4); }
+.plan-warnings { margin: var(--vg-space-2) 0; padding: 0; list-style: none; color: var(--vg-accent-rust); font: var(--vg-text-sm) var(--vg-font-mono); overflow-wrap: anywhere; }
+.plan-proposal, .plan-choice { margin: var(--vg-space-2) 0; font: var(--vg-text-sm) var(--vg-font-sans); }
+.plan-choice { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: baseline; }
+.plan-choice p { flex: 1 1 100%; margin: 0; }
+.plan-tasks { width: 100%; border-collapse: collapse; font: var(--vg-text-sm) var(--vg-font-mono); }
+.plan-tasks th, .plan-tasks td { text-align: left; vertical-align: top; padding: var(--vg-space-1) var(--vg-space-2); border-bottom: 1px solid var(--vg-border-subtle); overflow-wrap: anywhere; }
+.plan-estimate { margin: var(--vg-space-2) 0; font: 600 var(--vg-text-sm) var(--vg-font-mono); }
+.plan-drafts { margin: 0; padding: 0; list-style: none; font: var(--vg-text-sm) var(--vg-font-mono); overflow-wrap: anywhere; }
+.plan .row { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); }

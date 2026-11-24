@@ -22,6 +22,7 @@ import {
   type Task,
 } from "../lib/tasks.ts";
 import { Card } from "./Approvals.tsx";
+import { IntakePanel } from "./Intake.tsx";
 
 /** What each role may do (src/roles.rs, #64): the server decides; this is the hint. */
 const ROLE_CAN: Record<string, string> = {
@@ -78,6 +79,7 @@ export function TasksView({
   const [sel, setSel] = useState<string | null>(() => taskFromHash(window.location.hash));
   const [open, setOpen] = useState<Task | string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [intake, setIntake] = useState(false);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
@@ -121,7 +123,24 @@ export function TasksView({
         <div className="list-head">
           <h1>Tasks</h1>
           <span className="spacer" />
-          <button type="button" className="btn primary" onClick={() => setCreating(true)}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setCreating(false);
+              setIntake(true);
+            }}
+          >
+            Ask…
+          </button>
+          <button
+            type="button"
+            className="btn primary"
+            onClick={() => {
+              setIntake(false);
+              setCreating(true);
+            }}
+          >
             + New task
           </button>
         </div>
@@ -136,7 +155,10 @@ export function TasksView({
                 href={`#tasks/${encodeURIComponent(t.id)}`}
                 className={`task${t.id === sel ? " sel" : ""}${finished(t.status) ? " done" : ""}`}
                 aria-current={t.id === sel ? "true" : undefined}
-                onClick={() => setCreating(false)}
+                onClick={() => {
+                  setCreating(false);
+                  setIntake(false);
+                }}
               >
                 <span className="row1">
                   <span className="id">{t.id}</span>
@@ -150,7 +172,9 @@ export function TasksView({
           ))}
         </ol>
       </section>
-      {creating ? (
+      {intake ? (
+        <IntakePanel agentModel={agentModel} onClose={() => setIntake(false)} onMade={() => done()} />
+      ) : creating ? (
         <NewTaskForm
           agentModel={agentModel}
           onCancel={() => setCreating(false)}

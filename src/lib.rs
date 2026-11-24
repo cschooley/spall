@@ -2,6 +2,7 @@
 //! taphttp's lever API when configured (`--taphttp-api`), otherwise from
 //! tailing its `--log-file`.
 
+pub mod addresses;
 pub mod agent;
 pub mod audit;
 pub mod candidates;
@@ -14,11 +15,13 @@ pub mod gate;
 pub mod host;
 pub mod hosts;
 pub mod hub;
+pub mod intake;
 pub mod lever;
 pub mod mcp;
 pub mod mcp_bridge;
 pub mod model;
 pub mod openapi;
+pub mod plans;
 pub mod quad;
 pub mod replay;
 pub mod roe;
@@ -176,6 +179,8 @@ pub struct App {
     pub mcp: Option<Arc<mcp::Server>>,
     /// spall's own agent host (#63), with a model configured.
     pub host: Option<Arc<host::Host>>,
+    /// The intake's orchestrator (#65), on the same model.
+    pub intake: Option<Arc<intake::Intake>>,
 }
 
 /// Open the stores and the audit log for `config`; errors stop spall.
@@ -242,6 +247,12 @@ pub fn build(config: Config) -> anyhow::Result<App> {
             let tasks_dir = config.engagements.join("tasks");
             let tasks = tasks::Store::open(&tasks_dir)
                 .with_context(|| format!("loading tasks from {}", tasks_dir.display()))?;
+            let plans_dir = config.engagements.join("plans");
+            let plans = plans::Store::open(&plans_dir)
+                .with_context(|| format!("loading plans from {}", plans_dir.display()))?;
+            let addresses_dir = config.engagements.join("addresses");
+            let addresses = addresses::Store::open(&addresses_dir)
+                .with_context(|| format!("loading addresses from {}", addresses_dir.display()))?;
             Some(Arc::new(replay::Replayer {
                 lever: lever.clone(),
                 engagements,
@@ -256,6 +267,9 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 stack: stack::Stack::from_config(&config),
                 spall_runs: std::sync::atomic::AtomicBool::new(false),
                 quad: quad::Boost::default(),
+                plans,
+                addresses: Arc::new(addresses),
+                resolver: std::sync::RwLock::new(Arc::new(addresses::System)),
             }))
         }
         None => None,
@@ -294,6 +308,7 @@ pub fn build(config: Config) -> anyhow::Result<App> {
         replayer,
         mcp,
         host: None,
+        intake: None,
     };
     if let Some(settings) = settings {
         if app.replayer.is_none() {
@@ -317,6 +332,14 @@ pub fn build(config: Config) -> anyhow::Result<App> {
 }
 
 impl App {
+    /// Look host names up with `resolver` (#65); tests pass a fake one.
+    pub fn with_resolver(self, resolver: Arc<dyn addresses::Resolve>) -> App {
+        if let Some(r) = &self.replayer {
+            *r.resolver.write().unwrap_or_else(|p| p.into_inner()) = resolver;
+        }
+        self
+    }
+
     /// Run spall's agent host on `model` (#63); tests pass a scripted one.
     /// Without the lever API there's nothing for it to drive.
     pub fn with_model(mut self, model: Arc<dyn model::Model>) -> App {
@@ -326,7 +349,8 @@ impl App {
                 hub: self.hub.clone(),
             };
             let dir = self.config.engagements.join("tasks").join("transcripts");
-            self.host = Some(host::Host::new(tools, model, &dir));
+            self.host = Some(host::Host::new(tools, model.clone(), &dir));
+            self.intake = Some(intake::Intake::new(r.clone(), model));
             r.spall_runs
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
@@ -341,6 +365,7 @@ impl App {
             replayer,
             mcp,
             host,
+            intake,
         } = self;
         let state = web::AppState {
             hub: hub.clone(),
@@ -351,6 +376,7 @@ impl App {
             replayer,
             mcp,
             host: host.clone(),
+            intake,
         };
         let agents = async {
             match host {

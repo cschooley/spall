@@ -305,6 +305,11 @@ pub struct Replayer {
     pub spall_runs: AtomicBool,
     /// Quad mode (#66): the burst underway, if any, and the last scorecard.
     pub quad: crate::quad::Boost,
+    /// The intake's plans (#65).
+    pub plans: crate::plans::Store,
+    /// Where finding hosts first resolved (#65), and the resolver.
+    pub addresses: Arc<crate::addresses::Store>,
+    pub resolver: std::sync::RwLock<Arc<dyn crate::addresses::Resolve>>,
 }
 
 /// Drafts one agent's task may make with verbs (#67) before it's told to
@@ -628,6 +633,7 @@ impl Replayer {
         match self.candidates.add(&eng, c) {
             Ok(c) => {
                 self.audit(&rec);
+                self.note_address(&eng, &entry.url);
                 (StatusCode::CREATED, axum::Json(c)).into_response()
             }
             Err(e) => {
@@ -885,6 +891,149 @@ impl Replayer {
                 task_error(&err)
             }
         }
+    }
+
+    pub fn resolver(&self) -> Arc<dyn crate::addresses::Resolve> {
+        self.resolver
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Where a finding's host resolves now, kept as its baseline if it has
+    /// none (#65): a later retest flags a host that moved. In-scope hosts
+    /// only; looked up in the background so flagging doesn't wait.
+    fn note_address(&self, eng: &str, url: &str) {
+        let host = gate::url_host(url).unwrap_or_default();
+        if host.is_empty() || self.scope_now().explain(&host).state != gate::HostState::In {
+            return;
+        }
+        if self.addresses.get(eng, &host).is_some() {
+            return;
+        }
+        let (resolver, store, eng) = (self.resolver(), self.addresses.clone(), eng.to_string());
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                let ips = resolver.lookup(&host).await;
+                store.first(
+                    &eng,
+                    &host,
+                    ips,
+                    &taphttp_types::Timestamp::now().to_string(),
+                );
+            });
+        }
+    }
+
+    /// A human's change to plan `id` (#65): drop or re-budget a task,
+    /// discard it, or approve it, which makes its tasks and approves them
+    /// in the active engagement (only if the plan is for it, and it's
+    /// authorized now). Audited.
+    pub fn plan_op(
+        &self,
+        id: &str,
+        op: crate::plans::Op,
+    ) -> Result<crate::plans::Plan, (StatusCode, String)> {
+        use crate::plans::{Error as PE, Op};
+        use crate::tasks::{authorized, Context};
+        let status = |e: &PE| match e {
+            PE::NotFound(_) => StatusCode::NOT_FOUND,
+            PE::Invalid(_) => StatusCode::BAD_REQUEST,
+            PE::Conflict(_) => StatusCode::CONFLICT,
+            PE::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let plan = self
+            .plans
+            .find(id)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no plan {id}")))?;
+        let now = taphttp_types::Timestamp::now().to_string();
+        let mut rec = Record::new("plan", "", Outcome::TaskChanged);
+        rec.engagement = Some(plan.engagement.clone());
+        rec.result_id = Some(id.to_string());
+        let res = match op {
+            Op::Approve => {
+                (|| {
+                    if plan.status != crate::plans::Status::Draft {
+                        return Err((StatusCode::CONFLICT, format!("{id} isn't a draft")));
+                    }
+                    let e = self.engagements.active();
+                    if plan.engagement != e.id {
+                        return Err((
+                        StatusCode::CONFLICT,
+                        format!("{id} is for engagement {}: make it active first (only you switch engagements)", plan.engagement),
+                    ));
+                    }
+                    if plan.tasks.is_empty() {
+                        return Err((
+                            StatusCode::CONFLICT,
+                            format!("{id} has no tasks to approve"),
+                        ));
+                    }
+                    let scope = self.engagements.scope();
+                    authorized(&e.rules, &e.period(), &scope, jiff::Timestamp::now())
+                        .map_err(|why| (StatusCode::CONFLICT, format!("no tasks: {why}")))?;
+                    let cx = Context {
+                        rules: &e.rules,
+                        scope: &scope,
+                        now: &now,
+                    };
+                    let mut made: Vec<String> = Vec::new();
+                    for p in &plan.tasks {
+                        match self
+                            .tasks
+                            .create(&e.id, &p.task, &format!("human (plan {id})"), &cx)
+                        {
+                            Ok(t) => made.push(t.id),
+                            Err(err) => {
+                                // All or nothing: the drafts made so far go.
+                                for t in &made {
+                                    let _ = self.tasks.apply(
+                                        &e.id,
+                                        t,
+                                        &crate::tasks::Op::Halt {
+                                            reason: format!("{id} wasn't approved: {err}"),
+                                        },
+                                        &cx,
+                                    );
+                                }
+                                return Err((StatusCode::CONFLICT, format!("{id}: a task couldn't be made ({err}); nothing was approved")));
+                            }
+                        }
+                    }
+                    for t in &made {
+                        if let Err(err) =
+                            self.tasks.apply(&e.id, t, &crate::tasks::Op::Approve, &cx)
+                        {
+                            return Err((StatusCode::CONFLICT, format!("{t}: {err}")));
+                        }
+                    }
+                    self.plans
+                        .approved(&e.id, id, made, &now)
+                        .map_err(|e| (status(&e), e.to_string()))
+                })()
+            }
+            op => self
+                .plans
+                .edit(&plan.engagement, id, &op, &now)
+                .map_err(|e| (status(&e), e.to_string())),
+        };
+        match &res {
+            Ok(p) => {
+                rec.reason = Some(match p.status {
+                    crate::plans::Status::Approved => {
+                        format!("approve {id}: made {}", p.made.join(", "))
+                    }
+                    crate::plans::Status::Discarded => format!("discard {id}"),
+                    crate::plans::Status::Draft => format!("edit {id}"),
+                });
+            }
+            Err((_, why)) => {
+                rec.reason = Some(format!("{id}: refused"));
+                rec.error = Some(why.clone());
+            }
+        }
+        self.audit(&rec);
+        res
     }
 
     /// Totals quad is scored on (#66): requests charged, model tokens and

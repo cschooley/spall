@@ -196,7 +196,7 @@ pub struct Constraints {
 
 /// Asked-for constraints: anything left out comes from the RoE (or the
 /// defaults, for what the RoE doesn't have).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Requested {
     pub hosts: Option<Vec<String>>,
@@ -659,7 +659,7 @@ impl Task {
 }
 
 /// A new task, as asked for.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct New {
     pub goal: String,

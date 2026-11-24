@@ -85,6 +85,8 @@ export const test = base.extend<{ guard: void }>({
       await page.route(/\/api\/audit(\?.*)?$/, (r) => r.fulfill({ json: [] }));
       // The same for the tasks waiting on approval (#56).
       await page.route(/\/api\/tasks$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { tasks: [] } }) : r.fallback()));
+      // And the intake's draft plans (#65).
+      await page.route(/\/api\/plans$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { plans: [] } }) : r.fallback()));
       page.on("dialog", async (d) => {
         problems.push(`dialog: ${d.type()} ${d.message()}`);
         await d.dismiss();
