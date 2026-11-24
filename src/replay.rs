@@ -879,6 +879,19 @@ impl Replayer {
 
     /// The agent's report on its task `id` (#81): stored on the task and
     /// audited as the agent's, refusals too. The text itself isn't audited.
+    /// An agent's command its role refused (#64), kept as evidence of a
+    /// confused or hijacked agent, like `commands::admit_audited`'s.
+    pub fn audit_agent_refusal(&self, engagement: &str, task: &str, name: &str, why: &str) {
+        let mut rec = Record::new("command", "", Outcome::Denied);
+        rec.actor = "agent".into();
+        rec.task = Some(task.to_string());
+        rec.engagement = Some(engagement.to_string());
+        rec.decision = Some("deny");
+        let shown: String = name.chars().take(64).collect();
+        rec.reason = Some(format!("{shown:?}: {why}"));
+        self.audit(&rec);
+    }
+
     pub fn agent_report(
         &self,
         id: &str,
@@ -1454,6 +1467,31 @@ impl Replayer {
                 StatusCode::FORBIDDEN,
                 serde_json::json!({ "error": why, "decision": "deny" }),
             );
+        }
+        // The task's role (#64): a send it can't make is refused before any
+        // pause or grant, since no approval widens a role.
+        if let Some(t) = &task {
+            let safe = engagement.rules.is_safe(&eff.method);
+            if let Err(why) = t.role.may_send(&eff.method, safe) {
+                let why = format!("{}: {why}", t.id);
+                rec.outcome = Outcome::Denied;
+                rec.decision = Some("deny");
+                rec.reason = Some(why.clone());
+                self.audit(&rec);
+                let ev = crate::tasks::Event::Request {
+                    exchange: None,
+                    method: eff.method.clone(),
+                    target: eff.url.clone(),
+                    check: None,
+                    outcome: "denied".into(),
+                    status: None,
+                };
+                self.task_log(&engagement.id, Some((t.id.clone(), ev)));
+                return json(
+                    StatusCode::FORBIDDEN,
+                    serde_json::json!({ "error": why, "decision": "deny" }),
+                );
+            }
         }
         let layers = [&engagement.rules];
         let decision = gate::decide(

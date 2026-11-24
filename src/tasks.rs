@@ -404,6 +404,19 @@ pub fn authorized(
     .check_time(period, now)
 }
 
+/// Whether `role` can be given these constraints (#64): refused, not
+/// trimmed, like asking for more than the RoE. Only a Tester gets
+/// destructive actions; what a role may send is checked at the gate.
+pub fn role_fits(role: Role, c: &Constraints) -> Result<(), String> {
+    if c.destructive && !role.may_destroy() {
+        return Err(format!(
+            "destructive: a {} doesn't get destructive actions; give the work to a tester",
+            role.as_str()
+        ));
+    }
+    Ok(())
+}
+
 /// One step of the plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -985,6 +998,7 @@ impl Store {
         let plan = check_plan(&new.plan).map_err(Error::Invalid)?;
         check_text("note", &new.note, MAX_NOTE, true).map_err(Error::Invalid)?;
         let constraints = resolve(&new.constraints, cx.rules, cx.scope).map_err(Error::Invalid)?;
+        role_fits(new.role, &constraints).map_err(Error::Invalid)?;
         self.change(engagement, |book| {
             if book.tasks.len() >= MAX_PER_ENGAGEMENT {
                 return Err(Error::Full);
@@ -1094,6 +1108,7 @@ impl Store {
                     if let Some(p) = plan {
                         t.plan = check_plan(p).map_err(Error::Invalid)?;
                     }
+                    role_fits(t.role, &t.constraints).map_err(Error::Invalid)?;
                     if let Some(n) = note {
                         check_text("note", n, MAX_NOTE, true).map_err(Error::Invalid)?;
                         t.note = n.trim().into();
@@ -1978,6 +1993,53 @@ mod tests {
             scope: s,
             now: NOW,
         }
+    }
+
+    #[test]
+    fn only_a_tester_is_given_destructive_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let r = Rules {
+            destructive_allowed: true,
+            ..rules()
+        };
+        let s = scope();
+        let destructive = |role| New {
+            role,
+            constraints: Requested {
+                destructive: Some(true),
+                ..Requested::default()
+            },
+            ..new("break it")
+        };
+        for role in [Role::Scoper, Role::Mapper, Role::Reporter] {
+            let e = store
+                .create("eng-1", &destructive(role), "human", &cx(&r, &s))
+                .unwrap_err();
+            assert!(e.to_string().contains("tester"), "{role:?}: {e}");
+        }
+        let t = store
+            .create("eng-1", &destructive(Role::Tester), "human", &cx(&r, &s))
+            .unwrap();
+        assert!(t.constraints.destructive);
+        // Nor can a draft be edited into it.
+        let e = store
+            .apply(
+                "eng-1",
+                &t.id,
+                &Op::Edit {
+                    goal: None,
+                    role: Some(Role::Mapper),
+                    runner: None,
+                    constraints: None,
+                    plan: None,
+                    note: None,
+                },
+                &cx(&r, &s),
+            )
+            .unwrap_err();
+        assert!(e.to_string().contains("destructive"), "{e}");
+        assert_eq!(store.get("eng-1", &t.id).unwrap().role, Role::Tester);
     }
 
     #[test]

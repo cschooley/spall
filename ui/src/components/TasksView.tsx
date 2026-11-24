@@ -23,6 +23,14 @@ import {
 } from "../lib/tasks.ts";
 import { Card } from "./Approvals.tsx";
 
+/** What each role may do (src/roles.rs, #64): the server decides; this is the hint. */
+const ROLE_CAN: Record<string, string> = {
+  scoper: "reads, proposes scope; sends nothing",
+  mapper: "reads, safe methods only",
+  tester: "unsafe methods too, each asked for",
+  reporter: "drafts findings; sends nothing",
+};
+
 const POLL_MS = 2000;
 
 function Chip({ status }: { status: string }) {
@@ -489,6 +497,7 @@ function NewTaskForm({ agentModel, onCancel, onCreated }: { agentModel: string |
                 <option key={r}>{r}</option>
               ))}
             </select>
+            <span className="note">{ROLE_CAN[role] ?? ""}</span>
           </label>
           <label>
             Budget (requests)

@@ -615,6 +615,18 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "skill",
+        usage: "skill [name]",
+        desc: "your role's skills: with no name, list them; with one, how to do that kind of work. Read one before you start that work",
+        // Text: how to work. It grants nothing (docs/architecture.md,
+        // Building blocks); permissions come from the role and the task.
+        risk: Risk::Read,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: || obj(&[("name", text("a skill's name, like test-authz"))], &[]),
+    },
+    Command {
         name: "ca",
         usage: "ca",
         desc: "taphttp's CA certificate: fingerprint, download, and browser setup steps",
@@ -751,6 +763,12 @@ pub fn offered() -> impl Iterator<Item = &'static Command> {
     COMMANDS
         .iter()
         .filter(|c| c.mcp && !c.hidden && c.risk.agent_may())
+}
+
+/// The commands a task's agent is offered: [`offered`], less what its role
+/// may not run (#64), so the model isn't shown tools it can't use.
+pub fn offered_to(role: crate::tasks::Role) -> impl Iterator<Item = &'static Command> {
+    offered().filter(move |c| role.may_run(c).is_ok())
 }
 
 /// Why a command was refused.
@@ -935,7 +953,9 @@ mod tests {
         assert!(COMMANDS
             .iter()
             .filter(|c| !c.ui)
-            .all(|c| c.name == "propose_finding" || c.name == "report"));
+            .all(|c| matches!(c.name, "propose_finding" | "report" | "skill")));
+        let k = find("skill").unwrap();
+        assert_eq!((k.risk, k.mcp, k.ui), (Risk::Read, true, false));
     }
 
     #[test]
@@ -952,7 +972,8 @@ mod tests {
                 "rules",
                 "task",
                 "propose_finding",
-                "report"
+                "report",
+                "skill"
             ]
         );
         for c in COMMANDS.iter().filter(|c| !c.risk.agent_may()) {

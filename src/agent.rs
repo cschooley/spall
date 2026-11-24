@@ -55,9 +55,9 @@ pub struct Tools {
     pub hub: Arc<Hub>,
 }
 
-/// MCP tool definitions: the commands an agent is offered.
-pub fn definitions() -> Vec<Value> {
-    commands::offered()
+/// MCP tool definitions: the commands an agent in `role` is offered.
+pub fn definitions(role: crate::tasks::Role) -> Vec<Value> {
+    commands::offered_to(role)
         .map(|c| {
             json!({
                 "name": c.name,
@@ -143,25 +143,34 @@ impl Tools {
     pub async fn call(&self, task: &str, name: &str, a: &Value) -> Output {
         let r = &self.replayer;
         let eng = r.engagements.active();
-        if let Err(why) =
-            commands::admit_audited(&r.audit, Some(eng.id.clone()), Actor::Agent, name)
+        let cmd = match commands::admit_audited(&r.audit, Some(eng.id.clone()), Actor::Agent, name)
         {
-            let names: Vec<&str> = commands::offered().map(|c| c.name).collect();
-            let next = match why {
-                Refusal::Forbidden(_) => "Ask the tester: it's theirs to do in spall.",
-                _ => "",
-            };
-            return err(format!(
-                "{name}: {why}. {next} Your tools: {}.",
-                names.join(", ")
-            ));
-        }
+            Ok(c) => c,
+            Err(why) => {
+                let names: Vec<&str> = commands::offered().map(|c| c.name).collect();
+                let next = match why {
+                    Refusal::Forbidden(_) => "Ask the tester: it's theirs to do in spall.",
+                    _ => "",
+                };
+                return err(format!(
+                    "{name}: {why}. {next} Your tools: {}.",
+                    names.join(", ")
+                ));
+            }
+        };
         let Some(t) = r.tasks.get(&eng.id, task) else {
             return err(format!(
                 "your task {task} isn't in the active engagement ({}): the tester may have switched engagements. Stop and tell them.",
                 eng.id
             ));
         };
+        // The role caps what the task's agent may run (#64), below the
+        // task and the RoE; refused like any other, and audited.
+        if let Err(why) = t.role.may_run(cmd) {
+            r.audit_agent_refusal(&eng.id, &t.id, name, &why);
+            let names: Vec<&str> = commands::offered_to(t.role).map(|c| c.name).collect();
+            return err(format!("{name}: {why}. Your tools: {}.", names.join(", ")));
+        }
         // An approved task starts with its agent's first action: that's
         // when it runs and its time limit starts (halt and e-stop still win).
         let t = if t.status == Status::Approved && name != "task" {
@@ -193,6 +202,7 @@ impl Tools {
             "task" => self.task(&t, a),
             "propose_finding" => self.propose(&t, a).await,
             "report" => self.report(&t, a),
+            "skill" => skill(&t, a),
             _ => Err(err(format!("{name}: offered but not built yet"))),
         };
         let out = out.unwrap_or_else(|e| e);
@@ -612,6 +622,51 @@ fn is_status(v: &str) -> bool {
             || (b[1].eq_ignore_ascii_case(&b'x') && b[2].eq_ignore_ascii_case(&b'x')))
 }
 
+/// `skill [name]` (#64): the role's skills, or one's body. Text only.
+fn skill(t: &Task, a: &Value) -> Result<Output, Output> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct A {
+        name: Option<String>,
+    }
+    let a: A = args("skill", a)?;
+    let mine = t.role.file().skills;
+    match a.name.as_deref().map(str::trim) {
+        None | Some("") => {
+            let lines: Vec<String> = mine
+                .iter()
+                .filter_map(|n| crate::roles::skill(n))
+                .map(|s| format!("- {}: {}", s.name, s.description))
+                .collect();
+            Ok(ok(format!(
+                "skills for a {} (skill <name> for one):\n{}",
+                t.role.as_str(),
+                lines.join("\n")
+            )))
+        }
+        Some(n) => match crate::roles::skill(n) {
+            // Any built-in is readable: a skill is how to work, and grants
+            // nothing; the role still decides what runs.
+            Some(s) => Ok(ok(format!(
+                "{}{}",
+                if mine.contains(&s.name) {
+                    String::new()
+                } else {
+                    format!("(not one of a {}'s skills: what it says still runs only as far as your role and task allow)\n\n", t.role.as_str())
+                },
+                s.body
+            ))),
+            None => {
+                let names: Vec<&str> = crate::roles::skills().iter().map(|s| s.name).collect();
+                Err(err(format!(
+                    "skill: no skill {n:?}; built in: {}",
+                    names.join(", ")
+                )))
+            }
+        },
+    }
+}
+
 fn rules(a: &Value) -> Result<Output, Output> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -646,7 +701,14 @@ mod tests {
 
     #[test]
     fn tool_definitions_are_the_offered_commands_and_nothing_a_human_keeps() {
-        let names: Vec<String> = definitions()
+        use crate::tasks::Role;
+        let names_of = |r| -> Vec<String> {
+            definitions(r)
+                .iter()
+                .map(|d| d["name"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let names: Vec<String> = definitions(Role::Tester)
             .iter()
             .map(|d| d["name"].as_str().unwrap().to_string())
             .collect();
@@ -661,10 +723,21 @@ mod tests {
                 "rules",
                 "task",
                 "propose_finding",
-                "report"
+                "report",
+                "skill"
             ]
         );
-        for d in definitions() {
+        // Each role sees only what it may run (#64).
+        let mapper = names_of(Role::Mapper);
+        assert!(mapper.contains(&"fetch".to_string()));
+        for r in [Role::Scoper, Role::Reporter] {
+            let n = names_of(r);
+            assert!(!n.iter().any(|x| x == "replay" || x == "fetch"), "{r:?}");
+            assert!(n.contains(&"skill".to_string()) && n.contains(&"report".to_string()));
+        }
+        assert!(!names_of(Role::Scoper).contains(&"propose_finding".to_string()));
+        assert!(names_of(Role::Reporter).contains(&"propose_finding".to_string()));
+        for d in definitions(Role::Tester) {
             assert_eq!(d["inputSchema"]["type"], "object");
             assert!(d["description"].as_str().is_some_and(|s| !s.is_empty()));
         }

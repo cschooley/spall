@@ -149,7 +149,7 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host (done), #81 task report, #82 candidate notes, #64 roles, #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
@@ -264,6 +264,16 @@ model call in flight on halt or e-stop. Each call is charged with
 halts). Turns go in the log (4,000 characters) and the whole conversation
 in `<engagements>/tasks/transcripts/<eng>/<T-n>.json`. Tests drive it with
 a scripted `model::Model` via `App::with_model` (tests/lever.rs).
+
+Roles (#64, done): `src/roles.rs` is the permission set (`Role::risks`,
+`may_run`, `may_send`, `may_destroy`); `src/content/roles/*.md` and
+`src/content/skills/*/SKILL.md` are compiled-in text (prompt, skills),
+whose frontmatter a test holds to the code. `agent::Tools::call` checks
+the role after `admit` (refusals audited); `gated_send` refuses a send the
+role can't make before any pause or grant; `tasks::role_fits` refuses
+destructive constraints for any role but tester. Agents see
+`commands::offered_to(role)`; `skill` reads a skill. M6 ships built-ins;
+the pack loader is #31.
 
 ## Testing
 

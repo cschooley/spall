@@ -695,6 +695,26 @@ export const SPECS = [
   {
     "args": {
       "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "a skill's name, like test-authz",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "your role's skills: with no name, list them; with one, how to do that kind of work. Read one before you start that work",
+    "hidden": false,
+    "mcp": true,
+    "name": "skill",
+    "risk": "read",
+    "ui": false,
+    "usage": "skill [name]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
       "properties": {},
       "required": [],
       "type": "object"

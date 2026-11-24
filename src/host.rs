@@ -41,10 +41,10 @@ the tester; you'll be told the outcome here before your next turn.";
 /// The system prompt for `t`. Fixed for the task's whole conversation.
 pub fn system_prompt(t: &Task) -> String {
     format!(
-        "{}\n\n{HOW}\n\nYour task is {} ({:?}).",
+        "{}\n\n{HOW}\n\nYour task is {}.\n\n{}",
         crate::mcp::INSTRUCTIONS,
         t.id,
-        t.role
+        t.role.brief()
     )
 }
 
@@ -242,7 +242,7 @@ impl Host {
         } else {
             t
         };
-        let tools: Vec<ToolDef> = crate::model::tool_defs();
+        let tools: Vec<ToolDef> = crate::model::tool_defs(t.role);
         let system = system_prompt(&t);
         let mut c = self
             .read_transcript(eng, id)

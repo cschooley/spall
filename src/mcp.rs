@@ -147,15 +147,9 @@ impl Server {
         authorized(&e.rules, &e.period(), &scope, jiff::Timestamp::now())
             .map_err(|why| format!("no task for this session: {why}"))?;
         let role = match query.get("role").map(String::as_str) {
-            None | Some("mapper") => Role::Mapper,
-            Some("scoper") => Role::Scoper,
-            Some("tester") => Role::Tester,
-            Some("reporter") => Role::Reporter,
-            Some(other) => {
-                return Err(format!(
-                    "role {other:?}: scoper, mapper, tester or reporter"
-                ))
-            }
+            None => Role::Mapper,
+            Some(name) => Role::parse(name)
+                .ok_or_else(|| format!("role {name:?}: scoper, mapper, tester or reporter"))?,
         };
         let client: String = client
             .chars()
@@ -237,18 +231,21 @@ impl Server {
             &task,
             None,
         );
-        let status = self
+        let found = self
             .tools
             .replayer
             .tasks
-            .get(&self.tools.replayer.engagements.active().id, &task)
+            .get(&self.tools.replayer.engagements.active().id, &task);
+        let status = found
+            .as_ref()
             .map(|t| t.status.as_str())
             .unwrap_or("unknown");
+        let brief = found.map(|t| t.role.brief()).unwrap_or_default();
         let result = json!({
             "protocolVersion": version,
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "spall", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": format!("{INSTRUCTIONS}\n\nThis session works under task {task} (now {status})."),
+            "instructions": format!("{INSTRUCTIONS}\n\nThis session works under task {task} (now {status}).\n\n{brief}"),
         });
         let mut res = json_response(StatusCode::OK, &rpc_result(id, result));
         if let Ok(v) = HeaderValue::from_str(&sid) {
@@ -320,7 +317,14 @@ impl Server {
         }
         let answer = match method {
             "ping" => rpc_result(&id, json!({})),
-            "tools/list" => rpc_result(&id, json!({ "tools": agent::definitions() })),
+            "tools/list" => {
+                let role = r
+                    .tasks
+                    .get(&engagement, &task)
+                    .map(|t| t.role)
+                    .unwrap_or(crate::tasks::Role::Scoper);
+                rpc_result(&id, json!({ "tools": agent::definitions(role) }))
+            }
             "tools/call" => {
                 let name = params["name"].as_str().unwrap_or("");
                 let out = self.tools.call(&task, name, &params["arguments"]).await;

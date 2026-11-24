@@ -2424,7 +2424,7 @@ async fn agent_setup_with(
     let res = post_text(
         spall,
         "/api/tasks",
-        &format!(r#"{{"goal":"map","role":"mapper","constraints":{constraints}}}"#),
+        &format!(r#"{{"goal":"map","role":"tester","constraints":{constraints}}}"#),
         None,
     )
     .await;
@@ -2648,6 +2648,115 @@ async fn outside_the_rules_or_scope_denies_outside_the_task_pauses() {
         "{body}"
     );
     assert!(stub.replays().is_empty());
+}
+
+/// A role caps its task (#64): each role against each kind of send and
+/// tool, through the gate, as the table in docs/ux.md (Roles) says. A send
+/// the role can't make is refused, never paused: no approval widens a role.
+#[tokio::test]
+async fn each_role_is_refused_or_allowed_through_the_gate_as_the_table_says() {
+    let (_dir, stub, spall, r) = agent_setup("{}").await;
+    let eng = r.engagements.active().id;
+    // T-1 is the tester; one more task per other role, running.
+    for role in ["scoper", "mapper", "reporter"] {
+        let res = post_text(
+            spall,
+            "/api/tasks",
+            &format!(r#"{{"goal":"{role} work","role":"{role}"}}"#),
+            None,
+        )
+        .await;
+        let id = body_json(&res)["id"].as_str().unwrap().to_string();
+        let res = send_text(
+            spall,
+            "PATCH",
+            &format!("/api/tasks/{id}"),
+            r#"{"op":"approve"}"#,
+            None,
+        )
+        .await;
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+        r.tasks
+            .transition(&eng, &id, spall::tasks::Status::Running, None, &now())
+            .unwrap();
+    }
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    // (task, role, safe GET, unsafe POST)
+    let table = [
+        ("T-1", "tester", 200, 202),
+        ("T-2", "scoper", 403, 403),
+        ("T-3", "mapper", 200, 403),
+        ("T-4", "reporter", 403, 403),
+    ];
+    for (id, role, get, post) in table {
+        let before = stub.replays().len();
+        let (status, body) = agent_send(&r, id, r#"{"id":"e1"}"#).await;
+        assert_eq!(status, get, "{role} GET: {body}");
+        let (status, body) = agent_send(&r, id, r#"{"id":"e1","method":"POST"}"#).await;
+        assert_eq!(status, post, "{role} POST: {body}");
+        if post == 403 {
+            assert!(body["error"].as_str().unwrap().contains(role), "{body}");
+            assert_eq!(
+                task_of(&r, id).status,
+                spall::tasks::Status::Running,
+                "{role}: refused, not paused"
+            );
+        }
+        let sent = stub.replays().len() - before;
+        assert_eq!(sent, usize::from(get == 200), "{role}");
+        // Tools: what the role may run, refused (and audited) otherwise.
+        let out = tools.call(id, "filter", &serde_json::json!({})).await;
+        assert!(!out.is_error, "{role} filter: {}", out.text);
+        let out = tools.call(id, "skill", &serde_json::json!({})).await;
+        assert!(
+            !out.is_error && out.text.contains(role),
+            "{role} skill: {}",
+            out.text
+        );
+        let out = tools
+            .call(
+                id,
+                "fetch",
+                &serde_json::json!({"url": "http://example.com/x"}),
+            )
+            .await;
+        let may_fetch = matches!(role, "tester" | "mapper");
+        assert_eq!(
+            out.text.contains("can't run fetch"),
+            !may_fetch,
+            "{role} fetch: {}",
+            out.text
+        );
+        let out = tools
+            .call(
+                id,
+                "propose_finding",
+                &serde_json::json!({"exchange_id": "e1", "rule": "WSTG-INFO-02", "message": "m"}),
+            )
+            .await;
+        assert_eq!(
+            out.text.contains("doesn't propose findings"),
+            role == "scoper",
+            "{role}: {}",
+            out.text
+        );
+        // Policy stays refused for every role, by admit before the role.
+        let out = tools.call(id, "scope", &serde_json::json!({})).await;
+        assert!(out.is_error, "{role} scope");
+    }
+    let refusals: Vec<_> = audit_records(&_dir.path().join("api-token"))
+        .into_iter()
+        .filter(|a| a["outcome"] == "denied" && a["actor"] == "agent")
+        .collect();
+    assert!(
+        refusals
+            .iter()
+            .any(|a| a["task"] == "T-2" && a["reason"].as_str().unwrap_or("").contains("fetch")),
+        "{refusals:?}"
+    );
 }
 
 #[tokio::test]
@@ -3511,7 +3620,8 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "rules",
             "task",
             "propose_finding",
-            "report"
+            "report",
+            "skill"
         ]
     );
 

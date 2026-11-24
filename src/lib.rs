@@ -21,6 +21,7 @@ pub mod model;
 pub mod openapi;
 pub mod replay;
 pub mod roe;
+pub mod roles;
 pub mod rules;
 pub mod scope_list;
 pub mod stack;

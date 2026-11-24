@@ -235,8 +235,8 @@ pub struct ToolDef {
 }
 
 /// The registry's agent commands, as tools.
-pub fn tool_defs() -> Vec<ToolDef> {
-    crate::commands::offered()
+pub fn tool_defs(role: crate::tasks::Role) -> Vec<ToolDef> {
+    crate::commands::offered_to(role)
         .map(|c| ToolDef {
             name: c.name.to_string(),
             description: c.desc.to_string(),
