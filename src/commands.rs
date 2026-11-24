@@ -268,6 +268,37 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "fetch",
+        usage: "fetch <url> [--head] [--header 'N: v']",
+        desc: "send a new GET (or HEAD) to a URL in scope; crawling is fetch in a loop",
+        // A primitive (#74): replay can't change the URL, so an agent could
+        // only resend what was captured. The same gate as replay.
+        risk: Risk::Send,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    ("url", text("an absolute http or https URL")),
+                    (
+                        "method",
+                        json!({"type": "string", "enum": ["GET", "HEAD"], "description": "GET (the default) or HEAD"}),
+                    ),
+                    (
+                        "headers",
+                        json!({
+                            "type": "array",
+                            "description": "the request's headers, in order (without them taphttp sends its own user-agent)",
+                            "items": obj(&[("name", text("header name")), ("value", text("header value"))], &["name", "value"]),
+                        }),
+                    ),
+                ],
+                &["url"],
+            )
+        },
+    },
+    Command {
         name: "scope",
         usage: "scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]",
         desc: "hosts replay may send to; exclusions (!entry) win; changes last until restart",
@@ -853,6 +884,7 @@ mod tests {
     fn the_registry_holds_what_ships() {
         let risk = |n: &str| find(n).map(|c| c.risk);
         assert_eq!(risk("replay"), Some(Risk::Send));
+        assert_eq!(risk("fetch"), Some(Risk::Send));
         assert_eq!(risk("flag"), Some(Risk::Record));
         for n in ["scope", "engagement", "roe", "estop"] {
             assert_eq!(risk(n), Some(Risk::Policy), "{n}");
@@ -883,6 +915,7 @@ mod tests {
                 "filter",
                 "open",
                 "replay",
+                "fetch",
                 "hosts",
                 "rules",
                 "task",

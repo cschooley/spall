@@ -61,7 +61,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 docker compose up --build
 ```
 
-taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.6.1`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
+taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.7.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
 
 ```sh
 curl -x http://127.0.0.1:8080 http://example.com
@@ -153,7 +153,7 @@ Everything shown comes from captured traffic, so it's treated as hostile: render
 
 ## Connect an agent (MCP)
 
-spall has an MCP server, so an MCP client such as Claude Code or Claude Desktop can work an engagement under a task you approve. The client runs the agent loop; spall never holds a model key. Over MCP an agent can list and read traffic (`filter`, `open`), replay through the same gate you use (`replay`), see hosts and their scope state (`hosts`), search the rule catalog (`rules`), see its own task (`task`) and propose findings (`propose_finding`). It can't change scope, the rules or engagements, can't confirm its own sends, and can't promote or export anything.
+spall has an MCP server, so an MCP client such as Claude Code or Claude Desktop can work an engagement under a task you approve. The client runs the agent loop; spall never holds a model key. Over MCP an agent can list and read traffic (`filter`, `open`), replay through the same gate you use (`replay`), send a new GET or HEAD to a URL in scope through that gate too (`fetch`; a crawl is `fetch` in a loop), see hosts and their scope state (`hosts`), search the rule catalog (`rules`), see its own task (`task`) and propose findings (`propose_finding`). It can't change scope, the rules or engagements, can't confirm its own sends, and can't promote or export anything.
 
 1. Let agents act on the engagement: `roe set agents yes` in the console.
 2. Make a task and approve it (or let the client's first connection make a draft and approve that). Until a task is approved and running, nothing the agent does sends anything.
@@ -268,6 +268,7 @@ Each engagement carries rules that the gate enforces on every replay. Agents wil
 - `GET /api/exchanges/{id}`: one exchange, or 404
 - `GET /api/status`: `{"source": "lever" | "log", "connected": bool | null, "proxy": "127.0.0.1:8080", "replay": bool, "scope": [...], "scope_all": bool, "engagement": {"id", "name"} | null, "testing": {"allowed", "reason"} | null, "to_triage": n | null, "export": {"promoted", "unredacted_allowed"} | null, "waiting_approval": n | null, "estop": {"since", "by", "reason"} | null, "flux": {"crate", "spec", "rules"}}` for the status bar
 - `POST /api/replay`: `{"id", "method"?, "req_headers"?: [[name, value], ...], "body"?, "body_encoding"?: "utf8" | "base64", "confirm"?}`. Same-origin JSON only. 200 with the recorded replay; 502 with the recorded failed attempt (its `error` says why); 403 out of scope or outside the rules of engagement; 429 over the rate ceiling (`Retry-After`); 428 with a `confirm` token for an unsafe method; 409 if that token is unknown, used, expired or for a different request; 400 bad input; 404 no such exchange; 503 without `--taphttp-api`
+- `POST /api/fetch`: `{"url", "method"?: "GET" | "HEAD", "req_headers"?: [[name, value], ...], "confirm"?}`. A new request (taphttp's `POST /send`), not a replay: an absolute `http`/`https` URL with no user info. The same gate and answers as `/api/replay` (no 404: there's no exchange to look up). Agents get it as the `fetch` tool; a crawl is `fetch` in a loop
 - `POST /api/scope`: `{"op": "add" | "exclude" | "remove", "entry": "..."}` or `{"op": "all", "on": bool}`. Same-origin JSON only; audited with the entries before and after; entries are saved on the active engagement, `all` lasts until restart. Returns `{"scope": [...], "all": bool, "changed": bool}`; exclusions are listed as `!entry`
 - `POST /api/scope/parse`: `{"text"}` previews a pasted list without changing anything: `{"items": [{"line", "source", "entry", "exclude", "error", "notes", "present"}], "add": [...], "exclude": [...]}`. `{"op": "apply", "add": [...], "exclude": [...]}` on `/api/scope` then applies them as one audited, all-or-nothing change
 - `GET /api/ca`: the CA's public details from taphttp's `/info`: `{"sha256", "subject", "not_before", "not_after", "taphttp_version", "proxy"}`. `GET /api/ca.pem` and `/api/ca.der`: the certificate as a download (needs taphttp 0.6.1 or later). The key never leaves taphttp, and the API token never reaches the browser

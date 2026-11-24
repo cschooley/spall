@@ -20,7 +20,7 @@ import { EngagementView } from "./components/EngagementView.tsx";
 import { FindingsView } from "./components/FindingsView.tsx";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
 import { applyHeaderEdits, draftOf, replayBodyFor, type Draft } from "./lib/edit.ts";
-import { ARM_MS, armedFor, armLabel, postReplay, type Armed, type ReplayBody } from "./lib/replay.ts";
+import { ARM_MS, armedFor, armLabel, postFetch, postReplay, type Armed, type FetchBody, type ReplayBody } from "./lib/replay.ts";
 import { isEmptyQuery, matchesQuery, parseFilter } from "./lib/query.ts";
 import { litSegments, requestRate } from "./lib/rate.ts";
 import {
@@ -358,6 +358,34 @@ export function App() {
     [status.replay, armed, out, selected, rows, findEntry],
   );
 
+  // A new GET or HEAD from the console (#74): the same gate as a replay.
+  const fetchUrl = useCallback(
+    async (body: FetchBody, yes: boolean) => {
+      const what = `fetch ${body.method ?? "GET"} ${body.url}`;
+      if (!status.replay) return out(`${what}: fetch needs taphttp's lever API (log-file mode)`, "warn");
+      let result = await postFetch(body);
+      if (result.kind === "confirm" && yes) result = await postFetch({ ...body, confirm: result.token });
+      switch (result.kind) {
+        case "sent": {
+          const e = result.entry;
+          out(`${what} → ${statusLine(e.status)}${e.duration_ms !== null ? ` in ${durationText(e.duration_ms)}` : ""}, recorded as ${shortId(e.id)}`, "sys");
+          setSelected(e);
+          break;
+        }
+        case "failed":
+          out(`${what} failed: ${result.entry.error ?? "no response"}; recorded as ${shortId(result.entry.id)}`, "warn");
+          setSelected(result.entry);
+          break;
+        case "confirm":
+          out(`${what}: ${result.reason}. Run it again with --yes to send it`, "sys");
+          break;
+        default:
+          out(`${what}: ${result.reason}`, "warn");
+      }
+    },
+    [status.replay, out],
+  );
+
   // The open exchange's replays and chain (#21).
   const replayHistory = useReplayHistory(
     selected?.id ?? null,
@@ -422,6 +450,7 @@ export function App() {
         return true;
       },
       replay,
+      fetchUrl,
       scope: () => (status.replay ? { entries: status.scope, all: status.scopeAll } : null),
       changeScope: async (change) => {
         try {
@@ -557,7 +586,7 @@ export function App() {
         }
       },
     }),
-    [out, focusFilter, openById, selected, clearAll, setTheme, replay, status.replay, status.scope, status.scopeAll],
+    [out, focusFilter, openById, selected, clearAll, setTheme, replay, fetchUrl, status.replay, status.scope, status.scopeAll],
   );
 
   const run = useCallback((line: string) => void execute(line, ctx), [ctx]);

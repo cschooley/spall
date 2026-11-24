@@ -16,6 +16,15 @@ export interface ReplayBody {
   confirm?: string;
 }
 
+/** What spall's POST /api/fetch accepts (#74): a new GET or HEAD. */
+export interface FetchBody {
+  url: string;
+  method?: "GET" | "HEAD";
+  /** The whole ordered header list; without it taphttp sends its own user-agent. */
+  req_headers?: [string, string][];
+  confirm?: string;
+}
+
 export type ReplayResult =
   /** Sent; taphttp recorded the replay. */
   | { kind: "sent"; entry: TrafficEntry }
@@ -62,10 +71,10 @@ export function readReplayResponse(status: number, body: unknown): ReplayResult 
   return { kind: "error", reason: msg };
 }
 
-export async function postReplay(body: ReplayBody, fetchFn: typeof fetch = fetch): Promise<ReplayResult> {
+async function post(path: string, body: unknown, fetchFn: typeof fetch): Promise<ReplayResult> {
   let res: Response;
   try {
-    res = await fetchFn("/api/replay", {
+    res = await fetchFn(path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -80,6 +89,15 @@ export async function postReplay(body: ReplayBody, fetchFn: typeof fetch = fetch
     // not JSON: readReplayResponse reports the status
   }
   return readReplayResponse(res.status, json);
+}
+
+export function postReplay(body: ReplayBody, fetchFn: typeof fetch = fetch): Promise<ReplayResult> {
+  return post("/api/replay", body, fetchFn);
+}
+
+/** A new request through the same gate (#74); the answers read like a replay's. */
+export function postFetch(body: FetchBody, fetchFn: typeof fetch = fetch): Promise<ReplayResult> {
+  return post("/api/fetch", body, fetchFn);
 }
 
 /** The arming, if it still applies to this exchange now. */

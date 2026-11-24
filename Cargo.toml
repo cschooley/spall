@@ -34,7 +34,7 @@ serde_json = { version = "1", features = ["raw_value"] }
 # defines no Finding, Severity or Evidence of its own. Bump deliberately.
 flux = { git = "https://github.com/cschooley/flux", tag = "v0.2.1" }
 # Traffic log schema, owned by taphttp. Bump the tag deliberately.
-taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.6.1" }
+taphttp-types = { git = "https://github.com/cschooley/taphttp", tag = "v0.7.0" }
 tokio = { version = "1", features = ["io-std", "io-util", "fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }

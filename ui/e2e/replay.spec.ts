@@ -194,6 +194,44 @@ test("the console's replay matches the button, and --yes confirms in one step", 
   await expect(page.locator(".con-log")).toContainText("*.example");
 });
 
+test("the console's fetch sends a new GET to /api/fetch and opens what was recorded (#74)", async ({ page }) => {
+  const t = token();
+  await replayAvailable(page, ["*.example"]);
+  const bodies: unknown[] = [];
+  const fetched = entry({ id: `${t}-s1`, host: `${t}.example`, url: `http://${t}.example/assets/` });
+  await page.route("**/api/fetch", async (r: Route) => {
+    const body = r.request().postDataJSON() as { url: string };
+    bodies.push(body);
+    expect(r.request().headers()["content-type"]).toBe("application/json");
+    await r.fulfill(
+      body.url.includes("evil")
+        ? { status: 403, json: { decision: "deny", error: '"evil.test" is not in scope' } }
+        : { status: 200, json: fetched },
+    );
+  });
+  await page.goto("/#traffic");
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("`");
+  const input = page.getByLabel("Console command");
+
+  await input.fill(`fetch http://${t}.example/assets/ --header 'Accept: */*'`);
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText(`fetch GET http://${t}.example/assets/ → 200`);
+  await expect(page.locator(".con-log")).toContainText("recorded as");
+  await expect(page.locator(".inspector")).toContainText(`http://${t}.example/assets/`);
+
+  await input.fill("fetch http://evil.test/");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText("is not in scope");
+  await input.fill("fetch --method POST http://x.example/");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".con-log")).toContainText("other methods are replay's");
+  expect(bodies).toEqual([
+    { url: `http://${t}.example/assets/`, req_headers: [["Accept", "*/*"]] },
+    { url: "http://evil.test/" },
+  ]);
+});
+
 test("without the lever API, Replay is offered but disabled, and says why", async ({ page }) => {
   const t = token();
   const orig = entry({ host: `${t}.example`, url: `http://${t}.example/plain` });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ARM_MS, armLabel, armedFor, postReplay, readReplayResponse, type Armed } from "./replay.ts";
+import { ARM_MS, armLabel, armedFor, postFetch, postReplay, readReplayResponse, type Armed } from "./replay.ts";
 import type { TrafficEntry } from "../types.ts";
 
 const entry: TrafficEntry = {
@@ -60,6 +60,21 @@ test("postReplay sends same-origin JSON and survives a network failure", async (
   assert.deepEqual(await postReplay({ id: "o1" }, down), { kind: "error", reason: "spall unreachable" });
   const notJson = (async () => new Response("<html>", { status: 502 })) as typeof fetch;
   assert.equal((await postReplay({ id: "o1" }, notJson)).kind, "error");
+});
+
+test("postFetch sends a new request to /api/fetch and reads the same answers", async () => {
+  const calls: { url: string; init: RequestInit }[] = [];
+  const ok = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify(entry), { status: 200 });
+  }) as typeof fetch;
+  const body = { url: "http://example.com/", method: "HEAD" as const };
+  assert.deepEqual(await postFetch(body, ok), { kind: "sent", entry });
+  assert.equal(calls[0]!.url, "/api/fetch");
+  assert.equal(calls[0]!.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(calls[0]!.init.body)), body);
+  const denied = (async () => new Response(JSON.stringify({ error: "not in scope" }), { status: 403 })) as typeof fetch;
+  assert.deepEqual(await postFetch(body, denied), { kind: "denied", reason: "not in scope" });
 });
 
 test("arming is for one exchange and a few seconds", () => {

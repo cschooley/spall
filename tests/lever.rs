@@ -5,7 +5,8 @@
 //! `GET /exchanges/{id}`, a `/feed` WebSocket that resumes with
 //! `?since=<id>` and sends `reset` / `lagged` control frames, and
 //! `POST /replay` (200 with the recorded replay, 502 with a recorded
-//! failure, 400 for bad input).
+//! failure, 400 for bad input), and v0.7.0's `POST /send` (the same
+//! answers, for a new request).
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, RawQuery, Request, State};
@@ -50,6 +51,8 @@ struct StubState {
     live: Mutex<Option<broadcast::Sender<String>>>,
     /// Body of each POST /replay, parsed.
     replays: Mutex<Vec<serde_json::Value>>,
+    /// Body of each POST /send, parsed.
+    sends: Mutex<Vec<serde_json::Value>>,
     /// Where it listens, for a restart against the same stub.
     addr: Mutex<Option<SocketAddr>>,
 }
@@ -79,6 +82,45 @@ impl Stub {
     }
     fn replays(&self) -> Vec<serde_json::Value> {
         self.0.replays.lock().unwrap().clone()
+    }
+    fn sends(&self) -> Vec<serde_json::Value> {
+        self.0.sends.lock().unwrap().clone()
+    }
+}
+
+/// `POST /send`: a URL with `fails` in it gets a recorded failure (502),
+/// one with `bad` a 400; anything else a recorded exchange `s-<n>`.
+async fn send(State(s): State<Stub>, body: String) -> Response {
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let n = {
+        let mut sends = s.0.sends.lock().unwrap();
+        sends.push(v.clone());
+        sends.len()
+    };
+    let url = v["url"].as_str().unwrap().to_string();
+    let method = v["method"].as_str().unwrap_or("GET").to_string();
+    let id = format!("s-{n}");
+    let json = |status, extra: &str| {
+        let e = entry(&id)
+            .replace(&format!("http://example.com/{id}"), &url)
+            .replace(r#""method":"GET""#, &format!(r#""method":"{method}""#))
+            .replace(
+                r#""replay_of":null"#,
+                &format!(r#""replay_of":null,"origin":"send"{extra}"#),
+            );
+        // Recorded, like taphttp: in history and on the feed.
+        s.push_json(&id, e.clone());
+        (status, [(header::CONTENT_TYPE, "application/json")], e).into_response()
+    };
+    if url.contains("fails") {
+        json(
+            StatusCode::BAD_GATEWAY,
+            r#","error":"connect error: Connection refused""#,
+        )
+    } else if url.contains("bad") {
+        (StatusCode::BAD_REQUEST, "invalid request").into_response()
+    } else {
+        json(StatusCode::OK, "")
     }
 }
 
@@ -212,6 +254,7 @@ async fn start_stub() -> (Stub, SocketAddr) {
         .route("/exchanges/{id}", get(exchange))
         .route("/feed", get(feed))
         .route("/replay", post(replay))
+        .route("/send", post(send))
         .route("/info", get(|| async { axum::Json(serde_json::json!({
             "taphttp_version": "0.6.1",
             "ca": { "subject": "CN=taphttp CA", "sha256": "EB:6F:71:3A", "not_before": "2026-11-20T00:00:00Z", "not_after": "2036-11-20T00:00:00Z" },
@@ -2853,6 +2896,231 @@ async fn nothing_uncharged_is_sent_after_the_e_stop() {
     assert_eq!(stub.replays().len(), after);
 }
 
+async fn agent_fetch(
+    r: &spall::replay::Replayer,
+    task: &str,
+    json: &str,
+) -> (u16, serde_json::Value) {
+    let res = r
+        .agent_fetch(task, serde_json::from_str(json).unwrap())
+        .await;
+    let status = res.status().as_u16();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or_default())
+}
+
+#[tokio::test]
+async fn an_agent_fetches_a_new_url_through_the_same_gate_as_a_replay() {
+    let (dir, stub, spall, r) = agent_setup(r#"{"budget":5}"#).await;
+
+    // In scope: sent through taphttp's /send, attributed, charged, logged.
+    let (status, body) = agent_fetch(
+        &r,
+        "T-1",
+        r#"{"url":"http://example.com/assets/","meta":{"actor":"human"}}"#,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["id"], "s-1");
+    assert_eq!(body["origin"], "send");
+    assert_eq!(
+        stub.sends(),
+        vec![serde_json::json!({
+            "method": "GET",
+            "url": "http://example.com/assets/",
+            "meta": {"actor": "agent", "task": "T-1"},
+        })],
+        "spall's attribution, never the caller's"
+    );
+    assert!(stub.replays().is_empty());
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.spent, 1);
+    let last = serde_json::to_value(t.log.last().unwrap()).unwrap();
+    assert_eq!(
+        (
+            last["kind"].as_str(),
+            last["outcome"].as_str(),
+            last["exchange"].as_str(),
+            last["target"].as_str()
+        ),
+        (
+            Some("request"),
+            Some("sent"),
+            Some("s-1"),
+            Some("http://example.com/assets/")
+        )
+    );
+    let recs = audit_records(&dir.path().join("api-token"));
+    let rec = recs.iter().rev().find(|a| a["action"] == "fetch").unwrap();
+    assert_eq!(
+        (
+            rec["actor"].as_str(),
+            rec["task"].as_str(),
+            rec["outcome"].as_str(),
+            rec["result_id"].as_str(),
+            rec["target"].as_str()
+        ),
+        (
+            Some("agent"),
+            Some("T-1"),
+            Some("sent"),
+            Some("s-1"),
+            Some("http://example.com/assets/")
+        )
+    );
+
+    // HEAD too, with the agent's own headers.
+    let (status, body) = agent_fetch(
+        &r,
+        "T-1",
+        r#"{"url":"http://example.com/robots.txt","method":"HEAD","req_headers":[["accept","text/plain"]]}"#,
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        stub.sends()[1],
+        serde_json::json!({
+            "method": "HEAD",
+            "url": "http://example.com/robots.txt",
+            "req_headers": [["accept", "text/plain"]],
+            "meta": {"actor": "agent", "task": "T-1"},
+        })
+    );
+
+    // Only GET and HEAD, absolute http(s) URLs, valid headers: else 400,
+    // nothing sent, nothing charged.
+    for bad in [
+        r#"{"url":"http://example.com/","method":"POST"}"#,
+        r#"{"url":"http://example.com/","method":"get"}"#,
+        r#"{"url":"/relative"}"#,
+        r#"{"url":"ftp://example.com/"}"#,
+        r#"{"url":"http://example.com/a\r\nb"}"#,
+        r#"{"url":"http://example.com/","req_headers":[["bad name","x"]]}"#,
+    ] {
+        let (status, body) = agent_fetch(&r, "T-1", bad).await;
+        assert_eq!(status, 400, "{bad}: {body}");
+    }
+    assert_eq!(stub.sends().len(), 2);
+    assert_eq!(task_of(&r, "T-1").spent, 2);
+
+    // A failed attempt is recorded; both are charged (the charge comes
+    // before the send, as for a replay, so the budget is exact).
+    let (status, body) = agent_fetch(&r, "T-1", r#"{"url":"http://example.com/fails"}"#).await;
+    assert_eq!(status, 502, "{body}");
+    assert_eq!(body["id"], "s-3");
+    let (status, _) = agent_fetch(&r, "T-1", r#"{"url":"http://example.com/bad"}"#).await;
+    assert_eq!(status, 400);
+
+    // Out of scope: denied, the task keeps running.
+    let (status, body) = agent_fetch(&r, "T-1", r#"{"url":"http://evil.test/"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("not in scope"),
+        "{body}"
+    );
+    // The stack: refused whatever the scope, not approvable.
+    let (status, body) = agent_fetch(&r, "T-1", r#"{"url":"http://spall:3000/api/status"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("can't be approved"),
+        "{body}"
+    );
+    assert_eq!(task_of(&r, "T-1").status, spall::tasks::Status::Running);
+    assert_eq!(stub.sends().len(), 4, "neither reached taphttp");
+
+    // A human fetches from the console: the human's, not charged.
+    let res = post_text(
+        spall,
+        "/api/fetch",
+        r#"{"url":"http://example.com/x"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert_eq!(
+        stub.sends()[4]["meta"],
+        serde_json::json!({"actor": "human"})
+    );
+    let res = post_text(spall, "/api/fetch", r#"{"url":"http://evil.test/"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 403"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/fetch",
+        r#"{"url":"http://example.com/"}"#,
+        Some("Content-Type: application/json\r\nOrigin: http://evil.test\r\n"),
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 403"), "cross-site: {res}");
+    assert_eq!(stub.sends().len(), 5);
+    assert_eq!(task_of(&r, "T-1").spent, 4);
+}
+
+#[tokio::test]
+async fn a_fetch_outside_the_task_pauses_and_the_e_stop_stops_it() {
+    let (_dir, stub, spall, r) = agent_setup_with(
+        r#"{"hosts":["example.com"]}"#,
+        &["--scope", "example.com,other.test"],
+        &[],
+    )
+    .await;
+    let (status, body) = agent_fetch(&r, "T-1", r#"{"url":"http://other.test/"}"#).await;
+    assert_eq!(status, 202, "{body}");
+    let p = task_of(&r, "T-1")
+        .pending
+        .expect("the exact request is kept");
+    assert_eq!(
+        (p.method.as_str(), p.target.as_str()),
+        ("GET", "http://other.test/")
+    );
+    assert_eq!(
+        p.request,
+        serde_json::json!({"method": "GET", "url": "http://other.test/", "meta": {"actor": "agent", "task": "T-1"}})
+    );
+    assert!(stub.sends().is_empty());
+
+    // Approved once: that exact fetch goes, once.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_once"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let (status, body) = agent_fetch(&r, "T-1", r#"{"url":"http://other.test/"}"#).await;
+    assert_eq!(status, 200, "{body}");
+    let (status, _) = agent_fetch(&r, "T-1", r#"{"url":"http://other.test/"}"#).await;
+    assert_eq!(status, 202, "used up");
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"deny","reason":"no"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+
+    let res = post_text(spall, "/api/estop", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let (status, body) = agent_fetch(&r, "T-1", r#"{"url":"http://example.com/"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("e-stop is engaged"),
+        "{body}"
+    );
+    assert_eq!(stub.sends().len(), 1);
+}
+
 fn stub_addr(stub: &Stub) -> SocketAddr {
     stub.0.addr.lock().unwrap().unwrap()
 }
@@ -3163,6 +3431,7 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "filter",
             "open",
             "replay",
+            "fetch",
             "hosts",
             "rules",
             "task",
@@ -3363,6 +3632,54 @@ async fn an_mcp_session_without_a_task_gets_a_draft_that_sends_nothing() {
             .contains("don't allow agents"),
         "{v}"
     );
+}
+
+#[tokio::test]
+async fn an_agent_fetches_over_mcp_and_what_it_fetched_is_evidence() {
+    let (dir, stub, spall, _r) = agent_setup("{}").await;
+    let mut m = Mcp::new(spall, &dir.path().join("api-token"));
+    m.initialize("?task=T-1").await;
+    let (text, is_err) = m
+        .call(
+            "fetch",
+            serde_json::json!({"url": "http://example.com/assets/", "headers": [{"name": "accept", "value": "*/*"}]}),
+        )
+        .await;
+    assert!(!is_err, "{text}");
+    assert!(
+        text.starts_with("sent: fetch s-1 (GET http://example.com/assets/)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("untrusted"),
+        "traffic comes back wrapped: {text}"
+    );
+    assert_eq!(
+        stub.sends()[0]["req_headers"],
+        serde_json::json!([["accept", "*/*"]])
+    );
+
+    // What it fetched counts as evidence it sent.
+    let (text, is_err) = m
+        .call(
+            "propose_finding",
+            serde_json::json!({"exchange_id": "s-1", "rule": "WSTG-CONF-04", "message": "a directory listing"}),
+        )
+        .await;
+    assert!(!is_err && text.starts_with("proposed c-"), "{text}");
+
+    let (text, is_err) = m
+        .call("fetch", serde_json::json!({"url": "http://evil.test/"}))
+        .await;
+    assert!(is_err && text.starts_with("refused: "), "{text}");
+    let (text, is_err) = m
+        .call(
+            "fetch",
+            serde_json::json!({"url": "http://example.com/", "method": "POST"}),
+        )
+        .await;
+    assert!(is_err && text.contains("GET or HEAD"), "{text}");
+    assert_eq!(stub.sends().len(), 1);
 }
 
 #[tokio::test]

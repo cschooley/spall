@@ -5,10 +5,6 @@ here.
 
 ## Open
 
-### Send a new request (not a replay)
-
-[taphttp#22](https://github.com/cschooley/taphttp/issues/22): `POST /send`, shaped like `POST /replay` but with a `url` in place of an exchange `id`, for spall's `fetch` primitive (spall#74). Recorded and attributed (`meta`) like a replay, with the same 502/400 semantics. spall does the scoping; taphttp should still refuse targets that are its own listeners (defense in depth for spall#73).
-
 ### Distinct hosts in history
 
 [taphttp#21](https://github.com/cschooley/taphttp/issues/21): `GET /hosts`, the distinct hosts in history with counts and first/last seen. spall#39 builds scope from traffic, but spall only sees its backfill (the newest `--history` exchanges) and the live feed, so a host seen once early in a long engagement never reaches its list. spall keeps the scope state; taphttp only counts.
@@ -24,6 +20,18 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.7.0
+
+- **Send a new request (not a replay):**
+  [taphttp#22](https://github.com/cschooley/taphttp/issues/22).
+  `POST /send` takes `{method?, url, req_headers?, body?, body_encoding?,
+  meta?}`, answers like `/replay` (200, 502 with a recorded failure, 400
+  nothing sent, 403 with `--api-no-send`) and records `origin: "send"`
+  (schema v6; every entry now has `origin`). `/send` and `/replay` refuse
+  any target that resolves to taphttp's own listeners, resolving once so a
+  rebinding name can't slip past: the second layer behind spall#73. It is
+  spall#74's `fetch`.
 
 ## Resolved in v0.6.0
 

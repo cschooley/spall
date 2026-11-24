@@ -99,15 +99,19 @@ import (`src/openapi.rs`), CA setup from taphttp's `/info` and
 `/ca.pem`; the Engagement view (`#engagement`, key `1`). #33
 (scope-limited CA) moved to `later`.
 
-taphttp: v0.6.1 (`taphttp-types` 0.5.0, schema v5). `POST /replay` takes
+taphttp: v0.7.0 (`taphttp-types` 0.6.0, schema v6: every entry has
+`origin`, `proxy|replay|send`). `POST /replay` takes
 `{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
 `req_headers` is the whole ordered list; `meta` is attribution stored on
 the recorded replay, never sent upstream (spall sends `{"actor":
 "human"}`; M6a agents add a task id). A failed attempt is recorded with
 `error` and returned as a 502; a 400 means nothing was sent. `GET
 /exchanges?replay_of=<id>` lists replays. `GET /info`, `/ca.pem`,
-`/ca.der` give the public CA. Recorded `req_headers` are what went on
-the wire: hyper groups a repeated header name at its first position.
+`/ca.der` give the public CA. `POST /send` is a new request
+(`{method?, url, req_headers?, body?, body_encoding?, meta?}`, the same
+answers); `/send` and `/replay` refuse taphttp's own listeners. Recorded
+`req_headers` are what went on the wire: hyper groups a repeated header
+name at its first position.
 
 **M4 "candidates": done** (tag `v0.5.0`, #48: #41-#47, #16). Rule
 catalog (`src/rules.rs`: 74 WSTG v4.2 tests mapped to CWE, plus
@@ -171,7 +175,8 @@ and the work is given again as a new task. Don't add a way out of
 `halted`.
 
 Agents through the gate (#55, done): `Replayer::agent_replay(task, req)`
-is the only agent send path and has no HTTP route (tests reach it via
+and `agent_fetch` (#74, a new GET/HEAD via taphttp `/send`; both share
+`gated_send`) are the only agent send paths and have no HTTP route (tests reach them via
 `spall::build` + `App::run`). Outside the RoE or scope denies; outside
 the task (host, method, unsafe send, time limit, budget) pauses the task
 to `waiting_on_approval` with the exact request in `Task::pending`.

@@ -132,6 +132,10 @@ pub fn router(state: AppState) -> Router {
             "/api/replay",
             post(api_replay).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
         )
+        .route(
+            "/api/fetch",
+            post(api_fetch).layer(DefaultBodyLimit::max(crate::replay::MAX_REQUEST_BYTES)),
+        )
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
@@ -895,6 +899,17 @@ async fn api_replay(State(state): State<AppState>, body: axum::body::Bytes) -> R
         None => json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "replay needs taphttp's lever API (start spall with --taphttp-api)",
+        ),
+    }
+}
+
+/// A new GET or HEAD (#74), through the same gate as a replay.
+async fn api_fetch(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    match &state.replayer {
+        Some(r) => r.handle_fetch(&body).await,
+        None => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "fetch needs taphttp's lever API (start spall with --taphttp-api)",
         ),
     }
 }

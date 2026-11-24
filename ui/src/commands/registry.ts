@@ -9,6 +9,7 @@
 import { THEMES, type ThemeName } from "../lib/theme.ts";
 import type { TrafficEntry } from "../types.ts";
 import type { HostListing } from "../lib/hosts.ts";
+import type { FetchBody } from "../lib/replay.ts";
 import { ruleLine, searchRules, type Catalog } from "../lib/rules.ts";
 import { parseFlagArgs, stateOf, where, type Candidate, type FlagInput, type FlagResult } from "../lib/candidates.ts";
 import type { CaInfo } from "../lib/ca.ts";
@@ -41,6 +42,8 @@ export interface Ctx {
    * (within a few seconds); `yes` does both at once.
    */
   replay(id: string, opts: { yes: boolean; edit?: ReplayEdit }): Promise<void>;
+  /** A new GET or HEAD through the same gate (#74), reporting through out(); `yes` confirms if the rules ask. */
+  fetchUrl(body: FetchBody, yes: boolean): Promise<void>;
   /** The engagement scope; null when replay isn't available. */
   scope(): { entries: readonly string[]; all: boolean } | null;
   /** Change the scope for this run (in memory until restart; audited). */
@@ -250,6 +253,37 @@ export interface Command extends Impl {
 }
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+const FETCH_USAGE = "usage: fetch <url> [--head] [--header 'N: v'] [--yes]";
+
+/** Parse fetch's arguments (#74); a string is a usage error. */
+function parseFetchArgs(args: string[]): { body: FetchBody; yes: boolean } | string {
+  let url: string | undefined;
+  let yes = false;
+  let head = false;
+  const headers: [string, string][] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "--yes") yes = true;
+    else if (a === "--head") head = true;
+    else if (a === "--header") {
+      const h = args[++i];
+      if (h === undefined) return "fetch: --header needs a value";
+      const colon = h.indexOf(":");
+      const name = colon < 0 ? "" : h.slice(0, colon).trim();
+      if (!TOKEN.test(name)) return `fetch: --header wants 'Name: value', got ${h}`;
+      headers.push([name, h.slice(colon + 1).trim()]);
+    } else if (a.startsWith("-")) return `fetch: unknown option ${a} (GET, or HEAD with --head; other methods are replay's)`;
+    else if (url === undefined) url = a;
+    else return FETCH_USAGE;
+  }
+  if (url === undefined) return FETCH_USAGE;
+  if (!/^https?:\/\/[^/\s]/i.test(url)) return `fetch: ${url} isn't an absolute http or https URL`;
+  const body: FetchBody = { url };
+  if (head) body.method = "HEAD";
+  if (headers.length > 0) body.req_headers = headers;
+  return { body, yes };
+}
 export const VIEWS = ["engagement", "traffic", "surface", "tasks", "findings"] as const;
 
 const IMPLS: readonly Impl[] = [
@@ -298,6 +332,16 @@ const IMPLS: readonly Impl[] = [
       if (!id) return ctx.out("usage: replay <id> [--yes] (or select an exchange)", "warn");
       if (!ID.test(id)) return ctx.out(`replay: not an exchange id: ${id}`, "warn");
       await ctx.replay(id, parsed.edit ? { yes: parsed.yes, edit: parsed.edit } : { yes: parsed.yes });
+    },
+  },
+  {
+    name: "fetch",
+    group: "traffic",
+    palette: { label: "Fetch URL…", hint: "fetch <url>", needsArgs: true },
+    run: async (args, ctx) => {
+      const parsed = parseFetchArgs(args);
+      if (typeof parsed === "string") return ctx.out(parsed, "warn");
+      await ctx.fetchUrl(parsed.body, parsed.yes);
     },
   },
   {

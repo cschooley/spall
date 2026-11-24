@@ -52,10 +52,11 @@ export const test = base.extend<{ guard: void }>({
       page.on("console", (m) => {
         // The action gate answers with these on purpose (deny, refused
         // token, needs confirmation, recorded failure); Chromium logs any
-        // non-2xx fetch. Only for /api/replay, only those statuses.
+        // non-2xx fetch. Only for /api/replay and /api/fetch (#74), only
+        // those statuses.
         const gateAnswer =
           /^Failed to load resource: the server responded with a status of (403|409|428|429|502)\b/.test(m.text()) &&
-          m.location().url.endsWith("/api/replay");
+          /\/api\/(replay|fetch)$/.test(m.location().url);
         // A refused engagement change (bad input) is a 400 on purpose too.
         const refusedChange =
           /^Failed to load resource: the server responded with a status of 400\b/.test(m.text()) &&

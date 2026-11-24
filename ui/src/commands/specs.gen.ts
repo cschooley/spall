@@ -170,6 +170,58 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "headers": {
+          "description": "the request's headers, in order (without them taphttp sends its own user-agent)",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "header name",
+                "type": "string"
+              },
+              "value": {
+                "description": "header value",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "value"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "method": {
+          "description": "GET (the default) or HEAD",
+          "enum": [
+            "GET",
+            "HEAD"
+          ],
+          "type": "string"
+        },
+        "url": {
+          "description": "an absolute http or https URL",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "desc": "send a new GET (or HEAD) to a URL in scope; crawling is fetch in a loop",
+    "hidden": false,
+    "mcp": true,
+    "name": "fetch",
+    "risk": "send",
+    "ui": true,
+    "usage": "fetch <url> [--head] [--header 'N: v']"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "entry": {
           "description": "a host, *.domain, URL prefix or CIDR; a URL or host for check",
           "type": "string"

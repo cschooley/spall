@@ -112,7 +112,7 @@ If it only decides *what* to send or *how to judge*, it is a **check**. If it is
 | Primitive | Why it is one | Where |
 |---|---|---|
 | `replay` | resend a captured request, edited | done (#55) |
-| `fetch` | a new GET/HEAD to an in-scope URL; a crawl is `fetch` in a loop | #74 |
+| `fetch` | a new GET/HEAD to an in-scope URL; a crawl is `fetch` in a loop | #74 (done; taphttp `POST /send`) |
 | `sweep` | many requests from a list (with a check), bounded, soft-404 baseline | #75 |
 | `session` | log in as a test user and keep the session; holds credentials the agent never sees | #76 |
 | `burst` | N requests released together (race conditions); breaks the rate limit by design, so its own RoE approval | #77 |

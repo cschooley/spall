@@ -41,6 +41,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     setConsoleKey: (k) => (calls.push(`key:${k}`), k.length === 1),
     replay: async (id, opts) =>
       void calls.push(`replay:${id}${opts.yes ? ":yes" : ""}${opts.edit ? `:${JSON.stringify(opts.edit)}` : ""}`),
+    fetchUrl: async (body, yes) => void calls.push(`fetch:${JSON.stringify(body)}${yes ? ":yes" : ""}`),
     scope: () => ({ entries: ["app.example.test", "*.api.example.test"], all: false }),
     changeScope: async (c) => (calls.push(`scope:${JSON.stringify(c)}`), { scope: ["x.test"], all: c.op === "all" && c.on, changed: true }),
     audit: async (last) => (calls.push(`audit:${last}`), []),
@@ -217,6 +218,29 @@ test("replay takes an id or the selected exchange, and --yes", async () => {
   assert.equal(lines.length, 3, "replay's own output comes from ctx.replay");
 });
 
+test("fetch sends a new GET or HEAD to a URL, with headers and --yes", async () => {
+  const { ctx, calls, lines } = fakeCtx();
+  await execute("fetch http://example.com/assets/", ctx);
+  await execute("fetch --head https://example.com/ --header 'Accept: text/plain' --yes", ctx);
+  assert.deepEqual(calls, [
+    'fetch:{"url":"http://example.com/assets/"}',
+    'fetch:{"url":"https://example.com/","method":"HEAD","req_headers":[["Accept","text/plain"]]}:yes',
+  ]);
+  for (const [bad, why] of [
+    ["fetch", /usage: fetch <url>/],
+    ["fetch example.com", /an absolute http or https URL/],
+    ["fetch ftp://example.com/", /an absolute http or https URL/],
+    ["fetch http://a.test/ http://b.test/", /usage: fetch <url>/],
+    ["fetch http://a.test/ --method POST", /unknown option --method/],
+    ["fetch http://a.test/ --header nocolon", /--header wants 'Name: value'/],
+  ] as const) {
+    await execute(bad, ctx);
+    assert.match(lines.at(-1)![0], why, bad);
+    assert.equal(lines.at(-1)![1], "warn", bad);
+  }
+  assert.equal(calls.length, 2, "nothing sent for a usage error");
+});
+
 test("scope lists the engagement scope, or says replay is unavailable", async () => {
   const { ctx, lines } = fakeCtx();
   await execute("scope", ctx);
@@ -263,6 +287,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
     COMMANDS.filter((c) => c.risk !== "read").map((c) => [c.name, c.risk]),
     [
       ["replay", "send"],
+      ["fetch", "send"],
       ["scope", "policy"],
       ["engagement", "policy"],
       ["roe", "policy"],

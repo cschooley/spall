@@ -10,7 +10,7 @@
 
 use crate::commands::{self, Refusal};
 use crate::hub::Hub;
-use crate::replay::{ReplayRequest, Replayer};
+use crate::replay::{FetchRequest, ReplayRequest, Replayer};
 use crate::roe::Actor;
 use crate::tasks::{Event, Status, Task};
 use crate::untrusted;
@@ -96,6 +96,48 @@ fn error_of(v: &Value) -> String {
         .to_string()
 }
 
+/// What the send path (`replay`, `fetch`) answered, for the model: the
+/// recorded exchange through `untrusted`, or what happened and what to do.
+fn answer(
+    t: &Task,
+    status: StatusCode,
+    v: &Value,
+    what: &str,
+    note: &str,
+) -> Result<Output, Output> {
+    let why = error_of(v);
+    match status {
+        StatusCode::OK | StatusCode::BAD_GATEWAY if v.get("id").is_some() => {
+            let e: Option<TrafficEntry> = serde_json::from_value(v.clone()).ok();
+            let head = if status == StatusCode::OK {
+                format!("sent{note}: {what}")
+            } else {
+                format!("sent{note}, but the target didn't answer: {what}")
+            };
+            let body = match e {
+                Some(e) => untrusted::wrap_json("exchange", &untrusted::exchange(&e, None)),
+                None => String::new(),
+            };
+            Ok(ok(format!("{head}\n{body}")))
+        }
+        StatusCode::ACCEPTED => Err(err(format!(
+            "paused{note}: {}. {} now waits on a human's approval of exactly this request. Don't retry it or work around it. Call task to see when it's decided; if it's approved once, send the identical request again; if it's denied, the reason says why.",
+            v["reason"].as_str().unwrap_or("outside the task's constraints"),
+            t.id
+        ))),
+        StatusCode::FORBIDDEN => Err(err(format!(
+            "refused{note}: {why}. No approval can change this (it's the engagement's scope or rules, or the task can't send): don't retry it; try something else, or stop and tell the tester."
+        ))),
+        StatusCode::TOO_MANY_REQUESTS => Err(err(format!(
+            "rate limited: {why}. Wait {}s, then send it again.",
+            v["retry_after_secs"].as_f64().map(|s| format!("{:.1}", s.max(0.1))).unwrap_or_else(|| "a moment".into())
+        ))),
+        StatusCode::CONFLICT => Err(err(format!("not sent: {why}. Call task to see where it stands."))),
+        StatusCode::BAD_REQUEST => Err(err(format!("not sent: {why}"))),
+        _ => Err(err(format!("not sent ({status}): {why}"))),
+    }
+}
+
 impl Tools {
     /// Run tool `name` for task `task`.
     pub async fn call(&self, task: &str, name: &str, a: &Value) -> Output {
@@ -145,6 +187,7 @@ impl Tools {
             "filter" => self.filter(a).await,
             "open" => self.open(&t, a).await,
             "replay" => self.replay(&t, a).await,
+            "fetch" => self.fetch(&t, a).await,
             "hosts" => self.hosts(a),
             "rules" => rules(a),
             "task" => self.task(&t, a),
@@ -152,8 +195,8 @@ impl Tools {
             _ => Err(err(format!("{name}: offered but not built yet"))),
         };
         let out = out.unwrap_or_else(|e| e);
-        // A replay logs its own request; everything else is a command.
-        if name != "replay" {
+        // A send logs its own request; everything else is a command.
+        if !matches!(name, "replay" | "fetch") {
             let outcome = if out.is_error { "error" } else { "ok" };
             let now = taphttp_types::Timestamp::now().to_string();
             let _ = r.tasks.log(
@@ -317,36 +360,42 @@ impl Tools {
             ""
         };
         let (status, v) = read(self.replayer.agent_replay(&t.id, req).await).await;
-        let why = error_of(&v);
-        match status {
-            StatusCode::OK | StatusCode::BAD_GATEWAY if v.get("id").is_some() => {
-                let e: Option<TrafficEntry> = serde_json::from_value(v.clone()).ok();
-                let head = if status == StatusCode::OK {
-                    format!("sent{note}: replay {} of {}", v["id"].as_str().unwrap_or("?"), a.id)
-                } else {
-                    format!("sent{note}, but the target didn't answer: replay {} of {}", v["id"].as_str().unwrap_or("?"), a.id)
-                };
-                let body = match e {
-                    Some(e) => untrusted::wrap_json("exchange", &untrusted::exchange(&e, None)),
-                    None => String::new(),
-                };
-                Ok(ok(format!("{head}\n{body}")))
-            }
-            StatusCode::ACCEPTED => Err(err(format!(
-                "paused{note}: {}. {} now waits on a human's approval of exactly this request. Don't retry it or work around it. Call task to see when it's decided; if it's approved once, send the identical request again; if it's denied, the reason says why.",
-                v["reason"].as_str().unwrap_or("outside the task's constraints"),
-                t.id
-            ))),
-            StatusCode::FORBIDDEN => Err(err(format!(
-                "refused{note}: {why}. No approval can change this (it's the engagement's scope or rules, or the task can't send): don't retry it; try something else, or stop and tell the tester."
-            ))),
-            StatusCode::TOO_MANY_REQUESTS => Err(err(format!(
-                "rate limited: {why}. Wait {}s, then send it again.",
-                v["retry_after_secs"].as_f64().map(|s| format!("{:.1}", s.max(0.1))).unwrap_or_else(|| "a moment".into())
-            ))),
-            StatusCode::CONFLICT => Err(err(format!("not sent: {why}. Call task to see where it stands."))),
-            _ => Err(err(format!("not sent ({status}): {why}"))),
+        let what = format!("replay {} of {}", v["id"].as_str().unwrap_or("?"), a.id);
+        answer(t, status, &v, &what, note)
+    }
+
+    /// A new GET or HEAD (#74): the same gate and answers as `replay`.
+    async fn fetch(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Header {
+            name: String,
+            value: String,
         }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            url: String,
+            method: Option<String>,
+            headers: Option<Vec<Header>>,
+        }
+        let a: A = args("fetch", a)?;
+        let req = FetchRequest {
+            url: a.url.clone(),
+            method: a.method.clone(),
+            req_headers: a
+                .headers
+                .map(|h| h.into_iter().map(|h| (h.name, h.value)).collect()),
+            confirm: None,
+        };
+        let method = req.method.clone().unwrap_or_else(|| "GET".into());
+        let (status, v) = read(self.replayer.agent_fetch(&t.id, req).await).await;
+        let what = format!(
+            "fetch {} ({method} {})",
+            v["id"].as_str().unwrap_or("?"),
+            a.url
+        );
+        answer(t, status, &v, &what, "")
     }
 
     fn hosts(&self, a: &Value) -> Result<Output, Output> {
@@ -563,6 +612,7 @@ mod tests {
                 "filter",
                 "open",
                 "replay",
+                "fetch",
                 "hosts",
                 "rules",
                 "task",

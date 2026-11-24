@@ -68,7 +68,16 @@ pub fn validate(req: &ReplayRequest) -> Result<(), String> {
             return Err("method must be an HTTP token (letters, digits, -)".into());
         }
     }
-    if let Some(headers) = &req.req_headers {
+    validate_headers(req.req_headers.as_deref())?;
+    match req.body_encoding.as_deref() {
+        None | Some("utf8") | Some("base64") => {}
+        Some(_) => return Err("body_encoding must be \"utf8\" or \"base64\"".into()),
+    }
+    Ok(())
+}
+
+fn validate_headers(headers: Option<&[(String, String)]>) -> Result<(), String> {
+    if let Some(headers) = headers {
         if headers.len() > MAX_HEADERS {
             return Err(format!("at most {MAX_HEADERS} headers"));
         }
@@ -83,11 +92,87 @@ pub fn validate(req: &ReplayRequest) -> Result<(), String> {
             }
         }
     }
-    match req.body_encoding.as_deref() {
-        None | Some("utf8") | Some("base64") => {}
-        Some(_) => return Err("body_encoding must be \"utf8\" or \"base64\"".into()),
-    }
     Ok(())
+}
+
+/// URLs up to this long.
+const MAX_URL: usize = 8 * 1024;
+
+/// A new request, not a replay (#74): GET or HEAD to an absolute URL,
+/// sent with taphttp's `POST /send`. Unknown fields, `meta` included, are
+/// ignored: spall sets the attribution itself.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct FetchRequest {
+    pub url: String,
+    /// `GET` (the default) or `HEAD`; other methods are `replay`'s, which
+    /// starts from a captured request.
+    #[serde(default)]
+    pub method: Option<String>,
+    /// The whole ordered header list; without it taphttp sends its own
+    /// `user-agent` (and `host` from the URL).
+    #[serde(default)]
+    pub req_headers: Option<Vec<(String, String)>>,
+    /// A confirmation token from an earlier 428 for this exact request.
+    #[serde(default)]
+    pub confirm: Option<String>,
+}
+
+/// Check a fetch; `Ok` is what the gate decides on, `Err` a message safe
+/// to show. The URL must be absolute `http`/`https` with a host and no
+/// user info, so the host the gate checks is the one taphttp connects to.
+pub fn validate_fetch(req: &FetchRequest) -> Result<Effective, String> {
+    let method = req.method.clone().unwrap_or_else(|| "GET".into());
+    if method != "GET" && method != "HEAD" {
+        return Err(format!(
+            "fetch sends GET or HEAD, not {method:?}: other methods are replay's (edit a captured request)"
+        ));
+    }
+    let url = req.url.as_str();
+    if url.len() > MAX_URL || url.bytes().any(|b| b.is_ascii_control() || b == b' ') {
+        return Err(format!(
+            "url must be at most {MAX_URL} bytes, with no spaces or control characters"
+        ));
+    }
+    let uri: hyper::Uri = url
+        .parse()
+        .map_err(|_| "url must be an absolute http or https URL".to_string())?;
+    let scheme_ok = matches!(uri.scheme_str(), Some("http") | Some("https"));
+    let authority = uri.authority().map(|a| a.as_str()).unwrap_or_default();
+    if !scheme_ok || uri.host().is_none_or(str::is_empty) {
+        return Err("url must be an absolute http or https URL".into());
+    }
+    if authority.contains('@') {
+        return Err(
+            "url must not carry user info (user:pass@); send an authorization header".into(),
+        );
+    }
+    validate_headers(req.req_headers.as_deref())?;
+    Ok(Effective {
+        method,
+        url: url.to_string(),
+        host_header: req.req_headers.as_ref().and_then(|h| {
+            h.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("host"))
+                .map(|(_, v)| v.clone())
+        }),
+    })
+}
+
+/// The body for taphttp's `POST /send`, canonical like [`forward_body`]:
+/// it is also the approval fingerprint's input.
+pub fn fetch_body(req: &FetchRequest, eff: &Effective, who: Who) -> Vec<u8> {
+    let mut m = serde_json::Map::new();
+    m.insert("method".into(), eff.method.clone().into());
+    m.insert("url".into(), eff.url.clone().into());
+    if let Some(v) = &req.req_headers {
+        let pairs: Vec<serde_json::Value> = v
+            .iter()
+            .map(|(k, val)| serde_json::json!([k, val]))
+            .collect();
+        m.insert("req_headers".into(), pairs.into());
+    }
+    m.insert("meta".into(), who.meta());
+    serde_json::to_vec(&serde_json::Value::Object(m)).unwrap_or_default()
 }
 
 /// Who is sending: the tester (the browser or console), or an agent under
@@ -1000,12 +1085,6 @@ impl Replayer {
         self.replay(Who::Human, req).await
     }
 
-    /// An agent's replay under `task` (#55). Same path as a human's, with
-    /// the task as credentials: the engagement's rules and scope deny;
-    /// anything outside the task's own constraints pauses the task for a
-    /// human instead; agents never get or use a confirmation token. The
-    /// MCP server (#58) and the agent host (#63) call this; there is no
-    /// HTTP route to it.
     /// Agents only, for now: a human replaying to spall itself is odd but
     /// theirs to do (#73).
     async fn stack_refusal(&self, who: &Who<'_>, url: &str) -> Option<String> {
@@ -1015,8 +1094,130 @@ impl Replayer {
         }
     }
 
+    /// The task an agent sends under (#55), or `None` for a human. An
+    /// agent acts only under a running task of the active engagement, and
+    /// never confirms: approvals come from a human (#56). `Err` is the
+    /// refusal, already audited.
+    fn agent_task(
+        &self,
+        who: Who<'_>,
+        engagement: &Engagement,
+        rec: &mut Record,
+        confirm: bool,
+    ) -> Result<Option<crate::tasks::Task>, Box<Response>> {
+        let Who::Agent { task } = who else {
+            return Ok(None);
+        };
+        let refuse = |rec: &mut Record, why: String| {
+            rec.outcome = Outcome::Denied;
+            rec.decision = Some("deny");
+            rec.reason = Some(why.clone());
+            self.audit(rec);
+            json(
+                StatusCode::FORBIDDEN,
+                serde_json::json!({ "error": why, "decision": "deny" }),
+            )
+        };
+        if let Some(e) = self.tasks.estop() {
+            return Err(Box::new(refuse(
+                rec,
+                format!(
+                    "the agent e-stop is engaged (since {}: {}); no agent request is sent, and halted tasks never run again",
+                    e.since, e.reason
+                ),
+            )));
+        }
+        if confirm {
+            return Err(Box::new(refuse(
+                rec,
+                "agents don't confirm sends: a human approves them (the task waits)".into(),
+            )));
+        }
+        match self.tasks.get(&engagement.id, task) {
+            None => Err(Box::new(refuse(
+                rec,
+                format!("no task {task} in engagement {}", engagement.id),
+            ))),
+            Some(t) if t.status != crate::tasks::Status::Running => {
+                let why = t
+                    .reason
+                    .as_deref()
+                    .map(|r| format!(": {r}"))
+                    .unwrap_or_default();
+                let after = if t.status == crate::tasks::Status::Halted {
+                    "; a halted task never sends again (give the work as a new task)"
+                } else {
+                    ""
+                };
+                Err(Box::new(refuse(
+                    rec,
+                    format!("{task} is {}{why}{after}", t.status.as_str()),
+                )))
+            }
+            Some(t) => Ok(Some(t)),
+        }
+    }
+
+    /// An agent's replay under `task` (#55). Same path as a human's, with
+    /// the task as credentials: the engagement's rules and scope deny;
+    /// anything outside the task's own constraints pauses the task for a
+    /// human instead; agents never get or use a confirmation token. The
+    /// MCP server (#58) and the agent host (#63) call this; there is no
+    /// HTTP route to it.
     pub async fn agent_replay(&self, task: &str, req: ReplayRequest) -> Response {
         self.replay(Who::Agent { task }, req).await
+    }
+
+    /// `POST /api/fetch` (#74): a human's new GET or HEAD, from the console.
+    pub async fn handle_fetch(&self, raw: &[u8]) -> Response {
+        match serde_json::from_slice::<FetchRequest>(raw) {
+            Ok(req) => self.fetch(Who::Human, req).await,
+            Err(_) => error(StatusCode::BAD_REQUEST, "body must be a JSON fetch request"),
+        }
+    }
+
+    /// An agent's new GET or HEAD under `task` (#74): the same gate as
+    /// [`Self::agent_replay`], sent with taphttp's `POST /send`. No HTTP
+    /// route; the MCP server and the agent host call it.
+    pub async fn agent_fetch(&self, task: &str, req: FetchRequest) -> Response {
+        self.fetch(Who::Agent { task }, req).await
+    }
+
+    async fn fetch(&self, who: Who<'_>, req: FetchRequest) -> Response {
+        let mut rec = Record::new("fetch", "", Outcome::Error);
+        rec.actor = match who {
+            Who::Human => "human",
+            Who::Agent { .. } => "agent",
+        }
+        .into();
+        if let Who::Agent { task } = who {
+            rec.task = Some(task.to_string());
+        }
+        let eff = match validate_fetch(&req) {
+            Ok(eff) => eff,
+            Err(msg) => {
+                rec.error = Some(msg.clone());
+                self.audit(&rec);
+                return error(StatusCode::BAD_REQUEST, &msg);
+            }
+        };
+        let engagement = self.engagements.active();
+        let task = match self.agent_task(who, &engagement, &mut rec, req.confirm.is_some()) {
+            Ok(t) => t,
+            Err(res) => return *res,
+        };
+        let body = fetch_body(&req, &eff, who);
+        self.gated_send(
+            who,
+            task,
+            &engagement,
+            rec,
+            eff,
+            body,
+            "/send",
+            req.confirm.as_deref(),
+        )
+        .await
     }
 
     async fn replay(&self, who: Who<'_>, req: ReplayRequest) -> Response {
@@ -1043,64 +1244,10 @@ impl Replayer {
         }
 
         let mut rec = stamp(Record::new("replay", &req.id, Outcome::Error));
-
-        // An agent acts only under a running task of the active engagement,
-        // and never confirms: approvals come from a human (#56).
         let engagement = self.engagements.active();
-        let task = match who {
-            Who::Human => None,
-            Who::Agent { task } => {
-                let refuse = |rec: &mut Record, why: String| {
-                    rec.outcome = Outcome::Denied;
-                    rec.decision = Some("deny");
-                    rec.reason = Some(why.clone());
-                    self.audit(rec);
-                    json(
-                        StatusCode::FORBIDDEN,
-                        serde_json::json!({ "error": why, "decision": "deny" }),
-                    )
-                };
-                if let Some(e) = self.tasks.estop() {
-                    return refuse(
-                        &mut rec,
-                        format!(
-                            "the agent e-stop is engaged (since {}: {}); no agent request is sent, and halted tasks never run again",
-                            e.since, e.reason
-                        ),
-                    );
-                }
-                if req.confirm.is_some() {
-                    return refuse(
-                        &mut rec,
-                        "agents don't confirm sends: a human approves them (the task waits)".into(),
-                    );
-                }
-                match self.tasks.get(&engagement.id, task) {
-                    None => {
-                        return refuse(
-                            &mut rec,
-                            format!("no task {task} in engagement {}", engagement.id),
-                        )
-                    }
-                    Some(t) if t.status != crate::tasks::Status::Running => {
-                        let why = t
-                            .reason
-                            .as_deref()
-                            .map(|r| format!(": {r}"))
-                            .unwrap_or_default();
-                        let after = if t.status == crate::tasks::Status::Halted {
-                            "; a halted task never sends again (give the work as a new task)"
-                        } else {
-                            ""
-                        };
-                        return refuse(
-                            &mut rec,
-                            format!("{task} is {}{why}{after}", t.status.as_str()),
-                        );
-                    }
-                    Some(t) => Some(t),
-                }
-            }
+        let task = match self.agent_task(who, &engagement, &mut rec, req.confirm.is_some()) {
+            Ok(t) => t,
+            Err(res) => return *res,
         };
 
         // The original, to know where this would go.
@@ -1140,6 +1287,35 @@ impl Replayer {
         };
 
         let eff = effective(&original, &req);
+        let body = forward_body_as(&req, who);
+        self.gated_send(
+            who,
+            task,
+            &engagement,
+            rec,
+            eff,
+            body,
+            "/replay",
+            req.confirm.as_deref(),
+        )
+        .await
+    }
+
+    /// Everything after "what would be sent" (#74): the stack guard, scope,
+    /// the RoE, the task's own layer, confirmation, rate, the charge, then
+    /// taphttp (`path`: `/replay` or `/send`), audited and task-logged.
+    #[allow(clippy::too_many_arguments)]
+    async fn gated_send(
+        &self,
+        who: Who<'_>,
+        task: Option<crate::tasks::Task>,
+        engagement: &Engagement,
+        mut rec: Record,
+        eff: Effective,
+        body: Vec<u8>,
+        path: &str,
+        confirm: Option<&str>,
+    ) -> Response {
         rec.method = Some(eff.method.clone());
         rec.target = Some(eff.url.clone());
         rec.host_header = eff.host_header.clone();
@@ -1186,7 +1362,6 @@ impl Replayer {
         rec.decision = Some(decision.kind());
         rec.reason = decision.reason().map(String::from);
 
-        let body = forward_body_as(&req, who);
         let log = |outcome: &str, exchange: Option<String>, status: Option<u16>| {
             task.as_ref().map(|t| {
                 let ev = crate::tasks::Event::Request {
@@ -1246,7 +1421,7 @@ impl Replayer {
             Decision::NeedsConfirmation(reason) => {
                 let fp = fingerprint(&body);
                 let now = Instant::now();
-                match &req.confirm {
+                match confirm {
                     Some(token) => {
                         if let Err(refused) = self.confirmations.redeem(token, fp, now) {
                             rec.outcome = Outcome::ConfirmationRefused;
@@ -1368,7 +1543,7 @@ impl Replayer {
             }
         }
 
-        let sent = self.lever.post_json("/replay", body, REPLAY_TIMEOUT).await;
+        let sent = self.lever.post_json(path, body, REPLAY_TIMEOUT).await;
         if task.is_some() {
             let (outcome, id, status) = match &sent {
                 Ok((st, bytes)) => {
@@ -1416,7 +1591,7 @@ impl Replayer {
                         let msg = value
                             .get("error")
                             .and_then(|v| v.as_str())
-                            .unwrap_or("taphttp refused the replay")
+                            .unwrap_or("taphttp refused the request")
                             .to_string();
                         rec.error = Some(msg.clone());
                         self.audit(&rec);
@@ -1430,7 +1605,7 @@ impl Replayer {
                 }
             }
             Err(e) => {
-                tracing::warn!("replay of {}: {e:#}", req.id);
+                tracing::warn!("{} {}: {e:#}", rec.action, eff.url);
                 rec.error = Some("taphttp API unavailable".into());
                 self.audit(&rec);
                 error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
