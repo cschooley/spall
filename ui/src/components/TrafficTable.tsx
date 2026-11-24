@@ -69,11 +69,20 @@ export function TrafficTable({
     });
   }, [rows.length, follow]);
 
-  // Keep the selected row visible (j/k).
+  // Bring a newly selected row into view (j/k, a replay's result), once
+  // per selection: on every new row it would pull the view back up to the
+  // selection, and that scroll would read as the user's, turning follow off.
+  const shown = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId) {
+      shown.current = null;
+      return;
+    }
+    if (shown.current === selectedId) return;
     const i = rows.findIndex((r) => r.id === selectedId);
-    if (i >= 0) virtualizer.scrollToIndex(i, { align: "auto" });
+    if (i < 0) return; // not loaded yet: try again when it arrives
+    shown.current = selectedId;
+    virtualizer.scrollToIndex(i, { align: "auto" });
   }, [selectedId, rows, virtualizer]);
 
   const onScroll = () => {

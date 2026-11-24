@@ -77,6 +77,27 @@ test("scrolling up stops follow; scrolling to the bottom resumes it", async ({ p
   await expect(follow).toBeChecked();
 });
 
+test("follow keeps following new traffic while a row is selected", async ({ page }) => {
+  const t = token();
+  append(...Array.from({ length: 150 }, (_, i) => entry({ host: `${t}.example`, url: `http://${t}.example/${i}` })));
+  await page.goto("/#traffic");
+  await filterTo(page, t);
+  const follow = page.getByLabel("follow");
+  const wrap = page.locator(".tablewrap");
+  await expect(page.locator("tr.row").last()).toContainText("/149");
+  await page.locator("tr.row").filter({ hasText: "/148" }).click();
+  await expect(page.locator(".inspector")).toBeVisible();
+  await expect(follow).toBeChecked();
+
+  for (let n = 150; n < 190; n += 10) {
+    append(...Array.from({ length: 10 }, (_, i) => entry({ host: `${t}.example`, url: `http://${t}.example/${n + i}` })));
+    await expect(page.locator("tr.row").last()).toContainText(`/${n + 9}`);
+  }
+  await expect(follow, "nothing the user did turned it off").toBeChecked();
+  await expect.poll(() => wrap.evaluate((m) => m.scrollHeight - m.scrollTop - m.clientHeight)).toBeLessThan(24);
+  await expect(page.locator(".inspector")).toContainText("/148");
+});
+
 test("the table is virtualized: thousands of rows, a bounded DOM", async ({ page }) => {
   const t = token();
   append(...Array.from({ length: 3000 }, (_, i) => entry({ host: `${t}.bulk`, url: `http://${t}.bulk/${i}` })));
