@@ -1,4 +1,6 @@
 import { runVerb } from "./lib/verbs.ts";
+import { quadCall } from "./lib/quad.ts";
+import { QuadCard, QuadChip, QuadGlow } from "./components/Quad.tsx";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { execute, paletteItems, type Ctx, type OutKind, type PaletteItem, type ReplayEdit } from "./commands/registry.ts";
 import { CommandPalette } from "./components/CommandPalette.tsx";
@@ -164,6 +166,12 @@ export function App() {
       .catch(() => undefined);
   }, []);
   const status = useSourceStatus(5000, statusNonce);
+  // Quad (#66): the burst seen on this page (by its end time), and the one
+  // whose scorecard was closed. A scorecard shows once a burst seen here ends.
+  const [quadSeen, setQuadSeen] = useState<string | null>(null);
+  const [quadClosed, setQuadClosed] = useState<string | null>(null);
+  if (status.quad && quadSeen !== status.quad.until) setQuadSeen(status.quad.until);
+  const quadCard = !status.quad && quadSeen !== null && quadClosed !== quadSeen ? status.lastQuad : null;
   // Host states (#39): polled while the engagement exists (lever API).
   const hosts = useHosts(status.replay, statusNonce);
   const hostOfState = useMemo(() => stateLookup(hosts.listing), [hosts.listing]);
@@ -525,6 +533,11 @@ export function App() {
       },
       rules: loadCatalog,
       verb: (name, id, category) => runVerb(name, id, category),
+      quad: async (what) => {
+        const r = await quadCall(what);
+        setStatusNonce((n) => n + 1);
+        return r;
+      },
       haltTask: async (id, reason) => {
         const err = await changeTask(id, reason ? { op: "halt", reason } : { op: "halt" });
         if (err) return { ok: false, text: `halt: ${err}` };
@@ -699,7 +712,8 @@ export function App() {
           : "";
 
   return (
-    <div className="app">
+    <div className={status.quad ? "app quad" : "app"}>
+      {status.quad ? <QuadGlow /> : null}
       <header className="bar">
         <span className="brand">
           <Icon name="icons/spall" size={22} />
@@ -710,11 +724,13 @@ export function App() {
         </span>
         <RateMeter live={store.items} />
         <span className="spacer" />
+        {status.quad ? <QuadChip quad={status.quad} /> : null}
         <EStopButton estop={status.estop} available={status.replay} onEngage={() => void stopAgents()} onClear={() => void clearStop()} />
         <ThemePicker theme={theme} setTheme={setTheme} />
         <Launcher status={{ taphttpConnected: status.source === "lever" ? status.connected : null, source: status.source, proxy: status.proxy, flux: status.flux }} />
       </header>
       {status.estop && <HaltBanner estop={status.estop} />}
+      {quadCard ? <QuadCard card={quadCard} onClose={() => setQuadClosed(quadSeen)} /> : null}
 
       <Rail current={view} />
 

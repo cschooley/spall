@@ -67,6 +67,8 @@ export interface Ctx {
   haltTask(id: string, reason: string): Promise<{ ok: boolean; text: string }>;
   /** A task's details as console lines, or every task's one-liner with no id (#54); or why not. */
   task(id?: string): Promise<string[] | string>;
+  /** Start quad mode, or end it (#66); what happened, as lines. */
+  quad(what: { seconds?: number } | { stop: true }): Promise<{ ok: boolean; lines: string[] }>;
   /** Engage the agent e-stop, or clear it (#57); what happened. */
   estop(action: "engage" | "clear", reason?: string): Promise<{ ok: boolean; text: string }>;
   /** Flag an exchange as a candidate (#43). */
@@ -518,6 +520,24 @@ const IMPLS: readonly Impl[] = [
       }
       const r = await ctx.estop("engage", rest);
       ctx.out(r.text, r.ok ? "stop" : "warn");
+    },
+  },
+  {
+    name: "quad",
+    group: "app",
+    palette: { label: "Quad: 4x agents for 2 minutes", hint: "quad [seconds]" },
+    run: async (args, ctx) => {
+      const usage = "usage: quad [seconds, 1-600] | quad stop";
+      if (args.length > 1) return ctx.out(usage, "warn");
+      const [a] = args;
+      let what: { seconds?: number } | { stop: true } = {};
+      if (a === "stop") what = { stop: true };
+      else if (a !== undefined) {
+        if (!/^\d{1,3}$/.test(a) || Number(a) < 1 || Number(a) > 600) return ctx.out(usage, "warn");
+        what = { seconds: Number(a) };
+      }
+      const r = await ctx.quad(what);
+      r.lines.forEach((l, i) => ctx.out(l, r.ok ? (i === 0 ? "sys" : "out") : "warn"));
     },
   },
   {

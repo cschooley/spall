@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { testingOf } from "./lib/engagement.ts";
 import { asEStop, type EStop } from "./lib/estop.ts";
+import { asQuad, asScorecard, type Quad, type Scorecard } from "./lib/quad.ts";
 
 export interface SourceStatus {
   /** pending: not asked yet; unknown: /api/status failed. */
@@ -31,9 +32,12 @@ export interface SourceStatus {
   estop: EStop | null;
   /** The model spall's own agent host runs (#63); null without one. */
   agentModel: string | null;
+  /** Quad mode (#66): the burst underway, and the last one's scorecard. */
+  quad: Quad | null;
+  lastQuad: Scorecard | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null, quad: null, lastQuad: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -58,6 +62,8 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           estop?: unknown;
           waiting_approval?: unknown;
           agent_host?: { model?: unknown } | null;
+          quad?: unknown;
+          last_quad?: unknown;
         };
         const ex = body.export;
         const fx = body.flux;
@@ -80,6 +86,8 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           waitingApproval:
             typeof body.waiting_approval === "number" && Number.isInteger(body.waiting_approval) && body.waiting_approval >= 0 ? body.waiting_approval : null,
           agentModel: typeof body.agent_host?.model === "string" ? body.agent_host.model : null,
+          quad: asQuad(body.quad),
+          lastQuad: asScorecard(body.last_quad),
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });

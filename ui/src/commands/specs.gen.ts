@@ -411,6 +411,32 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "seconds": {
+          "description": "how long (default 120)",
+          "maximum": 600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "stop": {
+          "description": "end it now",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "quad mode: 4x agent workers at 4x rate for a while (default 120s, at most 600), inside the RoE and budgets; then a numbers-only scorecard",
+    "hidden": false,
+    "mcp": false,
+    "name": "quad",
+    "risk": "send",
+    "ui": true,
+    "usage": "quad [seconds] | quad stop"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "unknown": {
           "description": "only hosts neither in scope nor excluded",
           "type": "boolean"

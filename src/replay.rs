@@ -303,6 +303,8 @@ pub struct Replayer {
     /// spall's own agent host is running (#63): a verb's task (#67) is
     /// drafted for it to run, not for an outside client.
     pub spall_runs: AtomicBool,
+    /// Quad mode (#66): the burst underway, if any, and the last scorecard.
+    pub quad: crate::quad::Boost,
 }
 
 /// Drafts one agent's task may make with verbs (#67) before it's told to
@@ -885,6 +887,151 @@ impl Replayer {
         }
     }
 
+    /// Totals quad is scored on (#66): requests charged, model tokens and
+    /// agent candidates in `engagement`.
+    fn quad_tally(&self, engagement: &str) -> crate::quad::Tally {
+        let tasks = self.tasks.list(engagement);
+        crate::quad::Tally {
+            requests: tasks.iter().map(|t| u64::from(t.spent)).sum(),
+            tokens: tasks.iter().map(|t| t.usage.tokens()).sum(),
+            candidates: self
+                .candidates
+                .list(engagement)
+                .iter()
+                .filter(|c| c.flagged_by.starts_with("agent"))
+                .count() as u64,
+        }
+    }
+
+    fn quad_log(&self, engagement: &str, ids: &[String], phase: &str, workers: u32, seconds: u64) {
+        let now = taphttp_types::Timestamp::now().to_string();
+        for id in ids {
+            let ev = crate::tasks::Event::Quad {
+                phase: phase.into(),
+                workers,
+                seconds,
+            };
+            if let Err(e) = self.tasks.log(engagement, id, ev, &now) {
+                tracing::debug!("{engagement}/{id}: quad {phase}: {e}");
+            }
+        }
+    }
+
+    fn live_tasks(&self, engagement: &str) -> Vec<String> {
+        use crate::tasks::Status;
+        self.tasks
+            .list(engagement)
+            .into_iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    Status::Approved | Status::Running | Status::WaitingOnApproval
+                )
+            })
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Start quad (#66) for `seconds` (default 120, at most 600) in the
+    /// active engagement. Refused while the e-stop is engaged, while one is
+    /// on, or with no live agent task to boost. Audited; logged on each live
+    /// task with its worker count.
+    pub fn quad_start(
+        &self,
+        seconds: Option<u64>,
+    ) -> Result<crate::quad::On, (StatusCode, String)> {
+        use crate::quad::{boosted, On, FACTOR, WORKERS};
+        self.quad_now();
+        let e = self.engagements.active();
+        let mut rec = Record::new("quad", "", Outcome::Quad);
+        rec.engagement = Some(e.id.clone());
+        let res = (|| {
+            let secs = crate::quad::seconds(seconds).map_err(|w| (StatusCode::BAD_REQUEST, w))?;
+            if self.tasks.estop().is_some() {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "the e-stop is engaged: nothing goes quad".to_string(),
+                ));
+            }
+            let live = self.live_tasks(&e.id);
+            if live.is_empty() {
+                return Err((
+                    StatusCode::CONFLICT,
+                    "no live agent task to boost (approved, running or waiting): a halted or finished one never goes quad".to_string(),
+                ));
+            }
+            let capped = live
+                .iter()
+                .filter_map(|id| self.tasks.get(&e.id, id))
+                .any(|t| boosted(t.constraints.rate_limit, e.rules.rate_limit).1)
+                .then(|| {
+                    format!(
+                        "capped at the rules of engagement's {} sends per second",
+                        e.rules.rate_limit.unwrap_or_default()
+                    )
+                });
+            let now = jiff::Timestamp::now();
+            let until = now
+                .checked_add(jiff::SignedDuration::from_secs(secs as i64))
+                .unwrap_or(now);
+            let on = On {
+                engagement: e.id.clone(),
+                started: now.to_string(),
+                until: until.to_string(),
+                seconds: secs,
+                workers: WORKERS * FACTOR,
+                capped,
+                base: self.quad_tally(&e.id),
+                tasks: live.clone(),
+            };
+            let on = self.quad.start(on).map_err(|w| (StatusCode::CONFLICT, w))?;
+            self.quad_log(&e.id, &live, "start", on.workers, secs);
+            Ok(on)
+        })();
+        match &res {
+            Ok(on) => {
+                rec.reason = Some(format!(
+                    "start: {}s, {} workers{}",
+                    on.seconds,
+                    on.workers,
+                    on.capped
+                        .as_deref()
+                        .map(|c| format!(", {c}"))
+                        .unwrap_or_default()
+                ));
+            }
+            Err((_, why)) => {
+                rec.reason = Some("start".into());
+                rec.error = Some(why.clone());
+            }
+        }
+        self.audit(&rec);
+        res
+    }
+
+    /// End quad now, if it's on: scored, logged, audited.
+    pub fn quad_end(&self, ended: crate::quad::Ended) -> Option<crate::quad::Scorecard> {
+        let on = self.quad.current()?;
+        let tally = self.quad_tally(&on.engagement);
+        let (on, card) = self.quad.end(ended, jiff::Timestamp::now(), tally)?;
+        self.quad_log(&on.engagement, &on.tasks, "end", on.workers, card.seconds);
+        let mut rec = Record::new("quad", "", Outcome::Quad);
+        rec.engagement = Some(on.engagement.clone());
+        rec.reason = Some(format!("end ({:?}): {}", ended, card.card()));
+        self.audit(&rec);
+        Some(card)
+    }
+
+    /// The burst underway, ending it first if it has worn off.
+    pub fn quad_now(&self) -> Option<crate::quad::On> {
+        let on = self.quad.current()?;
+        if self.quad.active_for(&on.engagement, jiff::Timestamp::now()) {
+            return Some(on);
+        }
+        self.quad_end(crate::quad::Ended::Time);
+        None
+    }
+
     /// An exchange from the lever API, or why not (status, message).
     pub async fn exchange_or(&self, id: &str) -> Result<TrafficEntry, (StatusCode, String)> {
         if !crate::web::valid_exchange_id(id) {
@@ -1193,6 +1340,8 @@ impl Replayer {
         };
         let now = taphttp_types::Timestamp::now().to_string();
         let stopped = self.tasks.engage("human", &reason, &now);
+        // The e-stop ends quad at once (#66).
+        self.quad_end(crate::quad::Ended::Estop);
         let revoked = self.confirmations.clear();
         self.task_limiters
             .lock()
@@ -1754,8 +1903,13 @@ impl Replayer {
         let mut rate = rate;
         if let (Ok(()), Some(t)) = (&wait, &task) {
             // Then the task's own ceiling (never above the engagement's).
-            let task_rate =
-                roe::rate_of(&[&engagement.rules, &t.constraints.layer(&engagement.rules)]);
+            // Quad (#66): the task's rate ×4, never past the RoE's (rate_of
+            // takes the lower).
+            let mut c = t.constraints.clone();
+            if self.quad.active_for(&engagement.id, jiff::Timestamp::now()) {
+                c.rate_limit = crate::quad::boosted(c.rate_limit, engagement.rules.rate_limit).0;
+            }
+            let task_rate = roe::rate_of(&[&engagement.rules, &c.layer(&engagement.rules)]);
             if task_rate != rate {
                 rate = task_rate;
                 wait = self

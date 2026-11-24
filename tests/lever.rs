@@ -4992,3 +4992,190 @@ async fn without_a_model_spall_wont_take_a_task_itself() {
     assert!(res.starts_with("HTTP/1.1 201"), "{res}");
     assert_eq!(body_json(&res)["runner"], "external");
 }
+
+/// Quad (#66): 4× the task's rate, never past the RoE's; logged on each
+/// live task with its workers; the e-stop ends it; and the scorecard and
+/// its shareable card carry numbers only, never an engagement's words.
+#[tokio::test]
+async fn quad_boosts_inside_the_engagement_and_its_card_is_numbers_only() {
+    let (dir, _stub, spall, r) = agent_setup(r#"{"rate_limit":1}"#).await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"name":"EvilCorp secret retest","client":"Evil Corp Ltd","rules":{"rate_limit":10}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let eng = r.engagements.active().id;
+    let new_task = |rate: &str| {
+        let (r, eng) = (r.clone(), eng.clone());
+        let body =
+            format!(r#"{{"goal":"go","role":"tester","constraints":{{"rate_limit":{rate}}}}}"#);
+        async move {
+            let res = post_text(spall, "/api/tasks", &body, None).await;
+            let id = body_json(&res)["id"].as_str().unwrap().to_string();
+            let res = send_text(
+                spall,
+                "PATCH",
+                &format!("/api/tasks/{id}"),
+                r#"{"op":"approve"}"#,
+                None,
+            )
+            .await;
+            assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+            r.tasks
+                .transition(&eng, &id, spall::tasks::Status::Running, None, &now())
+                .unwrap();
+            id
+        }
+    };
+    let quick = |id: String, n: usize| {
+        let r = r.clone();
+        async move {
+            let mut codes = Vec::new();
+            for _ in 0..n {
+                codes.push(agent_send(&r, &id, r#"{"id":"e1"}"#).await.0);
+            }
+            codes
+        }
+    };
+
+    // Bad asks are refused, and audited.
+    let res = post_text(spall, "/api/quad", r#"{"seconds":601}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 400"), "{res}");
+
+    let t2 = new_task("1").await;
+    let res = post_text(spall, "/api/quad", r#"{"seconds":60}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let q = body_json(&res)["quad"].clone();
+    assert_eq!(q["workers"], 8);
+    assert!(q["capped"].is_null(), "1/s ×4 is under the RoE's 10: {q}");
+    let res = post_text(spall, "/api/quad", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 409"), "one at a time: {res}");
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(status["quad"]["workers"], 8);
+    assert!(status["quad"]["remaining_secs"].as_i64().unwrap() > 50);
+    // T-2 (1/s) sends 4 at once in quad, and no more.
+    assert_eq!(quick(t2.clone(), 5).await, [200, 200, 200, 200, 429]);
+    // The start is on every live task's log, with its workers.
+    let log_has = |id: &str, phase: &str| {
+        task_of(&r, id).log.iter().any(|e| {
+            matches!(&e.event, spall::tasks::Event::Quad { phase: p, workers: 8, .. } if p == phase)
+        })
+    };
+    assert!(log_has("T-1", "start") && log_has(&t2, "start"));
+
+    let res = post_text(spall, "/api/quad", r#"{"stop":true}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let card = body_json(&res)["scorecard"].clone();
+    assert_eq!(card["requests"], 4, "{card}");
+    assert_eq!(card["ended"], "stopped");
+    assert!(log_has("T-1", "end") && log_has(&t2, "end"));
+    // Out of quad, a fresh 1/s task sends one, then waits.
+    let t3 = new_task("1").await;
+    assert_eq!(quick(t3, 2).await, [200, 429]);
+
+    // Capped: 5/s ×4 would pass the RoE's 10, and the start says so.
+    new_task("5").await;
+    let res = post_text(spall, "/api/quad", "{}", None).await;
+    let q = body_json(&res)["quad"].clone();
+    assert!(
+        q["capped"]
+            .as_str()
+            .unwrap()
+            .contains("10 sends per second"),
+        "{q}"
+    );
+    assert_eq!(q["seconds"], 120, "the default");
+
+    // The e-stop ends it at once, and no quad starts while it's engaged.
+    let res = post_text(spall, "/api/estop", r#"{"reason":"stop"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let status = body_json(&get_text(spall, "/api/status").await);
+    assert!(status["quad"].is_null(), "{status}");
+    assert_eq!(status["last_quad"]["ended"], "estop");
+    let res = post_text(spall, "/api/quad", "{}", None).await;
+    assert!(
+        res.starts_with("HTTP/1.1 409") && res.contains("e-stop"),
+        "{res}"
+    );
+    let res = send_text(spall, "POST", "/api/estop/clear", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    // Every task is halted now: halted agents can't go quad.
+    let res = post_text(spall, "/api/quad", "{}", None).await;
+    assert!(
+        res.starts_with("HTTP/1.1 409") && res.contains("never goes quad"),
+        "{res}"
+    );
+
+    // Nothing of the engagement reaches the card.
+    let text = status["last_quad"]["card"].as_str().unwrap().to_string();
+    let e = r.engagements.active();
+    for secret in [
+        e.id.as_str(),
+        e.name.as_str(),
+        "Evil",
+        "evil",
+        "example.com",
+        "/e1",
+        "e1",
+    ] {
+        assert!(!text.contains(secret), "{secret:?} in {text}");
+    }
+    assert!(
+        text.starts_with("QUAD ") && text.contains("e-stopped"),
+        "{text}"
+    );
+    let audit = audit_records(&dir.path().join("api-token"));
+    let quads: Vec<_> = audit.iter().filter(|a| a["outcome"] == "quad").collect();
+    assert!(
+        quads.iter().any(|a| a["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("start: 60s, 8 workers")),
+        "{quads:?}"
+    );
+    assert!(quads.iter().any(|a| a["error"]
+        .as_str()
+        .is_some_and(|s| s.contains("600 seconds"))));
+}
+
+/// Quad's workers (#66): spall's host drives 2 tasks at once, 8 in quad.
+#[tokio::test]
+async fn quad_gives_spalls_host_four_times_the_workers() {
+    let (_dir, _stub, spall, r) = host_setup(Scripted::new(vec![]), "{}").await;
+    for _ in 0..4 {
+        let res = post_text(
+            spall,
+            "/api/tasks",
+            r#"{"goal":"more","role":"tester","runner":"spall"}"#,
+            None,
+        )
+        .await;
+        let id = body_json(&res)["id"].as_str().unwrap().to_string();
+        let res = send_text(
+            spall,
+            "PATCH",
+            &format!("/api/tasks/{id}"),
+            r#"{"op":"approve"}"#,
+            None,
+        )
+        .await;
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    }
+    let running = || {
+        r.tasks
+            .list(&r.engagements.active().id)
+            .iter()
+            .filter(|t| t.status == spall::tasks::Status::Running)
+            .count()
+    };
+    eventually("two workers", || running() == 2).await;
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    assert_eq!(running(), 2, "no more than two outside quad");
+    let res = post_text(spall, "/api/quad", r#"{"seconds":30}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    eventually("all five in quad", || running() == 5).await;
+}

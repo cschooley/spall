@@ -424,6 +424,29 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "quad",
+        usage: "quad [seconds] | quad stop",
+        desc: "quad mode: 4x agent workers at 4x rate for a while (default 120s, at most 600), inside the RoE and budgets; then a numbers-only scorecard",
+        // Changes how much agents send, inside their limits: the tester's
+        // call, never offered to an agent. The e-stop ends it.
+        risk: Risk::Send,
+        mcp: false,
+        hidden: false,
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    (
+                        "seconds",
+                        json!({"type": "integer", "minimum": 1, "maximum": 600, "description": "how long (default 120)"}),
+                    ),
+                    ("stop", flag("end it now")),
+                ],
+                &[],
+            )
+        },
+    },
+    Command {
         name: "hosts",
         usage: "hosts [--unknown]",
         desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",

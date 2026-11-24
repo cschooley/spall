@@ -46,6 +46,8 @@ pub enum Outcome {
     EStop,
     /// An MCP session started, ended or was refused (#58).
     McpSession,
+    /// Quad mode started or ended (#66), or a start was refused.
+    Quad,
 }
 
 #[derive(Debug, Clone, Serialize)]

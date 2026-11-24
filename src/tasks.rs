@@ -460,6 +460,12 @@ pub enum Event {
     },
     /// Something a human said (steering, #61).
     Note { by: String, text: String },
+    /// Quad mode started or ended while the task was live (#66).
+    Quad {
+        phase: String,
+        workers: u32,
+        seconds: u64,
+    },
 }
 
 // No deny_unknown_fields: serde doesn't support it with flatten (the

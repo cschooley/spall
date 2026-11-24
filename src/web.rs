@@ -109,6 +109,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/export", post(api_export))
         .route("/api/tasks", get(api_tasks).post(api_tasks_new))
         .route("/api/estop", post(api_estop))
+        .route("/api/quad", post(api_quad))
         .route(
             "/mcp",
             post(crate::mcp::handle_post)
@@ -333,7 +334,77 @@ async fn api_status(State(state): State<AppState>) -> Response {
         Some(r) => serde_json::to_value(r.tasks.estop()).unwrap_or_default(),
         None => serde_json::Value::Null,
     };
+    // Quad (#66): the burst underway or null, and the last scorecard.
+    body["quad"] = state
+        .replayer
+        .as_ref()
+        .and_then(|r| r.quad_now())
+        .map(|on| quad_json(&on))
+        .unwrap_or_default();
+    body["last_quad"] = state
+        .replayer
+        .as_ref()
+        .and_then(|r| r.quad.last())
+        .map(|c| card_json(&c))
+        .unwrap_or_default();
     axum::Json(body).into_response()
+}
+
+fn quad_json(on: &crate::quad::On) -> serde_json::Value {
+    let left = on
+        .until
+        .parse::<jiff::Timestamp>()
+        .map(|u| u.duration_since(jiff::Timestamp::now()).as_secs().max(0))
+        .unwrap_or(0);
+    let mut v = serde_json::to_value(on).unwrap_or_default();
+    v["remaining_secs"] = left.into();
+    v
+}
+
+fn card_json(c: &crate::quad::Scorecard) -> serde_json::Value {
+    let mut v = serde_json::to_value(c).unwrap_or_default();
+    v["card"] = c.card().into();
+    v
+}
+
+/// Quad mode (#66): `{"seconds"?}` starts a burst, `{"stop": true}` ends it
+/// early with its scorecard. A human's, never an agent's; audited.
+async fn api_quad(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Ask {
+        seconds: Option<u64>,
+        #[serde(default)]
+        stop: bool,
+    }
+    let ask: Ask = match serde_json::from_slice(&body) {
+        Ok(a) => a,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"seconds"?}} or {{"stop": true}}: {e}"#),
+            )
+        }
+    };
+    if ask.stop {
+        return match r.quad_end(crate::quad::Ended::Stopped) {
+            Some(c) => {
+                axum::Json(serde_json::json!({ "scorecard": card_json(&c) })).into_response()
+            }
+            None => json_error(StatusCode::CONFLICT, "quad isn't on"),
+        };
+    }
+    match r.quad_start(ask.seconds) {
+        Ok(on) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({ "quad": quad_json(&on) })),
+        )
+            .into_response(),
+        Err((status, why)) => json_error(status, &why),
+    }
 }
 
 /// The newest replay attempts from the audit log (`?last=N`, default 20,

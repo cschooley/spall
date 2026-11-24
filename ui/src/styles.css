@@ -746,3 +746,16 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .verb select { font: var(--vg-text-sm) var(--vg-font-mono); }
 .verb-msg { margin: var(--vg-space-2) 0 0; font: var(--vg-text-sm) var(--vg-font-mono); color: var(--vg-text-secondary); }
 .verb-msg.error { color: var(--vg-accent-rust); }
+
+/* Quad mode (#66): the --vg-boost chip, screen-edge glow and meter. */
+.quad-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 var(--vg-space-2); border: 1px solid var(--vg-boost); border-radius: var(--vg-radius-sm); color: var(--vg-boost); font: 600 var(--vg-text-xs) var(--vg-font-mono); font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.quad-glow { position: fixed; inset: 0; pointer-events: none; z-index: 50; box-shadow: inset 0 0 0 2px var(--vg-boost), inset 0 0 28px var(--vg-boost-glow); }
+.app.quad .meter .segs i.on { background: var(--vg-boost); }
+.app.quad .meter b { color: var(--vg-boost); }
+.quad-card { position: fixed; right: var(--vg-space-4); top: 56px; z-index: 60; max-width: min(28rem, calc(100vw - 2 * var(--vg-space-4))); padding: var(--vg-space-3) var(--vg-space-4); background: var(--vg-bg-raised); border: 1px solid var(--vg-boost); border-radius: var(--vg-radius-md); box-shadow: 0 0 18px var(--vg-boost-glow); }
+.quad-card h3 { margin: 0 0 var(--vg-space-2); color: var(--vg-boost); font: 600 var(--vg-text-sm) var(--vg-font-mono); }
+.quad-card dl { display: grid; grid-template-columns: auto 1fr; gap: 2px var(--vg-space-3); margin: 0 0 var(--vg-space-2); font: var(--vg-text-sm) var(--vg-font-mono); }
+.quad-card dt { color: var(--vg-text-secondary); }
+.quad-card dd { margin: 0; color: var(--vg-text-primary); font-variant-numeric: tabular-nums; }
+.quad-share { margin: 0 0 var(--vg-space-2); font: var(--vg-text-xs) var(--vg-font-mono); overflow-wrap: anywhere; }
+.quad-card .row { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); }

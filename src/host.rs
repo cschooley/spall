@@ -155,6 +155,12 @@ impl Host {
             return;
         }
         let eng = r.engagements.active().id;
+        // Workers (#66): tasks driven at once, four times as many in quad.
+        // Checking also ends a burst that has worn off.
+        let workers = match r.quad_now() {
+            Some(on) if on.engagement == eng => on.workers,
+            _ => crate::quad::WORKERS,
+        };
         for t in r.tasks.list(&eng) {
             if t.runner != Runner::Spall
                 || !matches!(
@@ -165,8 +171,15 @@ impl Host {
                 continue;
             }
             let key = format!("{eng}/{}", t.id);
-            if !self.driving_lock().insert(key.clone()) {
-                continue;
+            {
+                let mut d = self.driving_lock();
+                if d.contains(&key) {
+                    continue;
+                }
+                if d.len() >= workers as usize {
+                    break;
+                }
+                d.insert(key.clone());
             }
             let host = self.clone();
             let eng = eng.clone();

@@ -86,6 +86,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
       dropped: 0,
     }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
+    quad: async (what) => (calls.push(`quad:${JSON.stringify(what)}`), { ok: true, lines: ["QUAD for 2:00"] }),
     verb: async (name, id, category) => (calls.push(`verb:${name}:${id}${category ? `:${category}` : ""}`), { id: "T-9", role: "tester", cost: "~5 requests, safe methods" }),
     ...over,
   };
@@ -105,6 +106,13 @@ test("verbs draft from the console: an exchange verb on the selected one, a cand
   await execute("test_for e1 NOPE", bad.ctx);
   assert.equal(bad.calls.filter((c) => c.startsWith("verb:")).length, 0);
   assert.ok(bad.lines.filter(([, k]) => k === "warn").length >= 2);
+});
+
+test("quad: default, seconds, stop; anything else is usage (#66)", async () => {
+  const { ctx, calls, lines } = fakeCtx();
+  for (const l of ["quad", "quad 30", "quad stop", "quad 601", "quad 0", "quad x", "quad 30 more"]) await execute(l, ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("quad:")), ['quad:{}', 'quad:{"seconds":30}', 'quad:{"stop":true}']);
+  assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: quad")).length, 4);
 });
 
 test("tokenize splits on whitespace and honors quotes", () => {
@@ -308,6 +316,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["engagement", "policy"],
       ["roe", "policy"],
       ["estop", "policy"],
+      ["quad", "send"],
       ["flag", "record"],
       ["promote", "export"],
       ["export", "export"],

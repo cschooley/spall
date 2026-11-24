@@ -149,7 +149,7 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   #56 approvals, #57 e-stop, #58 MCP server, #59 untrusted tool output,
   #60 `propose_finding`, #61 Tasks view, #62 attribution (taphttp
   `meta`). Never promote or export over MCP.
-- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #67 buttons (done), #65 intake, #66 quad,
+- **M6b agent host** (#69, current): #63 host (done), #81 task report (done), #82 candidate notes (done), #64 roles (done), #67 buttons (done), #66 quad (done), #65 intake, #66 quad,
   #67 buttons.
 - **M6c sensors** (#70): #13 sandbox, #1 OOB listener, #2 inboxes.
 
@@ -284,6 +284,15 @@ exchange or candidate into a `tasks::New` with its cost; each verb is a
 sent) is `candidates::Store::retest`: flux's retest flow (`baselineState`,
 `fixed`). UI: `lib/verbs.ts` (its list is held to the registry by test),
 `AgentVerbs.tsx` in the inspector and the Findings pane. PoC waits on #13.
+
+Quad (#66, done): `src/quad.rs` (`Boost`, `On`, `Scorecard`, `boosted`);
+`Replayer::quad_start` / `quad_end` / `quad_now` (lazily ends a worn-off
+burst). In quad the gate takes the task's rate ×4 (`rate_of` still caps it
+at the RoE's) and the host drives `WORKERS × FACTOR` tasks (2, 8 in quad).
+The e-stop ends it (`engage_estop`); it needs a live task and logs
+`Event::Quad` start/end on each. `Scorecard` has no string field: the
+card is numbers and fixed words, by construction. `POST /api/quad`,
+`quad`/`last_quad` in `/api/status`; UI `lib/quad.ts`, `Quad.tsx`.
 
 ## Testing
 

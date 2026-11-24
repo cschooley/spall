@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod mcp_bridge;
 pub mod model;
 pub mod openapi;
+pub mod quad;
 pub mod replay;
 pub mod roe;
 pub mod roles;
@@ -254,6 +255,7 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 allow_unredacted_export: config.allow_unredacted_export,
                 stack: stack::Stack::from_config(&config),
                 spall_runs: std::sync::atomic::AtomicBool::new(false),
+                quad: quad::Boost::default(),
             }))
         }
         None => None,
