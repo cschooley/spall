@@ -823,9 +823,13 @@ button.surf-row:hover { background: var(--vg-bg-surface); }
 .surf-row .host, .surf h2 .host { color: var(--vg-text-secondary); }
 .surf-row .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vg-text-secondary); font-size: var(--vg-text-xs); }
 .surf-row .num { text-align: right; }
-.surf-row .marks { white-space: pre; letter-spacing: .1em; }
-.surf-row.head .marks { letter-spacing: 0; }
-.marks .m, .cov-list .m { display: inline-block; width: 2ch; text-align: center; }
+/* One fixed-width column per category, header and marks alike, so each
+   mark sits under its code; the codes are written vertically. */
+.surf-row .marks { display: flex; white-space: nowrap; font-size: var(--vg-text-sm); }
+.surf-row.head { align-items: end; }
+.surf-row .marks .m { flex: 0 0 2.6ch; width: 2.6ch; text-align: center; }
+.surf-row.head .marks .v { display: inline-block; font-size: var(--vg-text-xs); writing-mode: vertical-rl; transform: rotate(180deg); padding-top: 2px; letter-spacing: .04em; }
+.cov-list .m { display: inline-block; width: 2ch; text-align: center; }
 .m.found, .cov-list li.found .m { color: var(--vg-status-4xx); font-weight: 600; }
 .m.tested, .cov-list li.tested .m { color: var(--vg-accent-verdigris); }
 .m.untested, .cov-list li.untested .m { color: var(--vg-text-tertiary); }

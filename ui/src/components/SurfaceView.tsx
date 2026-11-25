@@ -128,8 +128,12 @@ export function SurfaceView({ available, onOpenExchange }: { available: boolean;
               <span role="columnheader">endpoint</span>
               <span role="columnheader" className="num">hits</span>
               <span role="columnheader">who</span>
-              <span role="columnheader" className="marks" title={cats.map((c) => `${c.code} ${c.name}`).join("\n")}>
-                {cats.map((c) => c.code.slice(0, 2)).join(" ")}
+              <span role="columnheader" className="marks">
+                {cats.map((c) => (
+                  <span key={c.code} className="m" title={`${c.code} ${c.name}`}>
+                    <span className="v">{c.code}</span>
+                  </span>
+                ))}
               </span>
             </div>
             {shown.map((r) => (

@@ -70,6 +70,11 @@ test("3 opens the Surface: endpoints, who touched them, coverage marks", async (
   // Marks are characters, readable without color: ATHN untested, ATHZ found, INPV untested.
   await expect(first.locator(".marks .m")).toHaveText(["·", "!", "·"]);
   await expect(page.getByRole("table", { name: "Endpoints" }).locator("button.surf-row").nth(2).locator(".who")).toHaveText("documented");
+  // Each mark sits under its own category's header, full code, no guessing.
+  const head = page.locator(".surf-row.head .marks .m");
+  await expect(head).toHaveText(["ATHN", "ATHZ", "INPV"]);
+  const centers = (l: ReturnType<Page["locator"]>) => l.evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().x + e.getBoundingClientRect().width / 2)));
+  expect(await centers(first.locator(".marks .m"))).toEqual(await centers(head));
 
   // The pane: the selected endpoint, its coverage, a link to the finding.
   const pane = page.getByRole("complementary", { name: "Endpoint" });
