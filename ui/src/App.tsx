@@ -1,5 +1,6 @@
 import { alertHash, alertsAfter, alertText } from "./lib/alerts.ts";
 import { AlertsButton, alertsWanted } from "./components/AlertsButton.tsx";
+import { TaphttpChip, FluxChip } from "./components/StatusChips.tsx";
 import { loadOob, mintOob } from "./lib/oob.ts";
 import { loadChecks, runSweep } from "./lib/sweep.ts";
 import { loadSurface } from "./lib/surface.ts";
@@ -781,7 +782,7 @@ export function App() {
         <AlertsButton />
         <EStopButton estop={status.estop} available={status.replay} onEngage={() => void stopAgents()} onClear={() => void clearStop()} />
         <ThemePicker theme={theme} setTheme={setTheme} />
-        <Launcher status={{ taphttpConnected: status.source === "lever" ? status.connected : null, source: status.source, proxy: status.proxy, flux: status.flux }} />
+        <Launcher />
       </header>
       {status.estop && <HaltBanner estop={status.estop} />}
       {quadCard ? <QuadCard card={quadCard} onClose={() => setQuadClosed(quadSeen)} /> : null}
@@ -919,19 +920,8 @@ export function App() {
       )}
 
       <footer className="statusbar">
-        <span>
-          {"taphttp "}
-          {status.source === "lever" ? (
-            <span className={status.connected ? "ok" : "bad"}>{status.connected ? "● connected" : "● disconnected"}</span>
-          ) : status.source === "log" ? (
-            <span>● log file</span>
-          ) : status.source === "pending" ? (
-            <span>…</span>
-          ) : (
-            <span className="bad">● unknown</span>
-          )}
-          {status.proxy ? <span className="addr">{` ${status.proxy}`}</span> : null}
-        </span>
+        <TaphttpChip source={status.source} connected={status.connected} proxy={status.proxy} />
+        <FluxChip flux={status.flux} />
         {status.oob ? (
           <a className="oob-status" href="#engagement" title="Out-of-band callback sensor (#1): payloads and hits are in the Engagement view (1).">
             {"OAST "}

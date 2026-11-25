@@ -846,3 +846,26 @@ button.surf-row:hover { background: var(--vg-bg-surface); }
 .mark-form input { flex: 1 1 16ch; min-width: 0; }
 .surf .ok-msg { margin: 0 0 var(--vg-space-2); color: var(--vg-accent-verdigris); font: var(--vg-text-xs) var(--vg-font-mono); }
 .cov-sum { font-family: var(--vg-font-mono); }
+
+/* Sensor/dependency chips in the status bar (taphttp, flux): a button that
+   opens a popover of facts above it. Reuses the tool-details look. */
+.statusbar .dep { position: relative; display: inline-flex; }
+.statusbar .dep-chip {
+  height: auto; padding: 0; border: 0; border-radius: 0; background: none;
+  color: var(--vg-text-tertiary); font: var(--vg-text-xs) var(--vg-font-mono); cursor: pointer;
+}
+.statusbar .dep-chip:hover { color: var(--vg-text-secondary); background: none; }
+.statusbar .dep[aria-expanded] { outline: none; }
+.dep-pop {
+  position: fixed; z-index: 40; width: 340px; max-width: 86vw;
+  padding: var(--vg-space-3); border: 1px solid var(--vg-border-strong); border-radius: var(--vg-radius-sm);
+  background: var(--vg-bg-raised); box-shadow: 0 8px 28px color-mix(in srgb, var(--vg-bg-sunken) 80%, transparent);
+  font: var(--vg-text-xs) var(--vg-font-mono); color: var(--vg-text-secondary); white-space: normal;
+}
+.dep-pop h4 { margin: 0 0 var(--vg-space-2); color: var(--vg-text-primary); font: 500 var(--vg-text-xs) var(--vg-font-sans); }
+.dep-pop dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--vg-space-1) var(--vg-space-3); margin: 0 0 var(--vg-space-2); }
+.dep-pop dt { color: var(--vg-text-secondary); }
+.dep-pop dd { margin: 0; overflow-wrap: anywhere; color: var(--vg-text-primary); }
+.dep-pop dd.fp { font-size: 11px; }
+.dep-pop ul { margin: 0 0 var(--vg-space-2); padding-left: var(--vg-space-5); }
+.dep-pop .note { margin: 0; white-space: normal; }
