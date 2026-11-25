@@ -34,6 +34,13 @@ RUN touch src/main.rs src/lib.rs \
  && (ldd /spall 2>&1 | grep -qE "statically linked|not a dynamic executable") \
  && mkdir -p /mnt/data /mnt/token
 
+# The sandbox sensor (#13, `spall sandboxd`): the same binary with the
+# Docker CLI, the only image that is given the Docker socket. Not the
+# default target: compose builds it with `target: sandboxd`.
+FROM docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb AS sandboxd
+COPY --from=build /spall /spall
+ENTRYPOINT ["/spall", "sandboxd"]
+
 # Stage 3: runtime. Nothing but the binary: no shell, no package manager, no
 # libc, so no OS packages to carry CVEs (#28).
 # - No CA bundle: the lever API is plain HTTP on the compose network, and

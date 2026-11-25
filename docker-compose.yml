@@ -86,6 +86,9 @@ services:
       SPALL_OAST_HTTP:
       SPALL_OAST_TOKEN:
       SPALL_OAST_TOKEN_FILE:
+      # The agent sandbox (#13) through the sandbox sensor: with the
+      # `sandbox` profile, SPALL_SANDBOX_URL=http://sandboxd:8070.
+      SPALL_SANDBOX_URL:
       RUST_LOG: info
     # A local model on this machine (Ollama, llama.cpp) at host.docker.internal.
     extra_hosts:
@@ -95,6 +98,8 @@ services:
     volumes:
       - taphttp-token:/token:ro
       - spall-data:/data
+      # sandboxd's token (0640, group 10001): read-only here.
+      - sandbox-token:/sandbox-token:ro
     restart: unless-stopped
 
   # Out-of-band callbacks in a lab (#1): `docker compose --profile oob up -d`.
@@ -141,6 +146,44 @@ services:
     mem_limit: 1g
     restart: unless-stopped
 
+  # The sandbox sensor (#13): `docker compose --profile sandbox up -d`, and
+  # SPALL_SANDBOX_URL=http://sandboxd:8070 for spall. It alone holds the
+  # Docker socket (root on this machine, so: nothing published, a token, a
+  # narrow API, no flags from the caller); spall's image never gets it.
+  # Sandboxes run under gVisor (runsc must be a Docker runtime on the host)
+  # and join only the internal `sandbox` network.
+  sandboxd:
+    profiles: ["sandbox"]
+    build:
+      context: .
+      target: sandboxd
+    environment:
+      SPALL_SANDBOXD_LISTEN: 0.0.0.0:8070
+      SPALL_SANDBOX_IMAGE: spall-sandbox:dev
+      SPALL_SANDBOX_NETWORK: spall-sandbox
+      SPALL_SANDBOX_PROXY: taphttp:8090
+      SPALL_SANDBOX_FENCE: taphttp:8080
+      RUST_LOG: info
+    # Root for the socket (its owner), group 10001 so the token it writes
+    # (0640) is readable by spall and nobody else; no capabilities.
+    user: "0:10001"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sandbox-token:/sandbox-token
+    restart: unless-stopped
+
+  # Builds the agent's toolset image (sandbox/Dockerfile) for sandboxd;
+  # exits at once.
+  sandbox-image:
+    profiles: ["sandbox"]
+    build: ./sandbox
+    image: spall-sandbox:dev
+    entrypoint: ["true"]
+    restart: "no"
+
 networks:
   default: {}
   # Agent sandboxes (spall#13, docs/sandbox.md slice 2) join this and reach
@@ -152,6 +195,7 @@ networks:
     internal: true
 
 volumes:
+  sandbox-token:
   traffic:
   taphttp-ca:
   taphttp-token:

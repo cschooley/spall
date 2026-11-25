@@ -27,6 +27,13 @@ async fn main() -> anyhow::Result<()> {
         return spall::mcp_bridge::run(args).await;
     }
 
+    // `spall sandboxd`: the sandbox sensor (#13), the only process that
+    // holds Docker; spall talks to it with --sandbox-url.
+    if argv.get(1).map(String::as_str) == Some("sandboxd") {
+        let args = spall::sandboxd::Args::parse_from(&argv[1..]);
+        return spall::sandboxd::run(args).await;
+    }
+
     // `spall sandbox-shell [--image I] [-- cmd args...]`: a shell for the
     // tester in a sandbox with the agent's exact flags (#13). Host-side only.
     if argv.get(1).map(String::as_str) == Some("sandbox-shell") {

@@ -255,14 +255,17 @@ Agents run real tools (`curl`, `jq`, `python3`, `nmap`, `openssl`, `dig`) with `
 
 **Its network** goes through taphttp only. Sandboxes sit on `spall-sandbox`, an internal Docker network (compose creates it) whose only other member is taphttp, and each command gets its own taphttp credential: the task's in-scope hosts (never `*`, never a wildcard that covers an exclusion), the task's remaining budget and rate, the task's attribution. taphttp enforces those on every request; spall charges what it counted to the task and revokes the credential when the command ends (at once on the e-stop). Raw TCP has no route. This needs taphttp's credential-only listener ([taphttp#27](https://github.com/cschooley/taphttp/issues/27)): until taphttp has it, and until a probe sandbox confirms the network is fenced, sandboxes have no network at all and the status bar's **sandbox** chip says why.
 
-To turn it on, where spall runs on the host (it starts containers with the `docker` CLI, so under the compose image it reports *unavailable*):
+To turn it on under compose, with gVisor installed on the host ([gvisor.dev/docs/user_guide/install](https://gvisor.dev/docs/user_guide/install/), its apt repo, then `sudo runsc install && sudo systemctl restart docker`):
 
 ```sh
-# gVisor: https://gvisor.dev/docs/user_guide/install/ (its apt repo), then
-sudo runsc install && sudo systemctl restart docker
-docker build -t spall-sandbox:dev sandbox/
-SPALL_SANDBOX_IMAGE=spall-sandbox:dev SPALL_SANDBOX_NETWORK=spall-sandbox spall ...
+# in .env
+SPALL_SANDBOX_URL=http://sandboxd:8070
+COMPOSE_PROFILES=sandbox        # add lab,oob as you like: COMPOSE_PROFILES=sandbox,lab,oob
+
+docker compose up -d --build
 ```
+
+The `sandbox` profile runs **`sandboxd`**, the sandbox sensor: the only container given the Docker socket (spall's own image never is), with a token and a narrow API (run a command in a task's sandbox, tear it down, check the network: nothing about images, mounts or flags comes from spall). It also builds the toolset image. Running spall on the host instead, it can start sandboxes itself: `docker build -t spall-sandbox:dev sandbox/` and `SPALL_SANDBOX_IMAGE=spall-sandbox:dev SPALL_SANDBOX_NETWORK=spall-sandbox spall ...`.
 
 Where `runsc` isn't a Docker runtime, Docker isn't reachable or the image isn't built, the sandbox refuses and says why; it never falls back to a plain container. **`spall sandbox-shell`** opens a shell in a sandbox with exactly the agent's settings (no network), to see what its tools can and can't do (`spall sandbox-shell -- jq --version` runs one command). Nothing else in spall needs any of this.
 

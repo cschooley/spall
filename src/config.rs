@@ -182,6 +182,20 @@ pub struct Config {
     #[arg(long, env = "SPALL_SANDBOX_FENCE", default_value = "taphttp:8080")]
     pub sandbox_fence: String,
 
+    /// The sandbox sensor (`spall sandboxd`) to run sandboxes through, e.g.
+    /// `http://sandboxd:8070` under compose. Instead of starting containers
+    /// itself, spall asks it; the image and network are sandboxd's own.
+    #[arg(long, env = "SPALL_SANDBOX_URL")]
+    pub sandbox_url: Option<String>,
+
+    /// sandboxd's token, as sandboxd wrote it.
+    #[arg(
+        long,
+        env = "SPALL_SANDBOX_TOKEN_FILE",
+        default_value = "/sandbox-token/token"
+    )]
+    pub sandbox_token_file: PathBuf,
+
     /// Output tokens one model turn may use, thinking included.
     #[arg(long, env = "SPALL_MODEL_MAX_TOKENS", default_value_t = crate::model::DEFAULT_MAX_TOKENS, value_parser = clap::value_parser!(u32).range(1024..=128_000))]
     pub model_max_tokens: u32,

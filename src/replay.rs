@@ -3110,16 +3110,11 @@ impl Replayer {
     }
 
     /// Check the sandbox network (slice 2): taphttp has a credential-only
-    /// listener (`/info` `auth_proxy.auth == "issued"`, taphttp#27), and a
-    /// probe sandbox on `network` can't reach the open listener but gets a
-    /// 407 from the locked one. Ready, or waiting with why.
-    pub async fn sandbox_net_check(
-        &self,
-        image: &str,
-        network: &str,
-        proxy: &str,
-        fence: &str,
-    ) -> crate::sandbox::NetState {
+    /// listener (`/info` `auth_proxy.auth == "issued"`, taphttp#27), and the
+    /// sandbox's own check passes (`Sandbox::check_network`: internal, and
+    /// a probe sandbox can't reach the open listener but gets a 407 from
+    /// the locked one). Ready, off, or waiting with why.
+    pub async fn sandbox_net_check(&self) -> crate::sandbox::NetState {
         use crate::sandbox::NetState;
         let info = match self.lever.get_bytes("/info").await {
             Ok((st, b)) if st.is_success() => {
@@ -3132,10 +3127,13 @@ impl Replayer {
                 "taphttp has no credential-only listener yet (taphttp#27 --auth-listen); until it does, sandboxes have no network".into(),
             );
         }
-        match crate::sandbox::check_network(image, network, proxy, fence).await {
-            Ok(()) => NetState::Ready {
-                proxy: proxy.to_string(),
-            },
+        let sb = match self.sandbox_ready() {
+            Ok(s) => s,
+            Err(why) => return NetState::Waiting(why),
+        };
+        match sb.check_network().await {
+            Ok(Some(proxy)) => NetState::Ready { proxy },
+            Ok(None) => NetState::Off,
             Err(why) => NetState::Waiting(why),
         }
     }

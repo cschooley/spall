@@ -20,7 +20,7 @@
 //! boundary, not the argv.)
 
 use crate::model::BoxFuture;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -79,7 +79,7 @@ impl Cmd {
 }
 
 /// What a command did.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Run {
     pub argv: Vec<String>,
     /// Its exit code; None when it was killed or never ran.
@@ -139,6 +139,21 @@ pub trait Sandbox: Send + Sync {
     fn teardown<'a>(&'a self, key: &'a Key) -> BoxFuture<'a, ()>;
     /// The sandboxes running now.
     fn live(&self) -> Vec<Key>;
+    /// Whether this sandbox was given a network to check (slice 2).
+    fn has_network(&self) -> bool;
+    /// Check that network (see [`check_network`]); once it passes, new
+    /// sandboxes join it. `Ok(Some(proxy))`: ready, through taphttp's
+    /// credential-only listener at `proxy`; `Ok(None)`: no network
+    /// configured; `Err`: not safe yet, and why.
+    fn check_network<'a>(&'a self) -> BoxFuture<'a, Result<Option<String>, String>>;
+}
+
+/// Where a sandbox network is, and taphttp's two listeners as seen from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetCfg {
+    pub network: String,
+    pub proxy: String,
+    pub fence: String,
 }
 
 /// Where spall stands on the sandbox.
@@ -294,6 +309,8 @@ pub struct Runsc {
     network: Mutex<Option<String>>,
     /// Sandboxes that have taphttp's CA in place.
     with_ca: Mutex<HashSet<Key>>,
+    /// The network to check and use, if one was configured.
+    net_cfg: Option<NetCfg>,
 }
 
 /// Run `docker args`, its output, or why not.
@@ -439,13 +456,20 @@ impl Runsc {
             live: Mutex::new(HashSet::new()),
             network: Mutex::new(None),
             with_ca: Mutex::new(HashSet::new()),
+            net_cfg: None,
         };
         s.clear_leftovers().await;
         Ok(s)
     }
 
+    /// Give it a network to check (slice 2); without, it has none.
+    pub fn with_network(mut self, cfg: Option<NetCfg>) -> Self {
+        self.net_cfg = cfg;
+        self
+    }
+
     /// New sandboxes join `network` (checked by [`check_network`]), or none.
-    pub fn set_network(&self, network: Option<String>) {
+    fn set_network(&self, network: Option<String>) {
         *self.network.lock().unwrap_or_else(|p| p.into_inner()) = network;
     }
 
@@ -669,6 +693,21 @@ impl Sandbox for Runsc {
         v.sort();
         v
     }
+
+    fn has_network(&self) -> bool {
+        self.net_cfg.is_some()
+    }
+
+    fn check_network<'a>(&'a self) -> BoxFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async move {
+            let Some(c) = &self.net_cfg else {
+                return Ok(None);
+            };
+            check_network(&self.image, &c.network, &c.proxy, &c.fence).await?;
+            self.set_network(Some(c.network.clone()));
+            Ok(Some(c.proxy.clone()))
+        })
+    }
 }
 
 /// A scripted sandbox for tests: it honours the containment contract
@@ -762,6 +801,14 @@ impl Sandbox for Fake {
         let mut v: Vec<Key> = Self::lock(&self.live).iter().cloned().collect();
         v.sort();
         v
+    }
+
+    fn has_network(&self) -> bool {
+        false
+    }
+
+    fn check_network<'a>(&'a self) -> BoxFuture<'a, Result<Option<String>, String>> {
+        Box::pin(async { Ok(None) })
     }
 }
 

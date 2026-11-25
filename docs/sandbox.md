@@ -186,6 +186,8 @@ exercised on a `runsc` box as it lands.
 3. **Artifacts + logging polish.** Full output and pcap as task artifacts;
    `Event::Sandbox` in the Tasks view.
 4. **Non-HTTP egress + packet capture.** Firewall allowlist, pcap artifact.
+4b. **Toolpacks and the tool registry** (above): packs per tool family,
+   category-based approval, wrappers that pass the proxy.
 5. **Discovery tools for the Scoper.** Subdomain/port results into the
    asset inventory (#95); scope changes stay proposals (#91) through the
    guardrails (#83).
@@ -250,6 +252,61 @@ exercised on a `runsc` box as it lands.
   logged on `Event::Sandbox` and audited. The e-stop or a halt revokes it
   at once, before the sandbox is removed.
 - **Raw TCP** (`nmap`, anything not HTTP) has no route: slice 4.
+
+## The sandbox sensor (`spall sandboxd`)
+
+spall's own image has no Docker and never gets the socket: the app that
+shows raw traffic, credentials included, shouldn't be root on the host.
+Under compose (`--profile sandbox`), `sandboxd` is the one container that
+holds `/var/run/docker.sock`, and spall reaches it with
+`SPALL_SANDBOX_URL=http://sandboxd:8070`.
+
+- **Narrow by construction.** Five calls: `GET /check`, `POST /exec`
+  (engagement and task ids, an argv list, a timeout, optionally a proxy URL
+  and CA), `POST /teardown`, `GET /live`, `POST /network`. No image, mount,
+  flag, network or container name comes from the caller: the image,
+  network and taphttp's listeners are sandboxd's own flags, and every
+  container gets `run_flags`. A compromised spall can run tools in
+  sandboxes, which it could anyway; it can't ask for a privileged
+  container or a host mount.
+- **Who may call.** A token sandboxd writes (0640, group 10001, on the
+  `sandbox-token` volume spall mounts read-only), compared in constant
+  time; any request carrying an `Origin` is refused. Nothing is published;
+  sandboxes aren't on its network.
+- **Its own container:** root for the socket (its owner) with no
+  capabilities, read-only, `no-new-privileges`.
+- **`Remote`** is spall's side: the same `Sandbox` trait over HTTP, so the
+  gate, the stop path (a dropped request drops `docker exec`; spall then
+  tears down) and the tests don't change.
+- spall on the host still works without it (`--sandbox-image`), starting
+  containers itself.
+
+## Tools: toolpacks, not a distro (decided 2026-11-25)
+
+Containment is what makes a tool safe here, not knowing what it does:
+whatever sqlmap or nuclei sends goes through taphttp on the command's
+credential, so it can't leave scope or outrun the task's rate and budget.
+So the questions are supply chain and who says yes.
+
+- **A small base** (`sandbox/Dockerfile`): `curl`, `jq`, `python3`,
+  `openssl`, `dig`, `nmap`. Enough for first-principles scripts on a
+  precise hypothesis (does this parameter reflect? decode this JWT), which
+  are short, readable and kept for review (slice 3), and feed the PoC
+  button.
+- **Toolpacks:** one image per tool family (`spall-pack-sqli`: sqlmap;
+  `-fuzz`: ffuf; `-scan`: nuclei with vetted templates), each pinned by
+  digest and scanned, pulled only when a task needs one. Wordlists
+  (SecLists) are a read-only data mount, not code. Not a multi-terabyte
+  distro: unpinnable, and a supply chain nobody reviewed.
+- **A tool registry** (data): tool → pack, and a *category* (recon,
+  scanner, exploitation) by program name, never by matching arguments.
+  An exploitation-class tool (sqlmap, hydra) pauses the task for the
+  tester, who sees the exact argv; a destructive one needs the RoE too.
+- **Tools that ignore proxy env fail closed** (no route); a pack ships a
+  thin wrapper that passes the proxy (`sqlmap --proxy`).
+- **Bring your own pack:** a tester imports an image (a `policy` action,
+  pinned by digest), as content packs are (#31). A Kali-sized image is an
+  opt-in the tester makes, still under gVisor and taphttp.
 
 ## Open questions
 

@@ -242,7 +242,14 @@ one); ready, `Runsc::set_network` puts new sandboxes on `spall-sandbox`
 own credential (`sandbox_grant`: `Scope::sandbox_allow`, remaining budget,
 task rate and `meta`; proxy URL and CA via `docker exec -e NAME` from
 docker's env, never logged), revoked after (`sandbox_revoke`) or at once on
-stop; taphttp's `sent` is charged with `tasks::Store::spend`.
+stop; taphttp's `sent` is charged with `tasks::Store::spend`. The sensor:
+`src/sandboxd.rs` (`spall sandboxd`, compose profile `sandbox`, the only
+container with the Docker socket; token 0640 on the `sandbox-token`
+volume; `/check`, `/exec`, `/teardown`, `/live`, `/network`, nothing about
+images or flags from the caller) and `Remote`, spall's `Sandbox` over HTTP
+(`--sandbox-url`). The `Sandbox` trait has `has_network`/`check_network`
+so local and remote check the network the same way. Toolpacks (not a
+distro) are decided in docs/sandbox.md.
 
 Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
 ids that must match `T-n` / `I-n` / an engagement id, a time; anything else

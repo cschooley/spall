@@ -6852,9 +6852,7 @@ async fn a_sandbox_command_gets_its_own_scoped_credential_and_pays_for_its_reque
 
     // taphttp without the listener (the stub's /info has no auth_proxy):
     // no network, and the reason names taphttp#27.
-    let st = r
-        .sandbox_net_check("img", "spall-sandbox", "taphttp:8090", "taphttp:8080")
-        .await;
+    let st = r.sandbox_net_check().await;
     assert!(
         matches!(&st, NetState::Waiting(w) if w.contains("taphttp#27")),
         "{}",
