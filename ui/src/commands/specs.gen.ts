@@ -243,6 +243,10 @@ export const SPECS = [
             "all"
           ],
           "type": "string"
+        },
+        "wide": {
+          "description": "for add: accept a too-wide entry (*.com, wider than /16), audited",
+          "type": "boolean"
         }
       },
       "required": [],
@@ -254,7 +258,7 @@ export const SPECS = [
     "name": "scope",
     "risk": "policy",
     "ui": true,
-    "usage": "scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]"
+    "usage": "scope [add <entry> [--wide] | exclude|remove <entry> | check <url|host> | paste | import | all on|off]"
   },
   {
     "args": {

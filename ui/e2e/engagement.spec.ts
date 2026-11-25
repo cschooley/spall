@@ -339,3 +339,45 @@ test("browser setup: the CA's fingerprint and downloads, steps with the proxy, a
   await expect(setup.getByRole("status")).toHaveText(`✓ spall saw GET https://${t}.example/ (200). The browser is set up.`);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
+
+test("too-wide scope entries are refused until you say so; the override is explicit (#83)", async ({ page }) => {
+  const api = engagementApi(page);
+  // The server's answer to a too-wide entry without the override.
+  await page.route("**/api/scope", async (r) => {
+    const c = r.request().postDataJSON() as { op: string; entry?: string; wide?: boolean; add?: string[] };
+    if (!c.wide && (c.entry === "10.0.0.0/8" || (c.add ?? []).includes("*.com"))) {
+      api.calls.push({ method: "POST", path: "/api/scope", body: c });
+      return r.fulfill({ status: 400, json: { error: 'scope entry "10.0.0.0/8" is too wide: 10.0.0.0/8 is wider than /16, the most one scope entry may cover. Name the client\'s hosts or a narrower network, or add it with --wide (audited)' } });
+    }
+    return r.fallback();
+  });
+  await page.route("**/api/scope/parse", (r) =>
+    r.fulfill({
+      json: {
+        items: [
+          { line: 1, source: "*.com", entry: "*.com", exclude: false, error: null, notes: ["*.com is too wide: com is a public suffix"], present: false, wide: true },
+          { line: 2, source: "app.acme.test", entry: "app.acme.test", exclude: false, error: null, notes: [], present: false, wide: false },
+        ],
+        add: ["*.com", "app.acme.test"],
+        exclude: [],
+      },
+    }),
+  );
+  await page.goto("/#engagement");
+  const input = page.getByLabel("Scope entry");
+  await input.fill("10.0.0.0/8");
+  await input.press("Enter");
+  await expect(page.locator(".eng")).toContainText("is too wide");
+  await page.getByRole("button", { name: "add 10.0.0.0/8 anyway" }).click();
+  expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/scope", body: { op: "add", entry: "10.0.0.0/8", wide: true } });
+
+  await page.goto("/#engagement/paste");
+  const panel = page.getByRole("group", { name: "Paste a scope list" });
+  await panel.getByLabel("Scope list").fill("*.com\napp.acme.test");
+  const apply = panel.getByRole("button", { name: "apply 2" });
+  await expect(apply).toBeDisabled();
+  await panel.getByRole("checkbox", { name: /too-wide entry anyway \(\*\.com\)/ }).check();
+  await apply.click();
+  await expect(panel).toHaveCount(0);
+  expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/scope", body: { op: "apply", add: ["*.com", "app.acme.test"], exclude: [], wide: true } });
+});

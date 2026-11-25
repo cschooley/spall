@@ -22,6 +22,7 @@ pub mod mcp_bridge;
 pub mod model;
 pub mod openapi;
 pub mod plans;
+pub mod psl;
 pub mod quad;
 pub mod replay;
 pub mod roe;
@@ -185,6 +186,20 @@ pub struct App {
 
 /// Open the stores and the audit log for `config`; errors stop spall.
 pub fn build(config: Config) -> anyhow::Result<App> {
+    let wide = gate::wide_entries(&config.scope);
+    if !wide.is_empty() {
+        let why: Vec<String> = wide
+            .iter()
+            .filter_map(|e| gate::too_wide(e).ok().flatten())
+            .collect();
+        if !config.allow_wide_scope {
+            anyhow::bail!(
+                "{}; to start anyway, set --allow-wide-scope (SPALL_ALLOW_WIDE_SCOPE)",
+                why.join("; ")
+            );
+        }
+        tracing::warn!("--allow-wide-scope: {}", why.join("; "));
+    }
     let hub = Arc::new(Hub::new(config.history));
     let lever = config.taphttp_api.as_ref().map(|base| {
         Arc::new(lever::Lever::new(
@@ -425,6 +440,30 @@ mod tests {
             .iter()
             .map(|p| serde_json::from_str(&p.data).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn a_too_wide_start_scope_needs_the_flag() {
+        use clap::Parser;
+        let dir = tempfile::tempdir().unwrap();
+        let eng = dir.path().join("engagements");
+        let cfg = |extra: &[&str]| {
+            let mut args = vec![
+                "spall",
+                "--scope",
+                "app.test,10.0.0.0/8",
+                "--engagements",
+                eng.to_str().unwrap(),
+            ];
+            args.extend_from_slice(extra);
+            Config::try_parse_from(args).unwrap()
+        };
+        let err = build(cfg(&[])).err().expect("refused").to_string();
+        assert!(
+            err.contains("10.0.0.0/8") && err.contains("--allow-wide-scope"),
+            "{err}"
+        );
+        assert!(build(cfg(&["--allow-wide-scope"])).is_ok());
     }
 
     #[test]

@@ -256,6 +256,9 @@ pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
 pub enum ScopeChange {
     Add {
         entry: String,
+        /// The override for a too-wide entry (#83); audited.
+        #[serde(default)]
+        wide: bool,
     },
     Exclude {
         entry: String,
@@ -274,6 +277,9 @@ pub enum ScopeChange {
         add: Vec<String>,
         #[serde(default)]
         exclude: Vec<String>,
+        /// The override for too-wide entries among `add` (#83); audited.
+        #[serde(default)]
+        wide: bool,
     },
 }
 
@@ -383,9 +389,27 @@ impl Replayer {
     pub fn change_scope(&self, change: &ScopeChange) -> Result<(Scope, bool), EngagementError> {
         let before = self.scope_now().entries();
         let (changed, what) = match change {
-            ScopeChange::Add { entry } => {
-                let (_, _, c) = self.engagements.change_scope(|s| s.add(entry))?;
-                (c, format!("add {}", entry.trim()))
+            ScopeChange::Add { entry, wide } => {
+                let over = *wide && crate::gate::too_wide(entry).ok().flatten().is_some();
+                let (_, _, c) = self.engagements.change_scope(|s| {
+                    if *wide {
+                        s.add_wide(entry)
+                    } else {
+                        s.add(entry)
+                    }
+                })?;
+                (
+                    c,
+                    format!(
+                        "add {}{}",
+                        entry.trim(),
+                        if over {
+                            " (too wide: added with --wide)"
+                        } else {
+                            ""
+                        }
+                    ),
+                )
             }
             ScopeChange::Exclude { entry } => {
                 let (_, _, c) = self.engagements.change_scope(|s| s.exclude(entry))?;
@@ -398,16 +422,28 @@ impl Replayer {
                 let (_, _, c) = self.engagements.change_scope(|s| Ok(s.remove(entry)))?;
                 (c, format!("remove {}", entry.trim()))
             }
-            ScopeChange::Apply { add, exclude } => {
+            ScopeChange::Apply { add, exclude, wide } => {
                 if add.len() + exclude.len() > crate::scope_list::MAX_LINES {
                     return Err(EngagementError::Invalid(format!(
                         "at most {} entries at once",
                         crate::scope_list::MAX_LINES
                     )));
                 }
+                let over: Vec<&str> = if *wide {
+                    add.iter()
+                        .filter(|e| crate::gate::too_wide(e).ok().flatten().is_some())
+                        .map(|e| e.trim())
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let (before, after, _) = self.engagements.change_scope(|s| {
                     for e in add {
-                        s.add(e)?;
+                        if *wide {
+                            s.add_wide(e)?;
+                        } else {
+                            s.add(e)?;
+                        }
                     }
                     for e in exclude {
                         s.exclude(e)?;
@@ -416,7 +452,16 @@ impl Replayer {
                 })?;
                 (
                     before != after,
-                    format!("apply {} in, {} excluded", add.len(), exclude.len()),
+                    format!(
+                        "apply {} in, {} excluded{}",
+                        add.len(),
+                        exclude.len(),
+                        if over.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (too wide, added with --wide: {})", over.join(", "))
+                        }
+                    ),
                 )
             }
             ScopeChange::All { on } => {

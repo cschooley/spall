@@ -45,6 +45,28 @@ impl Rule {
         }
     }
 
+    /// Why this in-scope entry covers far more than one client's systems,
+    /// if it does (#83): a wildcard on a public suffix (`*.com`, `*.co.uk`,
+    /// `*.github.io`), or a network wider than /16 (IPv4) or /32 (IPv6).
+    fn too_wide(&self) -> Option<String> {
+        match self {
+            Rule::Subdomains(apex) if crate::psl::is_public_suffix(apex) => Some(format!(
+                "{} is a public suffix: *.{} covers every site registered under it",
+                apex, apex
+            )),
+            Rule::Net(ip, bits) => {
+                let floor = if ip.is_ipv4() { 16 } else { 32 };
+                (*bits < floor).then(|| {
+                    format!(
+                        "{}/{bits} is wider than /{floor}, the most one scope entry may cover",
+                        ip
+                    )
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn entry(&self) -> String {
         match self {
             Rule::Host(h) => h.clone(),
@@ -98,7 +120,9 @@ impl Scope {
             } else if let Some(ex) = entry.strip_prefix('!') {
                 scope.exclude(ex)?;
             } else {
-                scope.add(entry)?;
+                // Loading what was saved (or given at start, checked in
+                // `build`): a wide entry already accepted stays readable.
+                scope.add_wide(entry)?;
             }
         }
         Ok(scope)
@@ -115,8 +139,18 @@ impl Scope {
     }
 
     /// Add an in-scope entry (same syntax as `--scope`). `Ok(false)` if
-    /// already there.
+    /// already there. A too-wide entry (#83) is refused; [`Scope::add_wide`]
+    /// is the explicit override.
     pub fn add(&mut self, entry: &str) -> Result<bool, String> {
+        if let Some(why) = too_wide(entry)? {
+            return Err(why);
+        }
+        self.add_wide(entry)
+    }
+
+    /// [`Scope::add`] without the width check: the tester's explicit,
+    /// audited override (`scope add --wide`).
+    pub fn add_wide(&mut self, entry: &str) -> Result<bool, String> {
         let entry = entry.trim();
         if entry == "*" {
             return Err(NO_STAR.into());
@@ -206,6 +240,31 @@ impl Scope {
         }
         out
     }
+}
+
+/// Why an in-scope entry is too wide to add without the override (#83),
+/// with what to do; `Ok(None)` if it's fine; `Err` if it doesn't parse.
+/// Exclusions may be as wide as you like: they only narrow.
+pub fn too_wide(entry: &str) -> Result<Option<String>, String> {
+    let entry = entry.trim();
+    if entry == "*" || entry.starts_with('!') {
+        return Ok(None);
+    }
+    Ok(parse_rule(entry)?.too_wide().map(|why| {
+        format!(
+            "scope entry {entry:?} is too wide: {why}. Name the client's hosts or a narrower network, or add it with --wide (audited)"
+        )
+    }))
+}
+
+/// The too-wide entries of a scope (#83), for a check at start.
+pub fn wide_entries(scope: &Scope) -> Vec<String> {
+    scope
+        .rules
+        .iter()
+        .filter(|r| r.too_wide().is_some())
+        .map(Rule::entry)
+        .collect()
 }
 
 fn push_new(list: &mut Vec<Rule>, rule: Rule) -> bool {
@@ -315,7 +374,7 @@ fn normalize_host(host: &str) -> Option<String> {
 /// A hostname as lowercase ASCII: IDN dot variants as `.`, non-ASCII labels
 /// as `xn--` punycode. Not full UTS #46 (no NFC or mapping tables): enough
 /// that an entry and a host written either way compare equal.
-fn ascii_host(name: &str) -> Option<String> {
+pub(crate) fn ascii_host(name: &str) -> Option<String> {
     let lower = name.to_lowercase();
     let labels: Option<Vec<String>> = lower
         .split(['.', '。', '．', '｡'])
@@ -792,12 +851,57 @@ mod tests {
     }
 
     #[test]
+    fn too_wide_entries_need_the_override() {
+        let mut s = Scope::default();
+        for e in [
+            "*.com",
+            "*.co.uk",
+            "*.github.io",
+            "*.COM.",
+            "0.0.0.0/0",
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "10.0.0.0/15",
+            "::/0",
+            "2001:db8::/16",
+            "::ffff:10.0.0.0/104",
+        ] {
+            let err = s.add(e).unwrap_err();
+            assert!(
+                err.contains("too wide") && err.contains("--wide"),
+                "{e}: {err}"
+            );
+            assert!(too_wide(e).unwrap().is_some(), "{e}");
+        }
+        assert!(s.is_empty(), "nothing was added");
+        for e in [
+            "*.example.com",
+            "*.acme.co.uk",
+            "*.acme.github.io",
+            "com",
+            "10.20.0.0/16",
+            "2001:db8::/32",
+            "203.0.113.7",
+        ] {
+            assert_eq!(s.add(e), Ok(true), "{e}");
+        }
+        // The override, and exclusions, which only narrow.
+        assert_eq!(s.add_wide("10.0.0.0/8"), Ok(true));
+        assert_eq!(s.exclude("*.com"), Ok(true));
+        assert_eq!(wide_entries(&s), vec!["10.0.0.0/8".to_string()]);
+        // Saved scope with a wide entry still loads.
+        let back = Scope::parse(&s.entries().join(",")).unwrap();
+        assert_eq!(back, s);
+        assert!(too_wide("not a host!").is_err());
+    }
+
+    #[test]
     fn entries_can_be_added_and_removed_at_runtime() {
         let mut s = Scope::default();
         assert_eq!(s.add("*.Whatever.com"), Ok(true));
         assert_eq!(s.add("*.whatever.com"), Ok(false), "already there");
-        assert_eq!(s.add("10.0.0.0/8"), Ok(true));
-        assert!(s.contains("api.whatever.com") && s.contains("10.9.9.9"));
+        assert_eq!(s.add("10.0.0.0/16"), Ok(true));
+        assert!(s.contains("api.whatever.com") && s.contains("10.0.9.9"));
         assert!(s.add("http://x.test/").is_err());
         assert_eq!(
             s.add("*"),
@@ -809,7 +913,7 @@ mod tests {
         );
         assert!(!s.remove("*.whatever.com"));
         assert!(!s.remove("not an entry"));
-        assert_eq!(s.entries(), ["10.0.0.0/8"]);
+        assert_eq!(s.entries(), ["10.0.0.0/16"]);
     }
 
     #[test]

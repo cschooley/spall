@@ -286,8 +286,8 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
   };
   const inScope = e.scope.filter((x) => !x.startsWith("!"));
   const excluded = e.scope.filter((x) => x.startsWith("!")).map((x) => x.slice(1));
-  const change = async (op: "add" | "exclude" | "remove", value: string) => {
-    const r = await send("/api/scope", "POST", { op, entry: value });
+  const change = async (op: "add" | "exclude" | "remove", value: string, wide = false) => {
+    const r = await send("/api/scope", "POST", wide ? { op, entry: value, wide: true } : { op, entry: value });
     setErr(r);
     if (!r) {
       if (op !== "remove") setEntry("");
@@ -372,7 +372,7 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
         </>
       ) : null}
       <form className="inline" onSubmit={(ev) => (ev.preventDefault(), void change("add", entry))}>
-        <input aria-label="Scope entry" placeholder="app.example.test, *.example.test, 10.0.0.0/8" value={entry} onChange={(ev) => setEntry(ev.target.value)} />
+        <input aria-label="Scope entry" placeholder="app.example.test, *.example.test, 10.20.0.0/16" value={entry} onChange={(ev) => setEntry(ev.target.value)} />
         <button type="submit" disabled={!entry.trim()}>
           add
         </button>
@@ -381,6 +381,14 @@ function ScopePanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
         </button>
       </form>
       <ErrorLine msg={err} />
+      {err && err.includes("too wide") && entry.trim() ? (
+        <p className="wide-ok">
+          <button type="button" onClick={() => void change("add", entry, true)}>
+            {`add ${entry.trim()} anyway`}
+          </button>
+          <span className="note"> recorded in the audit log as too wide</span>
+        </p>
+      ) : null}
       {e.apiSpecs.length ? (
         <>
           <h4>API descriptions</h4>

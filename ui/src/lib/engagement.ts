@@ -112,6 +112,8 @@ export interface PreviewItem {
   error: string | null;
   notes: string[];
   present: boolean;
+  /** Too wide to add without the override (#83); a note says why. */
+  wide: boolean;
 }
 
 export interface Preview {
@@ -137,6 +139,7 @@ export function asPreview(v: unknown): Preview | null {
         error: typeof i.error === "string" ? i.error : null,
         notes: strings(i.notes),
         present: i.present === true,
+        wide: i.wide === true,
       },
     ];
   });

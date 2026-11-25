@@ -5639,3 +5639,58 @@ async fn a_retest_plan_compares_the_evidences_peer_with_where_the_host_resolves_
     let a = plan(steps()).await;
     assert_eq!(a["plan"]["warnings"], serde_json::json!([]), "{a}");
 }
+
+/// Too-wide scope entries (#83) are refused over the API unless the change
+/// carries the override, which the audit record names; a pasted list needs
+/// it too, all or nothing.
+#[tokio::test]
+async fn too_wide_scope_entries_need_the_audited_override() {
+    let (dir, _stub, spall) = replay_setup(&["e1"], &[]).await;
+    let scope = || async { body_json(&get_text(spall, "/api/status").await)["scope"].clone() };
+    let before = scope().await;
+    for body in [
+        r#"{"op":"add","entry":"*.com"}"#,
+        r#"{"op":"add","entry":"10.0.0.0/8"}"#,
+        r#"{"op":"apply","add":["app.test","*.co.uk"],"exclude":[]}"#,
+    ] {
+        let res = post_text(spall, "/api/scope", body, None).await;
+        assert!(
+            res.starts_with("HTTP/1.1 400") && res.contains("too wide") && res.contains("--wide"),
+            "{body}: {res}"
+        );
+    }
+    assert_eq!(scope().await, before, "nothing changed, the apply included");
+    let res = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"add","entry":"10.0.0.0/8","wide":true}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/scope",
+        r#"{"op":"apply","add":["app.test","*.co.uk"],"exclude":[],"wide":true}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let s = scope().await.to_string();
+    assert!(
+        s.contains("10.0.0.0/8") && s.contains("*.co.uk") && s.contains("app.test"),
+        "{s}"
+    );
+    let audit = audit_records(&dir.path().join("api-token"));
+    let reasons: Vec<&str> = audit.iter().filter_map(|a| a["reason"].as_str()).collect();
+    assert!(
+        reasons.contains(&"add 10.0.0.0/8 (too wide: added with --wide)"),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|r| r.contains("added with --wide: *.co.uk")),
+        "{reasons:?}"
+    );
+}

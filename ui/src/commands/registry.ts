@@ -156,7 +156,7 @@ function roeSet(field: string, value: string): Partial<Rules> | string {
 
 const ENGAGEMENT_USAGE = "usage: engagement [list | new <name> | use <id|name> | set <field> <value>]";
 
-export type ScopeChange = { op: "add" | "exclude" | "remove"; entry: string } | { op: "all"; on: boolean };
+export type ScopeChange = { op: "add"; entry: string; wide?: boolean } | { op: "exclude" | "remove"; entry: string } | { op: "all"; on: boolean };
 
 /** The server's `Scope::explain`: `by` is the deciding entry. */
 export interface ScopeVerdict {
@@ -165,7 +165,7 @@ export interface ScopeVerdict {
   by: string | null;
 }
 
-const SCOPE_USAGE = "usage: scope [add|exclude|remove <entry> | check <url|host> | paste | import | all on|off]";
+const SCOPE_USAGE = "usage: scope [add <entry> [--wide] | exclude|remove <entry> | check <url|host> | paste | import | all on|off]";
 
 /** Console edits for `replay` (#19), applied to the captured request. */
 export interface ReplayEdit {
@@ -386,7 +386,8 @@ const IMPLS: readonly Impl[] = [
         return ctx.out(`${v.host}: not in scope (no entry matches; scope add ${v.host}, or scope exclude ${v.host})`, "warn");
       }
       let change: ScopeChange;
-      if ((sub === "add" || sub === "exclude" || sub === "remove") && arg && extra.length === 0) change = { op: sub, entry: arg };
+      if (sub === "add" && arg && extra.length === 1 && extra[0] === "--wide") change = { op: "add", entry: arg, wide: true };
+      else if ((sub === "add" || sub === "exclude" || sub === "remove") && arg && extra.length === 0) change = { op: sub, entry: arg };
       else if (sub === "all" && (arg === "on" || arg === "off") && extra.length === 0) change = { op: "all", on: arg === "on" };
       else return ctx.out(SCOPE_USAGE, "warn");
       const res = await ctx.changeScope(change);

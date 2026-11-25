@@ -25,26 +25,17 @@ pub struct Item {
     pub notes: Vec<String>,
     /// Already in the scope (same list): nothing to do.
     pub present: bool,
+    /// Too wide to add without the override (#83); the note says why.
+    pub wide: bool,
 }
 
-/// Why an entry is unusually broad, if it is.
+/// Why an in-scope entry is too wide to add without the override (#83),
+/// if it is: the gate's own check. Exclusions only narrow, so never.
 pub fn broad(entry: &str) -> Option<String> {
-    let bare = entry.trim_start_matches('!');
-    if let Some(apex) = bare.strip_prefix("*.") {
-        if !apex.contains('.') {
-            return Some(format!(
-                "every host under .{apex}: almost certainly broader than the engagement"
-            ));
-        }
+    if entry.starts_with('!') {
+        return None;
     }
-    if let Some((addr, bits)) = bare.split_once('/') {
-        let bits: u8 = bits.parse().ok()?;
-        let v6 = addr.contains(':');
-        if (!v6 && bits < 16) || (v6 && bits < 32) {
-            return Some(format!("/{bits} covers a very large network"));
-        }
-    }
-    None
+    crate::gate::too_wide(entry).ok().flatten()
 }
 
 /// Strip a list marker: `- `, `* `, `• `, `1. `, `2) `.
@@ -188,7 +179,9 @@ pub fn parse(text: &str, current: &Scope) -> Result<Vec<Item>, String> {
             } else if exclude {
                 probe.exclude(&host)
             } else {
-                probe.add(&host)
+                // Width is a note here (and `wide` below): applying it
+                // needs the override.
+                probe.add_wide(&host)
             };
             let (mut entry, mut error) = match parsed {
                 Ok(_) => {
@@ -214,9 +207,11 @@ pub fn parse(text: &str, current: &Scope) -> Result<Vec<Item>, String> {
             } else if single {
                 notes.push("single-label name: only matches that exact name".into());
             }
-            if let Some(e) = &entry {
+            let mut wide = false;
+            if let (Some(e), false) = (&entry, exclude) {
                 if let Some(w) = broad(e) {
                     notes.push(w);
+                    wide = true;
                 }
             }
             let key = entry
@@ -251,6 +246,7 @@ pub fn parse(text: &str, current: &Scope) -> Result<Vec<Item>, String> {
                 error,
                 notes,
                 present: present || repeated,
+                wide,
             });
         }
     }
@@ -344,16 +340,27 @@ mod tests {
     }
 
     #[test]
-    fn broad_entries_warn_and_star_is_refused() {
-        let it = items("*.com\n0.0.0.0/0\n10.0.0.0/8\n10.1.0.0/16\n*");
-        assert!(it[0]
-            .notes
-            .iter()
-            .any(|n| n.contains("every host under .com")));
-        assert!(it[1].notes.iter().any(|n| n.contains("/0 covers")));
-        assert!(it[2].notes.iter().any(|n| n.contains("/8 covers")));
-        assert!(it[3].notes.is_empty());
+    fn too_wide_entries_are_noted_and_star_is_refused() {
+        let it = items("*.com\n0.0.0.0/0\n10.0.0.0/8\n10.1.0.0/16\n*\n*.co.uk\n!*.com");
+        let why = |i: usize| it[i].notes.join(" | ");
+        assert!(
+            it[0].wide && why(0).contains("com is a public suffix"),
+            "{}",
+            why(0)
+        );
+        assert!(
+            it[1].wide && why(1).contains("wider than /16"),
+            "{}",
+            why(1)
+        );
+        assert!(it[2].wide && why(2).contains("10.0.0.0/8"), "{}", why(2));
+        assert!(!it[3].wide && it[3].notes.is_empty());
         assert!(it[4].error.as_deref().unwrap().contains("scope all on"));
+        assert!(it[5].wide, "public suffixes, not only TLDs");
+        assert!(
+            !it[6].wide && it[6].error.is_none(),
+            "an exclusion only narrows"
+        );
     }
 
     #[test]

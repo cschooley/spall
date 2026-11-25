@@ -57,10 +57,11 @@ export const test = base.extend<{ guard: void }>({
         const gateAnswer =
           /^Failed to load resource: the server responded with a status of (403|409|428|429|502)\b/.test(m.text()) &&
           /\/api\/(replay|fetch)$/.test(m.location().url);
-        // A refused engagement change (bad input) is a 400 on purpose too.
+        // A refused engagement change (bad input) is a 400 on purpose too,
+        // and so is a too-wide scope entry without the override (#83).
         const refusedChange =
           /^Failed to load resource: the server responded with a status of 400\b/.test(m.text()) &&
-          m.location().url.endsWith("/api/engagement");
+          (m.location().url.endsWith("/api/engagement") || m.location().url.endsWith("/api/scope"));
         // Flagging a candidate that exists answers 409 with it (#43, #46);
         // a refused triage step (no justification) is a 400.
         const candidateAnswer =

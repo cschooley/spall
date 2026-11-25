@@ -371,16 +371,18 @@ test("scope add, remove and all on|off change the scope; bad forms warn", async 
   await execute("scope remove app.example.test", ctx);
   await execute("scope all on", ctx);
   await execute("scope all off", ctx);
+  await execute("scope add 10.0.0.0/8 --wide", ctx);
   assert.deepEqual(calls, [
     'scope:{"op":"add","entry":"*.whatever.com"}',
     'scope:{"op":"remove","entry":"app.example.test"}',
     'scope:{"op":"all","on":true}',
     'scope:{"op":"all","on":false}',
+    'scope:{"op":"add","entry":"10.0.0.0/8","wide":true}',
   ]);
   assert.ok(lines.some(([t, k]) => /every host/.test(t) && k === "warn"), "all on warns about what it means");
   assert.ok(lines.some(([t]) => /scope: x\.test/.test(t)), "prints the scope after a change");
 
-  for (const bad of ["scope add", "scope all", "scope all maybe", "scope frob x", "scope add a b"]) {
+  for (const bad of ["scope add", "scope all", "scope all maybe", "scope frob x", "scope add a b", "scope exclude a --wide"]) {
     const t = fakeCtx();
     await execute(bad, t.ctx);
     assert.equal(t.calls.length, 0, bad);

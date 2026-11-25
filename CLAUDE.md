@@ -160,6 +160,15 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   is a primitive (architecture.md, *Is it a primitive?*): a stop path
   (e-stop, halt), a budget charge, attribution.
 
+Scope guardrails (#83, done): `gate::too_wide` refuses an in-scope entry
+that is a wildcard on a public suffix (`src/psl.rs`, the list vendored in
+`src/psl/` with SOURCE.md) or a network wider than /16 (IPv4) or /32
+(IPv6). `Scope::add` checks it; `Scope::add_wide` is the override
+(`ScopeChange::{Add,Apply}` `wide: true`, audited as "added with
+--wide"); `Scope::parse` loads saved scope without it, and `build`
+refuses a wide `--scope` unless `--allow-wide-scope`. Exclusions are
+never too wide. The paste preview marks `wide` items.
+
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
 command, served at `GET /api/commands`. The UI's `registry.ts` adds

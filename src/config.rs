@@ -77,6 +77,12 @@ pub struct Config {
     #[arg(long, env = "SPALL_SCOPE", default_value = "", value_parser = Scope::parse)]
     pub scope: Scope,
 
+    /// Accept too-wide --scope entries (#83): a wildcard on a public suffix
+    /// (`*.com`, `*.co.uk`) or a network wider than /16 (IPv4) or /32
+    /// (IPv6). Off by default: spall refuses to start with one.
+    #[arg(long, env = "SPALL_ALLOW_WIDE_SCOPE")]
+    pub allow_wide_scope: bool,
+
     /// Methods that replay without confirmation, comma-separated. Any
     /// other method needs a second, confirmed request. Seeds a new
     /// engagement's rules of engagement (#36); after that the rules decide.

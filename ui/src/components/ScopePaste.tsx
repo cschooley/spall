@@ -44,8 +44,13 @@ export function counts(p: Preview): string {
   return parts.join(" · ");
 }
 
-export async function applyPreview(p: Preview): Promise<string | null> {
-  const res = await apiJson("/api/scope", { method: "POST", body: { op: "apply", add: p.add, exclude: p.exclude } });
+/** Too-wide entries among what would be added (#83). */
+export function wideOf(p: Preview): string[] {
+  return p.items.filter((i) => i.wide && !i.error && !i.exclude && i.entry).map((i) => i.entry!);
+}
+
+export async function applyPreview(p: Preview, wide = false): Promise<string | null> {
+  const res = await apiJson("/api/scope", { method: "POST", body: wide ? { op: "apply", add: p.add, exclude: p.exclude, wide: true } : { op: "apply", add: p.add, exclude: p.exclude } });
   return typeof res === "string" ? res : null;
 }
 
@@ -54,6 +59,7 @@ export function ScopePaste({ onApplied, onClose }: { onApplied(): void; onClose(
   const [preview, setPreview] = useState<Preview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [allowWide, setAllowWide] = useState(false);
 
   // Preview as you type (debounced): the server's scope engine reads it.
   useEffect(() => {
@@ -79,7 +85,7 @@ export function ScopePaste({ onApplied, onClose }: { onApplied(): void; onClose(
   const apply = async () => {
     if (!shown) return;
     setBusy(true);
-    const r = await applyPreview(shown);
+    const r = await applyPreview(shown, allowWide);
     setBusy(false);
     if (r) return setErr(r);
     setText("");
@@ -88,6 +94,7 @@ export function ScopePaste({ onApplied, onClose }: { onApplied(): void; onClose(
     onClose();
   };
   const n = shown ? shown.add.length + shown.exclude.length : 0;
+  const wide = shown ? wideOf(shown) : [];
   return (
     <div className="paste" role="group" aria-label="Paste a scope list">
       <p className="note">
@@ -110,13 +117,19 @@ export function ScopePaste({ onApplied, onClose }: { onApplied(): void; onClose(
           <PreviewTable preview={shown} />
         </>
       ) : null}
+      {wide.length ? (
+        <label className="wide-ok">
+          <input type="checkbox" checked={allowWide} onChange={(ev) => setAllowWide(ev.target.checked)} />
+          {` Add ${wide.length === 1 ? "this too-wide entry" : `these ${wide.length} too-wide entries`} anyway (${wide.join(", ")}): recorded in the audit log`}
+        </label>
+      ) : null}
       {err ? (
         <p className="error" role="alert">
           {err}
         </p>
       ) : null}
       <div className="actions">
-        <button type="button" disabled={!n || busy} onClick={() => void apply()}>
+        <button type="button" disabled={!n || busy || (wide.length > 0 && !allowWide)} onClick={() => void apply()}>
           {n ? `apply ${n}` : "apply"}
         </button>
         <button type="button" onClick={onClose}>

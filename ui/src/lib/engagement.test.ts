@@ -59,6 +59,7 @@ test("scope-list previews are shape-checked", async () => {
       items: [
         { line: 2, source: "https://a.test/x", entry: "a.test", exclude: false, error: null, notes: ["path dropped"], present: false },
         { line: 3, source: "nope!", entry: null, exclude: false, error: "not a hostname", notes: [], present: false },
+        { line: 4, source: "*.com", entry: "*.com", exclude: false, error: null, notes: ["too wide"], present: false, wide: true },
         { junk: true },
       ],
       add: ["a.test"],
@@ -66,8 +67,9 @@ test("scope-list previews are shape-checked", async () => {
     }),
     {
       items: [
-        { line: 2, source: "https://a.test/x", entry: "a.test", exclude: false, error: null, notes: ["path dropped"], present: false },
-        { line: 3, source: "nope!", entry: null, exclude: false, error: "not a hostname", notes: [], present: false },
+        { line: 2, source: "https://a.test/x", entry: "a.test", exclude: false, error: null, notes: ["path dropped"], present: false, wide: false },
+        { line: 3, source: "nope!", entry: null, exclude: false, error: "not a hostname", notes: [], present: false, wide: false },
+        { line: 4, source: "*.com", entry: "*.com", exclude: false, error: null, notes: ["too wide"], present: false, wide: true },
       ],
       add: ["a.test"],
       exclude: [],
