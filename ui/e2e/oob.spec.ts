@@ -30,6 +30,8 @@ function oobApi(page: Page) {
 
 test("the Out-of-band panel lists hits as text and mints payloads; hidden without a server (#1)", async ({ page }) => {
   engagementApi(page);
+  const carrier = token();
+  append(entry({ id: "s-4", host: "interactsh", url: `http://interactsh/${carrier}` }));
   await page.goto("/#engagement");
   await expect(page.getByRole("region", { name: "Checks" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Out-of-band" })).toHaveCount(0);
@@ -54,6 +56,10 @@ test("the Out-of-band panel lists hits as text and mints payloads; hidden withou
   await payloads.getByRole("button", { name: "Copy the lab URL of abc" }).click();
   await expect(payloads.getByRole("button", { name: "Copy the lab URL of abc" })).toHaveText("copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("http://interactsh/abc");
+  // The hit's exchange opens in Traffic (the button isn't covered).
+  await hits.getByRole("button", { name: "s-4" }).click({ timeout: 3000 });
+  await expect(page).toHaveURL(/#traffic$/);
+  await expect(page.locator(".inspector h2")).toContainText(`/${carrier}`);
 });
 
 test("Insert OOB payload puts a fresh callback host in the body being edited (#1)", async ({ page }) => {
@@ -72,4 +78,19 @@ test("Insert OOB payload puts a fresh callback host in the body being edited (#1
   await body.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(8, 8));
   await form.getByRole("button", { name: "Insert OOB payload" }).click();
   await expect(body).toHaveValue(/^\{"url":"c0{19}n0{11}1\.oast\.lab"\}$/);
+});
+
+test("when the clipboard refuses, the payload is shown selected to copy by hand (#1)", async ({ page }) => {
+  engagementApi(page);
+  oobApi(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: () => Promise.reject(new Error("denied")) } });
+    document.execCommand = () => false;
+  });
+  await page.goto("/#engagement");
+  const payloads = page.getByRole("list", { name: "Out-of-band payloads" });
+  await payloads.getByRole("button", { name: "Copy the lab URL of abc" }).click();
+  const field = payloads.getByRole("textbox", { name: /the clipboard refused/ });
+  await expect(field).toHaveValue("http://interactsh/abc");
+  expect(await field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, "http://interactsh/abc".length]);
 });

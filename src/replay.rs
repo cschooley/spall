@@ -1490,7 +1490,7 @@ impl Replayer {
         // came, e.g. a callback that is itself the carrying request): try
         // again, for a while.
         for (eng, h) in o.unlinked(crate::oob::LINK_FOR) {
-            if let Some(x) = self.oob_carrier(&h.payload).await {
+            if let Some(x) = self.oob_carrier(&h.payload, &h.at).await {
                 o.link(&eng, &h.id, &x);
             }
         }
@@ -1505,7 +1505,7 @@ impl Replayer {
                 "oob hit {}: {} from {} on {}",
                 h.id, h.protocol, h.remote, h.payload
             ));
-            let found = self.oob_carrier(&h.payload).await;
+            let found = self.oob_carrier(&h.payload, &h.at).await;
             if let Some(x) = &found {
                 o.link(eng, &h.id, x);
                 rec.target = Some(x.clone());
@@ -1526,20 +1526,44 @@ impl Replayer {
         Ok(hits.len())
     }
 
-    /// The exchange that carried an OOB payload: the newest one holding its id.
-    async fn oob_carrier(&self, payload: &str) -> Option<String> {
-        match self
+    /// The exchange that carried an OOB payload to a hit at `at`: of those
+    /// holding its id, the last one recorded by then (2 s of clock slack),
+    /// so a burst of callbacks each gets its own; the newest if times don't
+    /// read.
+    async fn oob_carrier(&self, payload: &str, at: &str) -> Option<String> {
+        let list = match self
             .lever
-            .get_bytes(&format!("/exchanges?q={payload}&limit=20"))
+            .get_bytes(&format!("/exchanges?q={payload}&limit=50"))
             .await
         {
-            Ok((StatusCode::OK, b)) => serde_json::from_slice::<Vec<serde_json::Value>>(&b)
-                .unwrap_or_default()
-                .into_iter()
-                .find(|x| x.to_string().to_ascii_lowercase().contains(payload))
-                .and_then(|x| x["id"].as_str().map(String::from)),
-            _ => None,
-        }
+            Ok((StatusCode::OK, b)) => {
+                serde_json::from_slice::<Vec<serde_json::Value>>(&b).unwrap_or_default()
+            }
+            _ => return None,
+        };
+        let holding: Vec<serde_json::Value> = list
+            .into_iter()
+            .filter(|x| x.to_string().to_ascii_lowercase().contains(payload))
+            .collect();
+        let id = |x: &serde_json::Value| x["id"].as_str().map(String::from);
+        let ts = |x: &serde_json::Value| {
+            x["ts"]
+                .as_str()
+                .and_then(|t| t.parse::<jiff::Timestamp>().ok())
+        };
+        let Some(hit) = at
+            .parse::<jiff::Timestamp>()
+            .ok()
+            .and_then(|t| t.checked_add(jiff::SignedDuration::from_secs(2)).ok())
+        else {
+            return holding.first().and_then(id);
+        };
+        holding
+            .iter()
+            .filter_map(|x| ts(x).filter(|t| *t <= hit).map(|t| (t, x)))
+            .max_by_key(|(t, _)| *t)
+            .and_then(|(_, x)| id(x))
+            .or_else(|| holding.first().and_then(id))
     }
 
     /// Totals quad is scored on (#66): requests charged, model tokens and

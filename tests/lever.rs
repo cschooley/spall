@@ -6309,6 +6309,42 @@ async fn an_oob_hit_is_tied_to_the_task_and_the_exchange_that_carried_it() {
     );
     r.oob_poll().await.unwrap();
     assert_eq!(hit(&r).exchange.as_deref(), Some("late"));
+    // A burst of callbacks on one payload: each hit gets the carrier
+    // recorded last before it, not whichever is newest when spall polls.
+    let p3 = r.oob_mint(None).await.unwrap();
+    for (id, ts) in [
+        ("b1", "2026-11-25T10:00:00Z"),
+        ("b2", "2026-11-25T10:00:30Z"),
+    ] {
+        stub.push_json(
+            id,
+            entry(id)
+                .replace(
+                    &format!("http://example.com/{id}"),
+                    &format!("http://interactsh/{}", p3.id),
+                )
+                .replace("2026-12-25T10:00:00Z", ts),
+        );
+    }
+    for ts in ["2026-11-25T10:00:00.400Z", "2026-11-25T10:00:30.300Z"] {
+        oast.queued.lock().unwrap().push(serde_json::json!({"protocol": "http", "unique-id": p3.id, "remote-address": "203.0.113.11", "timestamp": ts}));
+    }
+    assert_eq!(r.oob_poll().await.unwrap(), 2);
+    let burst: Vec<Option<String>> = r
+        .oob
+        .as_ref()
+        .unwrap()
+        .list(&eng, None)
+        .1
+        .iter()
+        .filter(|h| h.payload == p3.id)
+        .map(|h| h.exchange.clone())
+        .collect();
+    assert_eq!(
+        burst,
+        [Some("b2".to_string()), Some("b1".to_string())],
+        "newest first, each its own"
+    );
     // The e-stop stops agents minting; hits keep coming.
     let res = post_text(spall, "/api/estop", "{}", None).await;
     assert!(res.starts_with("HTTP/1.1 200"), "{res}");

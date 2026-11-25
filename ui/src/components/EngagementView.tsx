@@ -350,22 +350,55 @@ function OobPanel({ onOpenExchange }: { onOpenExchange(id: string): void }) {
   );
 }
 
-/** Copies `text`; says whether it worked (the clipboard can refuse). */
+/** Copy `text` to the clipboard: the async API, else the older
+ * select-and-copy (some browsers and embedded views have only that). */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the older way
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok: boolean;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
+/** Copies `text`; says whether it worked. When the clipboard refuses, the
+ * text is shown selected, to copy by hand. */
 function CopyButton({ text, label, caption = "copy" }: { text: string; label: string; caption?: string }) {
   const [done, setDone] = useState<"ok" | "failed" | null>(null);
   return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={() =>
-        void navigator.clipboard.writeText(text).then(
-          () => setDone("ok"),
-          () => setDone("failed"),
-        )
-      }
-    >
-      {done === "ok" ? "copied" : done === "failed" ? "copy failed: select it" : caption}
-    </button>
+    <>
+      <button type="button" aria-label={label} onClick={() => void copyText(text).then((ok) => setDone(ok ? "ok" : "failed"))}>
+        {done === "ok" ? "copied" : caption}
+      </button>
+      {done === "failed" ? (
+        <input
+          className="copy-by-hand"
+          aria-label={`${label}: the clipboard refused; it's selected here to copy`}
+          readOnly
+          value={text}
+          size={Math.min(text.length, 48)}
+          ref={(el) => el?.select()}
+          onFocus={(ev) => ev.target.select()}
+        />
+      ) : null}
+    </>
   );
 }
 
