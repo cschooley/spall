@@ -99,10 +99,15 @@ import (`src/openapi.rs`), CA setup from taphttp's `/info` and
 `/ca.pem`; the Engagement view (`#engagement`, key `1`). #33
 (scope-limited CA) moved to `later`.
 
-taphttp: v0.8.0 (`taphttp-types` 0.7.0, schema v7: every entry has
-`origin`, `proxy|replay|send`, and `peer`, the address taphttp connected
-to, `null` when no connection was made or before v0.8.0; bump the
-`Cargo.toml` tag and the compose image together). `POST /replay` takes
+taphttp: v0.9.0 (`taphttp-types` 0.8.0, schema v8: every entry has
+`origin`, `proxy|replay|send`, `peer`, the address taphttp connected to
+(`null` when no connection was made or before v0.8.0), and `refused`, a
+request an issued proxy credential refused (`status: null`, `error:
+"refused: …"`). `/feed` also carries `{"type":"message"}` frames
+(WebSocket and SSE), which spall ignores for now. `POST/GET/DELETE
+/clients` issues proxy credentials with an allowlist, rate and budget
+(taphttp#25, for #13); `GET /exchanges/{id}/messages` pages messages
+(taphttp#26). Bump the `Cargo.toml` tag and the compose image together. `POST /replay` takes
 `{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
 `req_headers` is the whole ordered list; `meta` is attribution stored on
 the recorded replay, never sent upstream (spall sends `{"actor":

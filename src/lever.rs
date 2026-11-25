@@ -424,6 +424,12 @@ mod tests {
             parse_frame(r#"{"type":"something-new"}"#),
             Ok(Frame::UnknownControl(k)) if k == "something-new"
         ));
+        // taphttp 0.9.0 (schema 8) sends WebSocket and SSE messages on the
+        // feed: not exchanges, ignored until spall shows them.
+        assert!(matches!(
+            parse_frame(r#"{"type":"message","message":{"exchange":"x1","kind":"websocket","direction":"server_to_client","seq":1,"ts":"2026-11-25T10:00:00Z","size":2,"data":"hi"}}"#),
+            Ok(Frame::UnknownControl(k)) if k == "message"
+        ));
         assert!(parse_frame("not json").is_err());
         assert!(parse_frame(r#"{"id":"half"}"#).is_err());
     }

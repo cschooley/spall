@@ -5,14 +5,6 @@ here.
 
 ## Open
 
-### Limits enforced per client on the proxy
-
-[taphttp#25](https://github.com/cschooley/taphttp/issues/25): proxy credentials spall issues and revokes, each with `meta` (the task), a host allowlist, a rate and a request budget that taphttp enforces, and a revoke-all for the e-stop. The M6c sandbox (spall#13) and its headless browser send through the proxy directly, so spall's gate can't see each request; this makes them gated, not just recorded.
-
-### WebSocket and SSE messages
-
-[taphttp#26](https://github.com/cschooley/taphttp/issues/26): record WebSocket frames and SSE events on the exchange that opened them, readable through the lever API and `/feed`. spall would show, search and cite them as evidence; sending on a socket stays a later `raw send`.
-
 ### Capture filter
 
 [taphttp#23](https://github.com/cschooley/taphttp/issues/23): proxy without recording chosen hosts: record all, only matching, all except matching, or nothing. A host that isn't captured is tunneled without TLS interception. `GET`/`PUT /capture` on the lever API, with per-host counts of what went through uncaptured. `/replay` and `/send` are always recorded. spall#80 sets the filter from the engagement, including "capture only what's in scope".
@@ -32,6 +24,20 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.9.0
+
+- **Limits enforced per client on the proxy:**
+  [taphttp#25](https://github.com/cschooley/taphttp/issues/25).
+  `POST /clients` issues a `Proxy-Authorization` credential with a host
+  allowlist, rate, request budget and `meta`, enforced on every request
+  (inside tunnels too, resolving once); refusals are recorded with
+  `refused: true`; `DELETE /clients` revokes all (spall's e-stop). For the
+  sandbox (spall#13). `--proxy-auth-api` makes a credential mandatory.
+- **WebSocket and SSE messages:**
+  [taphttp#26](https://github.com/cschooley/taphttp/issues/26). Schema v8:
+  messages recorded on their exchange, `GET /exchanges/{id}/messages`, and
+  `{"type":"message"}` frames on `/feed`. spall ignores them for now.
 
 ## Resolved in v0.8.0
 
