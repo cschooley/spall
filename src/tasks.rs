@@ -853,6 +853,9 @@ pub struct Store {
     /// is sent after it.
     stopped: AtomicBool,
     estop: Mutex<Option<EStop>>,
+    /// Content-free alerts for the tester (#86): raised here when a task
+    /// starts waiting on approval or finishes, and by OOB hits and quad.
+    pub alerts: crate::alerts::Alerts,
 }
 
 impl Store {
@@ -884,6 +887,7 @@ impl Store {
             by_engagement: Mutex::new(by_engagement),
             stopped: AtomicBool::new(estop.is_some()),
             estop: Mutex::new(estop),
+            alerts: crate::alerts::Alerts::default(),
         })
     }
 
@@ -996,8 +1000,28 @@ impl Store {
     ) -> Result<T, Error> {
         let mut all = self.lock();
         let mut book = all.get(engagement).cloned().unwrap_or_default();
+        let before: HashMap<String, Status> = book
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), t.status))
+            .collect();
         let out = f(&mut book)?;
         save(&self.dir, engagement, &book).map_err(|e| Error::Save(format!("{e:#}")))?;
+        // Alerts (#86): a task that now waits on you, or has finished.
+        for t in &book.tasks {
+            if before.get(&t.id) == Some(&t.status) {
+                continue;
+            }
+            use crate::alerts::Kind;
+            let kind = match t.status {
+                Status::WaitingOnApproval => Kind::Waiting,
+                Status::Done => Kind::Done,
+                Status::Failed => Kind::Failed,
+                Status::Halted => Kind::Halted,
+                _ => continue,
+            };
+            self.alerts.raise(kind, engagement, Some(&t.id), None);
+        }
         all.insert(engagement.into(), book);
         Ok(out)
     }

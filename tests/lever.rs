@@ -6375,3 +6375,88 @@ async fn an_oob_hit_is_tied_to_the_task_and_the_exchange_that_carried_it() {
         assert_eq!(mode & 0o077, 0, "{mode:o}");
     }
 }
+
+/// A turn the whole fallback chain declines fails its task with the API's
+/// reason (not a bare "declined"), and alerts (#86) report it, along with a
+/// task waiting on approval: kinds and ids only.
+#[tokio::test]
+async fn a_declined_task_says_why_and_alerts_say_what_needs_you() {
+    let model = Scripted::new(vec![Step::Turn(Turn {
+        text: String::new(),
+        calls: vec![],
+        stop: Stop::Refusal,
+        usage: Usage {
+            input_tokens: 10,
+            output_tokens: 0,
+        },
+        note: Some("cyber: security testing".into()),
+    })]);
+    let (_dir, _stub, spall, r) = host_setup(model, "{}").await;
+    eventually("declined", || {
+        task_now(&r).status == spall::tasks::Status::Failed
+    })
+    .await;
+    let t = task_now(&r);
+    assert_eq!(
+        t.reason.as_deref(),
+        Some(
+            "the model API declined (cyber: security testing), and no fallback model took the turn"
+        )
+    );
+    // A second task pauses for approval: that needs the tester too.
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"post","role":"tester"}"#,
+        None,
+    )
+    .await;
+    let id = body_json(&res)["id"].as_str().unwrap().to_string();
+    send_text(
+        spall,
+        "PATCH",
+        &format!("/api/tasks/{id}"),
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    let eng = r.engagements.active().id;
+    r.tasks
+        .transition(&eng, &id, spall::tasks::Status::Running, None, &now())
+        .unwrap();
+    let (status, _) = agent_send(&r, &id, r#"{"id":"e1","method":"POST"}"#).await;
+    assert_eq!(status, 202);
+    let v = body_json(&get_text(spall, "/api/alerts").await);
+    let kinds: Vec<(String, String)> = v["alerts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["kind"].as_str().unwrap().to_string(),
+                a["task"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        kinds.contains(&("failed".into(), "T-1".into())),
+        "{kinds:?}"
+    );
+    assert!(kinds.contains(&("waiting".into(), id.clone())), "{kinds:?}");
+    let latest = v["latest"].as_u64().unwrap();
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["alerts"],
+        latest
+    );
+    let after = body_json(&get_text(spall, &format!("/api/alerts?after={latest}")).await);
+    assert!(after["alerts"].as_array().unwrap().is_empty());
+    // Content-free: nothing but kinds, ids and times.
+    for a in v["alerts"].as_array().unwrap() {
+        let keys: Vec<&str> = a.as_object().unwrap().keys().map(String::as_str).collect();
+        assert!(
+            keys.iter()
+                .all(|k| ["seq", "at", "kind", "engagement", "task", "item"].contains(k)),
+            "{keys:?}"
+        );
+    }
+}

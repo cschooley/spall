@@ -1511,6 +1511,12 @@ impl Replayer {
                 rec.target = Some(x.clone());
             }
             self.audit(&rec);
+            self.tasks.alerts.raise(
+                crate::alerts::Kind::OobHit,
+                eng,
+                h.task.as_deref(),
+                Some(&h.id),
+            );
             if let Some(t) = &h.task {
                 let ev = crate::tasks::Event::Interaction {
                     id: h.id.clone(),
@@ -1693,6 +1699,9 @@ impl Replayer {
         let on = self.quad.current()?;
         let tally = self.quad_tally(&on.engagement);
         let (on, card) = self.quad.end(ended, jiff::Timestamp::now(), tally)?;
+        self.tasks
+            .alerts
+            .raise(crate::alerts::Kind::QuadOver, &on.engagement, None, None);
         self.quad_log(&on.engagement, &on.tasks, "end", on.workers, card.seconds);
         let mut rec = Record::new("quad", "", Outcome::Quad);
         rec.engagement = Some(on.engagement.clone());

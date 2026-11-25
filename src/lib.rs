@@ -4,6 +4,7 @@
 
 pub mod addresses;
 pub mod agent;
+pub mod alerts;
 pub mod audit;
 pub mod candidates;
 pub mod commands;

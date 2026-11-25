@@ -794,3 +794,7 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .oob-raw { margin: var(--vg-space-1) 0 0; padding: var(--vg-space-2); max-height: 16rem; overflow: auto; background: var(--vg-bg-surface); font: var(--vg-text-xs) var(--vg-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .oob-insert { margin: 0 0 var(--vg-space-2); }
 .copy-by-hand { font: var(--vg-text-xs) var(--vg-font-mono); }
+
+/* Desktop alerts toggle (#86). */
+.alerts-toggle { height: 26px; padding: 0 var(--vg-space-2); font: var(--vg-text-xs) var(--vg-font-mono); color: var(--vg-text-secondary); }
+.alerts-toggle.on { color: var(--vg-text-primary); border-color: var(--vg-border-strong); }

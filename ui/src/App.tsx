@@ -1,3 +1,5 @@
+import { alertHash, alertsAfter, alertText } from "./lib/alerts.ts";
+import { AlertsButton, alertsWanted } from "./components/AlertsButton.tsx";
 import { loadOob, mintOob } from "./lib/oob.ts";
 import { loadChecks, runSweep } from "./lib/sweep.ts";
 import { changeNever, loadNever } from "./lib/never.ts";
@@ -200,6 +202,38 @@ export function App() {
     (text: string, kind: OutKind = "out") => setLog((l) => addLine(l, text, kind, consoleOpen)),
     [consoleOpen],
   );
+
+  // Alerts (#86): new ones since this page opened, to the console and, if
+  // switched on, the desktop. Kinds and ids only (lib/alerts.ts).
+  const alertsSeen = useRef<number | null>(null);
+  useEffect(() => {
+    const latest = status.alertsSeq;
+    if (latest === null) return;
+    // What happened before the page opened isn't news.
+    if (alertsSeen.current === null) {
+      alertsSeen.current = latest;
+      return;
+    }
+    const from = alertsSeen.current;
+    if (latest <= from) return;
+    alertsSeen.current = latest;
+    void alertsAfter(from).then((r) => {
+      if (typeof r === "string") return;
+      for (const a of r.alerts) {
+        const text = alertText(a);
+        out(`alert: ${text}`, a.kind === "failed" || a.kind === "waiting" ? "warn" : "sys");
+        if (alertsWanted()) {
+          const n = new Notification("spall", { body: text, tag: `spall-${a.seq}` });
+          n.onclick = () => {
+            window.focus();
+            window.location.hash = alertHash(a);
+            n.close();
+          };
+        }
+      }
+    });
+  }, [status.alertsSeq, out]);
+
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(filterText), 250);
@@ -741,6 +775,7 @@ export function App() {
         <RateMeter live={store.items} />
         <span className="spacer" />
         {status.quad ? <QuadChip quad={status.quad} /> : null}
+        <AlertsButton />
         <EStopButton estop={status.estop} available={status.replay} onEngage={() => void stopAgents()} onClear={() => void clearStop()} />
         <ThemePicker theme={theme} setTheme={setTheme} />
         <Launcher status={{ taphttpConnected: status.source === "lever" ? status.connected : null, source: status.source, proxy: status.proxy, flux: status.flux }} />

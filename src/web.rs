@@ -96,6 +96,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/checks", get(api_checks).post(api_checks_change))
         .route("/api/sweep", post(api_sweep))
         .route("/api/oob", get(api_oob).post(api_oob_mint))
+        .route("/api/alerts", get(api_alerts))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
@@ -343,6 +344,12 @@ async fn api_status(State(state): State<AppState>) -> Response {
         Some(r) => serde_json::to_value(r.tasks.estop()).unwrap_or_default(),
         None => serde_json::Value::Null,
     };
+    // Alerts (#86): the newest seq, so the page fetches only when it moves.
+    body["alerts"] = state
+        .replayer
+        .as_ref()
+        .map(|r| serde_json::json!(r.tasks.alerts.latest()))
+        .unwrap_or_default();
     // OOB (#1): the callback domain and the active engagement's hits, or null.
     body["oob"] = state
         .replayer
@@ -1185,6 +1192,25 @@ async fn api_sweep(State(state): State<AppState>, body: axum::body::Bytes) -> Re
         Ok(v) => axum::Json(v).into_response(),
         Err((status, why)) => json_error(status, &why),
     }
+}
+
+/// Tester alerts (#86) after `?after=<seq>`: kinds and ids only.
+async fn api_alerts(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let after: u64 = raw
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("after="))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    axum::Json(serde_json::json!({
+        "alerts": r.tasks.alerts.after(after),
+        "latest": r.tasks.alerts.latest(),
+    }))
+    .into_response()
 }
 
 /// OOB callbacks (#1) in the active engagement: whether a server is set

@@ -219,6 +219,15 @@ profile `oob` runs `projectdiscovery/interactsh-server` pinned by digest
 on the compose network only. Tests: a fake interactsh in tests/lever.rs; a
 real-server round trip is `#[ignore]`d (`SPALL_TEST_INTERACTSH`).
 
+Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
+ids that must match `T-n` / `I-n` / an engagement id, a time; anything else
+is dropped), newest 200 in memory. `tasks::Store::change` raises waiting /
+done / failed / halted on a status change; `oob_poll` and `quad_end` raise
+theirs. `GET /api/alerts?after=`, `alerts` (latest seq) in `/api/status`.
+UI: `lib/alerts.ts` words them from kind and ids; `AlertsButton.tsx` (off
+until the browser grants permission, kept in localStorage); App sends new
+ones to the console and, if on, `Notification`. A webhook is later.
+
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
 command, served at `GET /api/commands`. The UI's `registry.ts` adds

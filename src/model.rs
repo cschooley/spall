@@ -638,12 +638,25 @@ pub mod anthropic {
             let d = v.get("stop_details");
             let category = d.and_then(|d| d.get("category")).and_then(Value::as_str);
             let why = d.and_then(|d| d.get("explanation")).and_then(Value::as_str);
-            Some(match (category, why) {
+            let reason = match (category, why) {
                 (Some(c), Some(w)) => format!("{c}: {w}"),
                 (Some(c), None) => c.to_string(),
                 (None, Some(w)) => w.to_string(),
                 (None, None) => "no reason given".to_string(),
-            })
+            };
+            // Set when the fallback couldn't run (rate limited, overloaded):
+            // the model the API says a retry may succeed on.
+            Some(
+                match d
+                    .and_then(|d| d.get("recommended_model"))
+                    .and_then(Value::as_str)
+                {
+                    Some(m) => {
+                        format!("{reason}; the fallback couldn't run, a retry on {m} may work")
+                    }
+                    None => reason,
+                },
+            )
         } else if content
             .iter()
             .any(|b| b.get("type").and_then(Value::as_str) == Some("fallback"))
@@ -1033,6 +1046,12 @@ mod tests {
         let (t, _) = anthropic::response(&json!({"content": [], "stop_reason": "refusal",
             "stop_details": {"type": "refusal", "category": "cyber", "explanation": "security testing"}})).unwrap();
         assert_eq!(t.note.as_deref(), Some("cyber: security testing"));
+        let (t, _) = anthropic::response(&json!({"content": [], "stop_reason": "refusal",
+            "stop_details": {"type": "refusal", "category": "cyber", "recommended_model": "claude-opus-4-8"}})).unwrap();
+        assert_eq!(
+            t.note.as_deref(),
+            Some("cyber; the fallback couldn't run, a retry on claude-opus-4-8 may work")
+        );
         let (t, _) = anthropic::response(
             &json!({"model": "claude-opus-4-8", "stop_reason": "end_turn",
             "content": [{"type": "fallback"}, {"type": "text", "text": "Here."}]}),
