@@ -39,9 +39,11 @@ export interface SourceStatus {
   alertsSeq: number | null;
   /** The OOB sensor (#1): its domain and hit count, or null when none is configured. */
   oob: { domain: string; hits: number } | null;
+  /** The agent's tool sandbox (#13): null when off. */
+  sandbox: { state: "ready" | "unavailable"; reason: string | null; live: number } | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null, quad: null, lastQuad: null, alertsSeq: null, oob: null };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null, quad: null, lastQuad: null, alertsSeq: null, oob: null, sandbox: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -70,6 +72,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           last_quad?: unknown;
           alerts?: unknown;
           oob?: { domain?: unknown; hits?: unknown } | null;
+          sandbox?: { state?: unknown; reason?: unknown; live?: unknown } | null;
         };
         const ex = body.export;
         const fx = body.flux;
@@ -98,6 +101,14 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           oob:
             body.oob && typeof body.oob.domain === "string" && typeof body.oob.hits === "number" && Number.isInteger(body.oob.hits) && body.oob.hits >= 0
               ? { domain: body.oob.domain, hits: body.oob.hits }
+              : null,
+          sandbox:
+            body.sandbox && (body.sandbox.state === "ready" || body.sandbox.state === "unavailable")
+              ? {
+                  state: body.sandbox.state,
+                  reason: typeof body.sandbox.reason === "string" ? body.sandbox.reason : null,
+                  live: typeof body.sandbox.live === "number" && Number.isInteger(body.sandbox.live) && body.sandbox.live >= 0 ? body.sandbox.live : 0,
+                }
               : null,
         });
       } catch {

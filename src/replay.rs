@@ -333,6 +333,8 @@ pub struct Replayer {
     pub resolver: std::sync::RwLock<Arc<dyn crate::addresses::Resolve>>,
     /// Out-of-band callbacks (#1); `None` unless a server is configured.
     pub oob: Option<Arc<crate::oob::Oob>>,
+    /// The agent's tool sandbox (#13): off, unavailable (and why), or ready.
+    pub sandbox: std::sync::RwLock<crate::sandbox::State>,
 }
 
 /// Drafts one agent's task may make with verbs (#67) before it's told to
@@ -2852,6 +2854,140 @@ impl Replayer {
                 rec.error = Some("taphttp API unavailable".into());
                 self.audit(&rec);
                 error(StatusCode::BAD_GATEWAY, "taphttp API unavailable")
+            }
+        }
+    }
+}
+
+/// The execution sandbox (#13, docs/sandbox.md): a primitive like `sweep`,
+/// under a task: role-checked, charged before it runs, stopped by a halt or
+/// the e-stop, logged on the task and audited.
+impl Replayer {
+    /// The sandbox, if it's ready; else why not.
+    pub fn sandbox_ready(&self) -> Result<Arc<dyn crate::sandbox::Sandbox>, String> {
+        match &*self.sandbox.read().unwrap_or_else(|p| p.into_inner()) {
+            crate::sandbox::State::Ready(s) => Ok(s.clone()),
+            crate::sandbox::State::Unavailable(why) => {
+                Err(format!("the sandbox won't start here: {why}"))
+            }
+            crate::sandbox::State::Off => Err(
+                "no sandbox is configured: start spall with --sandbox-image (docs/sandbox.md)"
+                    .into(),
+            ),
+        }
+    }
+
+    /// Run `cmd` in `task`'s sandbox. One command is one unit of the task's
+    /// budget, charged before it starts (so nothing runs after an e-stop).
+    pub async fn run_in_sandbox(
+        &self,
+        task: &crate::tasks::Task,
+        cmd: crate::sandbox::Cmd,
+    ) -> Result<crate::sandbox::Run, String> {
+        use crate::tasks::Event;
+        let eng = task.engagement.clone();
+        let refuse = |why: String| {
+            let mut rec = Record::new("sandbox", "", Outcome::Sandbox);
+            rec.actor = "agent".into();
+            rec.task = Some(task.id.clone());
+            rec.engagement = Some(eng.clone());
+            rec.decision = Some("deny");
+            rec.reason = Some(why.clone());
+            self.audit(&rec);
+            why
+        };
+        let sb = self.sandbox_ready().map_err(refuse)?;
+        if !task.role.may(crate::commands::Risk::Send) {
+            return Err(refuse(format!(
+                "a {} runs no tools: that's a Mapper's or a Tester's work",
+                task.role.as_str()
+            )));
+        }
+        let now = taphttp_types::Timestamp::now().to_string();
+        self.tasks
+            .charge(&eng, &task.id, &now)
+            .map_err(|e| refuse(e.to_string()))?;
+        let key = crate::sandbox::Key {
+            engagement: eng.clone(),
+            task: task.id.clone(),
+        };
+        let result = tokio::select! {
+            r = sb.exec(&key, &cmd) => r,
+            why = self.sandbox_stop(&eng, &task.id) => {
+                sb.teardown(&key).await;
+                Err(format!("stopped: {why}"))
+            }
+        };
+        let (exit, ms, outcome) = match &result {
+            Ok(r) if r.timed_out => (
+                None,
+                r.ms,
+                format!("killed after {}s", cmd.timeout.as_secs()),
+            ),
+            Ok(r) => (
+                r.exit,
+                r.ms,
+                format!(
+                    "exit {}",
+                    r.exit.map(|c| c.to_string()).unwrap_or("?".into())
+                ),
+            ),
+            Err(e) => (None, 0, e.clone()),
+        };
+        let now = taphttp_types::Timestamp::now().to_string();
+        let ev = Event::Sandbox {
+            argv: cmd.argv.clone(),
+            exit,
+            ms,
+            outcome: outcome.clone(),
+        };
+        // A task halted mid-command has a closed log; the audit below keeps it.
+        if let Err(e) = self.tasks.log(&eng, &task.id, ev, &now) {
+            tracing::debug!("logging {}'s sandbox command: {e}", task.id);
+        }
+        let mut rec = Record::new("sandbox", "", Outcome::Sandbox);
+        rec.actor = "agent".into();
+        rec.task = Some(task.id.clone());
+        rec.engagement = Some(eng);
+        rec.decision = Some("allow");
+        rec.reason = Some(outcome);
+        rec.changes = Some(serde_json::json!({"argv": cmd.argv}));
+        self.audit(&rec);
+        result
+    }
+
+    /// Resolves when `task` must stop: the e-stop, or it isn't running.
+    async fn sandbox_stop(&self, eng: &str, task: &str) -> String {
+        loop {
+            if self.tasks.estop().is_some() {
+                return "the e-stop is engaged".into();
+            }
+            match self.tasks.get(eng, task) {
+                Some(t) if t.status == crate::tasks::Status::Running => {}
+                Some(t) => return format!("{} is {}", t.id, t.status.as_str()),
+                None => return format!("{task} is gone"),
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    }
+
+    /// Remove sandboxes whose task is over or paused past use: finished,
+    /// gone, or anything while the e-stop is engaged. Runs every couple of
+    /// seconds (App::run) so an idle sandbox dies with its task.
+    pub async fn sandbox_reap(&self) {
+        let Ok(sb) = self.sandbox_ready() else {
+            return;
+        };
+        let estop = self.tasks.estop().is_some();
+        for key in sb.live() {
+            let over = estop
+                || self
+                    .tasks
+                    .get(&key.engagement, &key.task)
+                    .is_none_or(|t| t.status.finished());
+            if over {
+                sb.teardown(&key).await;
+                tracing::info!("sandbox: removed {}'s sandbox", key.task);
             }
         }
     }

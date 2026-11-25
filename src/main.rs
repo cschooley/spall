@@ -27,6 +27,29 @@ async fn main() -> anyhow::Result<()> {
         return spall::mcp_bridge::run(args).await;
     }
 
+    // `spall sandbox-shell [--image I] [-- cmd args...]`: a shell for the
+    // tester in a sandbox with the agent's exact flags (#13). Host-side only.
+    if argv.get(1).map(String::as_str) == Some("sandbox-shell") {
+        let mut rest = &argv[2..];
+        let mut image = std::env::var("SPALL_SANDBOX_IMAGE")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| spall::sandbox::IMAGE_DEFAULT.to_string());
+        if rest.first().map(String::as_str) == Some("--image") {
+            let Some(i) = rest.get(1) else {
+                eprintln!("usage: spall sandbox-shell [--image IMAGE] [-- CMD ARGS...]");
+                std::process::exit(2);
+            };
+            image = i.clone();
+            rest = &rest[2..];
+        }
+        if rest.first().map(String::as_str) == Some("--") {
+            rest = &rest[1..];
+        }
+        let code = spall::sandbox::shell(&image, rest).await?;
+        std::process::exit(code);
+    }
+
     let config = Config::parse();
     let listener = tokio::net::TcpListener::bind(config.listen)
         .await

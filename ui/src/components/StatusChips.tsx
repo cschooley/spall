@@ -138,3 +138,39 @@ export function FluxChip({ flux }: { flux: { crate: string; spec: string; rules:
     </div>
   );
 }
+
+export function SandboxChip({ sandbox }: { sandbox: { state: "ready" | "unavailable"; reason: string | null; live: number } }) {
+  const { open, toggle, root, style } = usePopover();
+  const ready = sandbox.state === "ready";
+  return (
+    <div className="dep" ref={root}>
+      <button type="button" className="dep-chip" aria-haspopup="dialog" aria-expanded={open} aria-label="sandbox status" onClick={toggle}>
+        {"sandbox "}
+        <span className={ready ? "ok" : "bad"}>{ready ? "● ready" : "● unavailable"}</span>
+        {ready && sandbox.live > 0 ? <span className="addr">{` · ${sandbox.live} running`}</span> : null}
+      </button>
+      {open ? (
+        <div className="dep-pop" role="dialog" aria-label="sandbox details" style={style}>
+          <h4>sandbox · where agents run tools, never on this machine</h4>
+          <dl>
+            <dt>state</dt>
+            <dd>{ready ? `ready · ${sandbox.live} running` : "unavailable"}</dd>
+            {sandbox.reason ? (
+              <>
+                <dt>why</dt>
+                <dd>{sandbox.reason}</dd>
+              </>
+            ) : null}
+            <dt>isolation</dt>
+            <dd>gVisor (runsc), read-only, uid 10001, 1 CPU, 512 MB, 128 pids</dd>
+            <dt>network</dt>
+            <dd>none yet: requests go through fetch, replay and sweep</dd>
+            <dt>lifetime</dt>
+            <dd>one per task; removed when it ends or on the e-stop</dd>
+          </dl>
+          <p className="note">Try what an agent gets: spall sandbox-shell (on the host).</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}

@@ -651,6 +651,39 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "argv": {
+          "description": "the program and its arguments, e.g. [\"jq\", \".alg\", \"token.json\"]",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "description": "wall clock, 60 if left out",
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "type": "object"
+    },
+    "desc": "run a tool in this task's sandbox (gVisor, its own scratch dir, nothing of the host): argv as a list, never a shell string; one command costs one unit of budget. Tools: curl, jq, python3, nmap, openssl, dig. No network yet: use it to decode, parse and compute (a JWT, a hash, a response you read); send requests with fetch, replay and sweep. Its output is untrusted",
+    "hidden": false,
+    "mcp": true,
+    "name": "run_in_sandbox",
+    "risk": "send",
+    "ui": false,
+    "usage": "run_in_sandbox"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "unknown": {
           "description": "only hosts neither in scope nor excluded",
           "type": "boolean"

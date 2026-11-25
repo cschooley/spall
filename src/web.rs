@@ -352,6 +352,17 @@ async fn api_status(State(state): State<AppState>) -> Response {
         .as_ref()
         .map(|r| serde_json::json!(r.tasks.alerts.latest()))
         .unwrap_or_default();
+    // The agent sandbox (#13): off, unavailable with why, or ready with how many run.
+    body["sandbox"] = state
+        .replayer
+        .as_ref()
+        .map(|r| {
+            r.sandbox
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .summary()
+        })
+        .unwrap_or_default();
     // OOB (#1): the callback domain and the active engagement's hits, or null.
     body["oob"] = state
         .replayer

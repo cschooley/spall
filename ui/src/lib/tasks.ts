@@ -351,6 +351,13 @@ export function messages(t: Task): Message[] {
       case "approval":
         out.push({ time, who: "sys", text: `${str(e.outcome)}: ${str(e.what)}` });
         break;
+      case "sandbox": {
+        // A command in the task's sandbox (#13): the argv as text, never run.
+        const argv = Array.isArray(e.argv) ? e.argv.filter((a): a is string => typeof a === "string") : [];
+        const ms = typeof e.ms === "number" ? ` (${e.ms} ms)` : "";
+        out.push({ time, who: "sys", text: `sandbox $ ${argv.join(" ")} → ${str(e.outcome)}${ms}` });
+        break;
+      }
     }
   }
   return out;

@@ -48,6 +48,8 @@ pub enum Outcome {
     McpSession,
     /// Quad mode started or ended (#66), or a start was refused.
     Quad,
+    /// A command ran in a task's sandbox, or was refused or stopped (#13).
+    Sandbox,
 }
 
 #[derive(Debug, Clone, Serialize)]

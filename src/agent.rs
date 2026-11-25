@@ -207,6 +207,7 @@ impl Tools {
             "oob_payload" => self.oob_payload(&t).await,
             "surface" => self.surface(a),
             "record_coverage" => self.record_coverage(&t, a).await,
+            "run_in_sandbox" => self.run_in_sandbox(&t, a).await,
             "oob_hits" => self.oob_hits(&t),
             "checks" => Ok(checks_text(&self.replayer.checks())),
             "retest_result" => self.retest_result(&t, a),
@@ -693,6 +694,47 @@ impl Tools {
         )))
     }
 
+    /// `run_in_sandbox` (#13): a tool in this task's sandbox. The output is
+    /// whatever the tool printed, which may carry target data: untrusted.
+    async fn run_in_sandbox(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            argv: Vec<String>,
+            timeout_seconds: Option<u64>,
+        }
+        let a: A = args("run_in_sandbox", a)?;
+        let cmd = crate::sandbox::Cmd::new(a.argv, a.timeout_seconds)
+            .map_err(|e| err(format!("run_in_sandbox: {e}")))?;
+        match self.replayer.run_in_sandbox(t, cmd).await {
+            Ok(r) => {
+                let head = if r.timed_out {
+                    format!("{} was killed at its time limit", r.argv[0])
+                } else {
+                    format!(
+                        "{} exited {}",
+                        r.argv[0],
+                        r.exit.map(|c| c.to_string()).unwrap_or("?".into())
+                    )
+                };
+                let v = serde_json::json!({
+                    "exit": r.exit,
+                    "ms": r.ms,
+                    "timed_out": r.timed_out,
+                    "truncated": r.truncated,
+                    "stdout": r.stdout,
+                    "stderr": r.stderr,
+                });
+                Ok(ok(format!(
+                    "{head} in {} ms.\n{}",
+                    r.ms,
+                    untrusted::wrap_json("sandbox output", &v)
+                )))
+            }
+            Err(why) => Err(err(format!("run_in_sandbox: {why}"))),
+        }
+    }
+
     /// `oob_payload` (#1): a callback host for this task. Sends nothing.
     async fn oob_payload(&self, t: &Task) -> Result<Output, Output> {
         match self.replayer.oob_mint(Some(&t.id)).await {
@@ -987,6 +1029,7 @@ mod tests {
                 "oob_hits",
                 "surface",
                 "record_coverage",
+                "run_in_sandbox",
                 "hosts",
                 "rules",
                 "task",

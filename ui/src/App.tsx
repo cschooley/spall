@@ -1,6 +1,6 @@
 import { alertHash, alertsAfter, alertText } from "./lib/alerts.ts";
 import { AlertsButton, alertsWanted } from "./components/AlertsButton.tsx";
-import { TaphttpChip, FluxChip } from "./components/StatusChips.tsx";
+import { TaphttpChip, FluxChip, SandboxChip } from "./components/StatusChips.tsx";
 import { loadOob, mintOob } from "./lib/oob.ts";
 import { loadChecks, runSweep } from "./lib/sweep.ts";
 import { loadSurface } from "./lib/surface.ts";
@@ -922,6 +922,7 @@ export function App() {
       <footer className="statusbar">
         <TaphttpChip source={status.source} connected={status.connected} proxy={status.proxy} />
         <FluxChip flux={status.flux} />
+        {status.sandbox ? <SandboxChip sandbox={status.sandbox} /> : null}
         {status.oob ? (
           <a className="oob-status" href="#engagement" title="Out-of-band callback sensor (#1): payloads and hits are in the Engagement view (1).">
             {"OAST "}

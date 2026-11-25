@@ -219,6 +219,21 @@ profile `oob` runs `projectdiscovery/interactsh-server` pinned by digest
 on the compose network only. Tests: a fake interactsh in tests/lever.rs; a
 real-server round trip is `#[ignore]`d (`SPALL_TEST_INTERACTSH`).
 
+Sandbox slice 1 (#13): `src/sandbox.rs` (`Sandbox` trait; `Runsc` runs
+`docker run --runtime=runsc --network none --read-only`, a tmpfs
+`/scratch`, uid 10001, capped, one container per task, `docker exec ...
+timeout -s KILL`; `Fake` for tests; `check` has no side effects,
+`preflight` also clears leftovers). `Replayer::sandbox` is a
+`sandbox::State` (off / unavailable with why / ready), checked in
+`App::run`; `App::with_sandbox` for tests. `run_in_sandbox` (registry
+`send`, agent-only) is role-checked, charged one unit before it runs,
+stopped by halt or e-stop (`sandbox_stop`), logged as `Event::Sandbox`,
+audited (`Outcome::Sandbox`); `sandbox_reap` (every 2 s) removes a
+finished task's sandbox. `spall sandbox-shell` is the tester's shell with
+the same `run_flags`. Image `sandbox/Dockerfile` (alpine pinned by
+digest). Real-runtime test: `SPALL_TEST_RUNSC=1 cargo test --lib sandbox
+-- --include-ignored`. No network until slice 2 (taphttp `/clients`).
+
 Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
 ids that must match `T-n` / `I-n` / an engagement id, a time; anything else
 is dropped), newest 200 in memory. `tasks::Store::change` raises waiting /

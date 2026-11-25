@@ -32,6 +32,7 @@ pub mod replay;
 pub mod roe;
 pub mod roles;
 pub mod rules;
+pub mod sandbox;
 pub mod scope_list;
 pub mod stack;
 pub mod surface;
@@ -309,6 +310,12 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                     }
                     None => None,
                 },
+                // Checked in App::run (Docker is async); until then, off
+                // or "not checked yet".
+                sandbox: std::sync::RwLock::new(match &config.sandbox_image {
+                    Some(_) => sandbox::State::Unavailable("not checked yet".into()),
+                    None => sandbox::State::Off,
+                }),
             }))
         }
         None => None,
@@ -379,6 +386,14 @@ impl App {
         self
     }
 
+    /// Use `sandbox` as the agent's tool sandbox (#13); tests pass a fake.
+    pub fn with_sandbox(self, sandbox: Arc<dyn sandbox::Sandbox>) -> App {
+        if let Some(r) = &self.replayer {
+            *r.sandbox.write().unwrap_or_else(|p| p.into_inner()) = sandbox::State::Ready(sandbox);
+        }
+        self
+    }
+
     /// Run spall's agent host on `model` (#63); tests pass a scripted one.
     /// Without the lever API there's nothing for it to drive.
     pub fn with_model(mut self, model: Arc<dyn model::Model>) -> App {
@@ -437,6 +452,36 @@ impl App {
                 tokio::time::sleep(oob::POLL).await;
             }
         };
+        // The sandbox (#13): check it can run here (or say why not), then
+        // remove sandboxes whose task is over, every couple of seconds.
+        let sandbox_replayer = state.replayer.clone();
+        let sandbox_image = config.sandbox_image.clone();
+        let sandboxes = async {
+            let Some(r) = sandbox_replayer else {
+                return std::future::pending().await;
+            };
+            let unchecked = matches!(
+                &*r.sandbox.read().unwrap_or_else(|p| p.into_inner()),
+                sandbox::State::Unavailable(_)
+            );
+            if let (Some(image), true) = (sandbox_image, unchecked) {
+                let st = match sandbox::Runsc::preflight(&image).await {
+                    Ok(s) => {
+                        tracing::info!("agent sandbox: {image} under gVisor, no network (slice 1)");
+                        sandbox::State::Ready(Arc::new(s))
+                    }
+                    Err(why) => {
+                        tracing::warn!("agent sandbox unavailable: {why}");
+                        sandbox::State::Unavailable(why)
+                    }
+                };
+                *r.sandbox.write().unwrap_or_else(|p| p.into_inner()) = st;
+            }
+            loop {
+                r.sandbox_reap().await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        };
         let source = async {
             match lever {
                 Some(lever) => {
@@ -458,6 +503,7 @@ impl App {
             r = source => r,
             r = agents => r,
             r = oob => r,
+            r = sandboxes => r,
         }
     }
 }

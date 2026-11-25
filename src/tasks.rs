@@ -476,6 +476,15 @@ pub enum Event {
         workers: u32,
         seconds: u64,
     },
+    /// A command run in the task's sandbox (#13): the argv, its exit code
+    /// (none when killed), how long it took, and what became of it.
+    Sandbox {
+        argv: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit: Option<i32>,
+        ms: u64,
+        outcome: String,
+    },
 }
 
 // No deny_unknown_fields: serde doesn't support it with flatten (the

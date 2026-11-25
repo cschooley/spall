@@ -159,6 +159,13 @@ pub struct Config {
     #[arg(long, env = "SPALL_OAST_TOKEN_FILE")]
     pub oast_token_file: Option<PathBuf>,
 
+    /// The agent's tool sandbox (#13, docs/sandbox.md): the toolset image to
+    /// run under gVisor (build it with `docker build -t spall-sandbox:dev
+    /// sandbox/`). Off unless set. Needs Docker with the runsc runtime where
+    /// spall runs; without it the sandbox refuses and says why.
+    #[arg(long, env = "SPALL_SANDBOX_IMAGE")]
+    pub sandbox_image: Option<String>,
+
     /// Output tokens one model turn may use, thinking included.
     #[arg(long, env = "SPALL_MODEL_MAX_TOKENS", default_value_t = crate::model::DEFAULT_MAX_TOKENS, value_parser = clap::value_parser!(u32).range(1024..=128_000))]
     pub model_max_tokens: u32,

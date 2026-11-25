@@ -3775,6 +3775,7 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "oob_hits",
             "surface",
             "record_coverage",
+            "run_in_sandbox",
             "hosts",
             "rules",
             "task",
@@ -6583,4 +6584,193 @@ async fn surface_shows_endpoints_and_what_was_tested_where() {
         "{}",
         out.text
     );
+}
+
+/// The sandbox (#13, slice 1) through the agent's own path: a command runs
+/// in the task's sandbox, is charged, logged, audited and handed back as
+/// untrusted output; containment holds (the fake keeps the contract the
+/// real runsc test checks); a role that runs no tools is refused; the
+/// e-stop kills a running command and the reaper removes a finished task's
+/// sandbox. Without one configured, the agent is told so.
+#[tokio::test]
+async fn an_agent_runs_tools_in_its_task_sandbox_charged_logged_and_stoppable() {
+    use spall::sandbox::{Fake, Key, Sandbox, State};
+    let (_dir, _stub, spall, r) =
+        agent_setup_with(r#"{"budget":5}"#, &["--scope", "example.com"], &[]).await;
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let eng = r.engagements.active().id;
+
+    // Not configured: the agent is told, nothing is charged.
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["echo", "hi"]}),
+        )
+        .await;
+    assert!(
+        out.is_error && out.text.contains("no sandbox is configured"),
+        "{}",
+        out.text
+    );
+    assert_eq!(task_of(&r, "T-1").spent, 0);
+    let st = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(st["sandbox"]["state"], "off");
+
+    let fake = Arc::new(Fake::default());
+    *r.sandbox.write().unwrap() = State::Ready(fake.clone());
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["echo", "hello <b>there</b>"]}),
+        )
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+    assert!(out.text.contains("echo exited 0"), "{}", out.text);
+    assert!(
+        out.text.contains("untrusted") && out.text.contains("hello <b>there</b>"),
+        "wrapped: {}",
+        out.text
+    );
+    let key = Key {
+        engagement: eng.clone(),
+        task: "T-1".into(),
+    };
+    assert_eq!(fake.live(), vec![key.clone()]);
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.spent, 1, "one command, one unit of budget");
+    assert!(t.log.iter().any(|e| matches!(&e.event, spall::tasks::Event::Sandbox { argv, exit: Some(0), .. } if argv[0] == "echo")));
+    let st = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(
+        (
+            st["sandbox"]["state"].as_str(),
+            st["sandbox"]["live"].as_u64()
+        ),
+        (Some("ready"), Some(1))
+    );
+
+    // Containment is the sandbox's, not a filter's: writing outside scratch
+    // fails there, and there's no route out.
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["touch", "/etc/passwd"]}),
+        )
+        .await;
+    assert!(
+        out.text.contains("touch exited 1") && out.text.contains("Read-only"),
+        "{}",
+        out.text
+    );
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["curl", "http://evil.test/"]}),
+        )
+        .await;
+    assert!(out.text.contains("curl exited 6"), "{}", out.text);
+
+    // A shell string is refused as an argument shape, not by matching it.
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": "rm -rf /"}),
+        )
+        .await;
+    assert!(out.is_error, "{}", out.text);
+    let out = tools
+        .call("T-1", "run_in_sandbox", &serde_json::json!({"argv": []}))
+        .await;
+    assert!(out.is_error, "{}", out.text);
+
+    // The e-stop kills a running command.
+    let t2 = tools.clone();
+    let running = tokio::spawn(async move {
+        t2.call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["block"]}),
+        )
+        .await
+    });
+    eventually("block started", || {
+        fake.ran
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, a)| a[0] == "block")
+    })
+    .await;
+    let res = post_text(spall, "/api/estop", r#"{"reason":"test"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let out = tokio::time::timeout(std::time::Duration::from_secs(5), running)
+        .await
+        .expect("stopped in time")
+        .unwrap();
+    assert!(out.is_error || out.text.contains("stopped"), "{}", out.text);
+    assert!(fake.live().is_empty(), "the e-stop removed the sandbox");
+    assert!(fake.torn.lock().unwrap().contains(&key));
+    // The halted task's log is closed (halted is forever), so the kill is
+    // on the audit record, next to every other sandbox command.
+    let audit = std::fs::read_to_string(_dir.path().join("audit.jsonl")).unwrap_or_default();
+    let block = audit
+        .lines()
+        .find(|l| l.contains(r#""action":"sandbox""#) && l.contains(r#""block""#))
+        .unwrap_or_else(|| panic!("no audit for block: {audit}"));
+    assert!(
+        block.contains("stopped") && block.contains("e-stop"),
+        "{block}"
+    );
+    assert!(task_of(&r, "T-1").log.iter().any(|e| matches!(
+        &e.event,
+        spall::tasks::Event::Status {
+            to: spall::tasks::Status::Halted,
+            ..
+        }
+    )));
+}
+
+/// A Scoper runs no tools; the reaper removes the sandbox of a task that
+/// finished.
+#[tokio::test]
+async fn a_scoper_runs_no_tools_and_a_finished_tasks_sandbox_is_removed() {
+    use spall::sandbox::{Cmd, Fake, Sandbox, State};
+    let (_dir, _stub, spall, r) = agent_setup_with("{}", &["--scope", "example.com"], &[]).await;
+    let fake = Arc::new(Fake::default());
+    *r.sandbox.write().unwrap() = State::Ready(fake.clone());
+    let eng = r.engagements.active().id;
+    let mut scoper = task_of(&r, "T-1");
+    scoper.role = spall::tasks::Role::Scoper;
+    let refused = r
+        .run_in_sandbox(&scoper, Cmd::new(vec!["echo".into()], None).unwrap())
+        .await;
+    assert!(refused.unwrap_err().contains("scoper runs no tools"));
+    assert!(fake.ran.lock().unwrap().is_empty());
+
+    let t = task_of(&r, "T-1");
+    r.run_in_sandbox(&t, Cmd::new(vec!["echo".into(), "x".into()], None).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(fake.live().len(), 1);
+    r.sandbox_reap().await;
+    assert_eq!(fake.live().len(), 1, "a running task keeps its sandbox");
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"halt","reason":"done here"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    r.sandbox_reap().await;
+    assert!(fake.live().is_empty(), "removed with its task");
+    let _ = eng;
 }

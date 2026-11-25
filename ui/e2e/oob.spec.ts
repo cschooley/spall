@@ -115,3 +115,31 @@ test("the status bar has no OOB chip when no sensor is configured (#1)", async (
   await expect(page.locator(".statusbar")).toBeVisible();
   await expect(page.locator(".statusbar a.oob-status")).toHaveCount(0);
 });
+
+test("the sandbox chip shows its state; its popover says why it's unavailable (#13)", async ({ page }) => {
+  engagementApi(page);
+  const P = `<img src=x onerror="window.__pwned=1">`;
+  await page.route("**/api/status", (r) =>
+    r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.example"], sandbox: { state: "unavailable", reason: `gVisor's runsc isn't a Docker runtime here ${P}` } } }),
+  );
+  await page.goto("/#engagement");
+  const chip = page.getByRole("button", { name: "sandbox status" });
+  await expect(chip).toContainText("unavailable");
+  await chip.click();
+  const pop = page.getByRole("dialog", { name: "sandbox details" });
+  await expect(pop).toContainText(`runsc isn't a Docker runtime here ${P}`);
+  await expect(pop).toContainText("spall sandbox-shell");
+  expect(await page.locator(".statusbar img").count()).toBe(0);
+});
+
+test("the sandbox chip is absent when no sandbox is configured, and counts running ones (#13)", async ({ page }) => {
+  engagementApi(page); // no sandbox field: off
+  await page.goto("/#engagement");
+  await expect(page.locator(".statusbar")).toBeVisible();
+  await expect(page.getByRole("button", { name: "sandbox status" })).toHaveCount(0);
+  await page.route("**/api/status", (r) =>
+    r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: [], sandbox: { state: "ready", live: 2 } } }),
+  );
+  await page.reload();
+  await expect(page.getByRole("button", { name: "sandbox status" })).toContainText("ready · 2 running");
+});
