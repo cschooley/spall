@@ -249,6 +249,10 @@ What to know:
 - **What the agent reads goes to the model.** With a hosted model, that's captured traffic (credentials masked, bodies truncated) leaving your machine for the model's provider. Plain `http` is allowed only to a model on this machine or a private network.
 - **Every turn is recorded.** The model's text goes in the task's log (cut at 4,000 characters), and the whole conversation is kept (0600) at `/data/engagements/tasks/transcripts/<engagement>/<task>.json`.
 
+### Agent tool sandbox (coming)
+
+When the agent gains real tools (`curl`, `nmap`, `ffuf`, a Python interpreter), they run in a disposable, isolated sandbox — never a shell on the host — with HTTP egress forced through taphttp. The design is in [`docs/sandbox.md`](docs/sandbox.md). It uses **gVisor** (`runsc`) for isolation, Linux only; where `runsc` isn't installed the sandbox refuses to start rather than falling back to a weaker mode. Install it from [gvisor.dev/docs/user_guide/install](https://gvisor.dev/docs/user_guide/install/) (its apt repo, then `sudo runsc install` and a Docker restart). Nothing else in spall needs it: traffic, replay, findings, sweeps, OOB and the practice lab all work without it.
+
 ## Configuration
 
 ### Where traffic comes from
