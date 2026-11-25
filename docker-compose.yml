@@ -37,12 +37,19 @@ services:
       - --api-allow-plaintext
     environment:
       RUST_LOG: info
+      # The agent sandbox's credential-only listener (spall#13 slice 2), once
+      # taphttp has it (taphttp#27), on the sandbox network only:
+      # - --auth-listen
+      # - 0.0.0.0:8090
     ports:
       - "127.0.0.1:${TAPHTTP_PORT:-8080}:8080"
     volumes:
       - traffic:/data
       - taphttp-ca:/ca
       - taphttp-token:/token
+    # `sandbox` is spall's agent sandboxes' only way out (#13): internal (no
+    # route anywhere), with taphttp as its only other member.
+    networks: [default, sandbox]
     restart: unless-stopped
 
   spall:
@@ -133,6 +140,16 @@ services:
     security_opt: ["no-new-privileges:true"]
     mem_limit: 1g
     restart: unless-stopped
+
+networks:
+  default: {}
+  # Agent sandboxes (spall#13, docs/sandbox.md slice 2) join this and reach
+  # only taphttp's credential-only listener. spall checks it with a probe
+  # sandbox before routing anything: internal, the open listener (8080)
+  # unreachable from here, the credential-only one asking for a credential.
+  sandbox:
+    name: spall-sandbox
+    internal: true
 
 volumes:
   traffic:

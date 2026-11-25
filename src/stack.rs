@@ -125,6 +125,20 @@ impl Stack {
         None
     }
 
+    /// The addresses the stack's names resolve to from here (#13 slice 2): a
+    /// sandbox's network allowlist mustn't hold any of them.
+    pub async fn addresses(&self) -> Vec<IpAddr> {
+        let mut v: Vec<IpAddr> = Vec::new();
+        for n in &self.names {
+            for ip in resolve(n, 80).await {
+                if !v.contains(&ip) {
+                    v.push(ip);
+                }
+            }
+        }
+        v
+    }
+
     /// `Some(reason)` when an agent may not send to `url`.
     pub async fn refuses(&self, url: &str) -> Option<String> {
         let (host, port) = target(url)?;

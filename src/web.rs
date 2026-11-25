@@ -357,10 +357,17 @@ async fn api_status(State(state): State<AppState>) -> Response {
         .replayer
         .as_ref()
         .map(|r| {
-            r.sandbox
+            let mut v = r
+                .sandbox
                 .read()
                 .unwrap_or_else(|p| p.into_inner())
-                .summary()
+                .summary();
+            v["network"] = r
+                .sandbox_net
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .summary();
+            v
         })
         .unwrap_or_default();
     // OOB (#1): the callback domain and the active engagement's hits, or null.

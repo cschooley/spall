@@ -36,6 +36,12 @@ fn entry(id: &str) -> String {
 
 #[derive(Default)]
 struct StubState {
+    /// Issued proxy credentials (taphttp#25 `/clients`): each POST body.
+    clients: Mutex<Vec<serde_json::Value>>,
+    /// Credentials revoked (DELETE /clients/{id}), in order.
+    revoked: Mutex<Vec<String>>,
+    /// What GET /clients says each credential sent: as if taphttp counted.
+    client_sent: Mutex<u32>,
     /// Recorded order, oldest first: (id, json).
     entries: Mutex<Vec<(String, String)>>,
     /// `since` value of each /feed connection, in order.
@@ -86,6 +92,49 @@ impl Stub {
     fn sends(&self) -> Vec<serde_json::Value> {
         self.0.sends.lock().unwrap().clone()
     }
+    fn clients(&self) -> Vec<serde_json::Value> {
+        self.0.clients.lock().unwrap().clone()
+    }
+    fn revoked(&self) -> Vec<String> {
+        self.0.revoked.lock().unwrap().clone()
+    }
+}
+
+/// `POST /clients`: a credential `c-<n>` with a password that needs
+/// escaping in a URL. `GET /clients` lists them with `client_sent` as the
+/// count and one refusal each. `DELETE /clients/{id}` revokes.
+async fn clients_post(State(s): State<Stub>, body: String) -> Response {
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let mut list = s.0.clients.lock().unwrap();
+    list.push(v.clone());
+    let id = format!("c-{}", list.len());
+    (
+        StatusCode::CREATED,
+        axum::Json(serde_json::json!({
+            "id": id, "username": id, "password": "p@ss/1",
+            "allow": v["allow"], "budget": v["budget"], "meta": v["meta"],
+            "sent": 0, "refused": 0, "revoked": false,
+        })),
+    )
+        .into_response()
+}
+
+async fn clients_get(State(s): State<Stub>) -> Response {
+    let sent = *s.0.client_sent.lock().unwrap();
+    let revoked = s.0.revoked.lock().unwrap().clone();
+    let n = s.0.clients.lock().unwrap().len();
+    let list: Vec<serde_json::Value> = (1..=n)
+        .map(|i| {
+            let id = format!("c-{i}");
+            serde_json::json!({"id": id, "sent": sent, "refused": 1, "revoked": revoked.contains(&id)})
+        })
+        .collect();
+    axum::Json(list).into_response()
+}
+
+async fn clients_delete(State(s): State<Stub>, Path(id): Path<String>) -> Response {
+    s.0.revoked.lock().unwrap().push(id);
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// `POST /send`: a URL with `fails` in it gets a recorded failure (502),
@@ -273,6 +322,8 @@ async fn start_stub() -> (Stub, SocketAddr) {
         .route("/feed", get(feed))
         .route("/replay", post(replay))
         .route("/send", post(send))
+        .route("/clients", post(clients_post).get(clients_get))
+        .route("/clients/{id}", axum::routing::delete(clients_delete))
         .route("/info", get(|| async { axum::Json(serde_json::json!({
             "taphttp_version": "0.6.1",
             "ca": { "subject": "CN=taphttp CA", "sha256": "EB:6F:71:3A", "not_before": "2026-11-20T00:00:00Z", "not_after": "2036-11-20T00:00:00Z" },
@@ -6773,4 +6824,168 @@ async fn a_scoper_runs_no_tools_and_a_finished_tasks_sandbox_is_removed() {
     r.sandbox_reap().await;
     assert!(fake.live().is_empty(), "removed with its task");
     let _ = eng;
+}
+
+/// The sandbox's network (#13 slice 2): with taphttp's credential-only
+/// listener checked, each command gets its own credential: an allowlist of
+/// what can't reach past scope (a wildcard covering an exclusion is left
+/// out, with why), the task's remaining budget, its attribution. The
+/// requests taphttp counted are charged to the task, the credential is
+/// revoked after the command (and at once on the e-stop), and the agent is
+/// told what it could reach. Until the listener exists, no network, and
+/// the reason says so.
+#[tokio::test]
+async fn a_sandbox_command_gets_its_own_scoped_credential_and_pays_for_its_requests() {
+    use spall::sandbox::{Fake, NetState, Sandbox, State};
+    let (dir, stub, spall, r) = agent_setup_with(
+        r#"{"budget":10}"#,
+        &["--scope", "example.com,*.lab.test,!pay.lab.test"],
+        &[],
+    )
+    .await;
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let fake = Arc::new(Fake::default());
+    *r.sandbox.write().unwrap() = State::Ready(fake.clone());
+
+    // taphttp without the listener (the stub's /info has no auth_proxy):
+    // no network, and the reason names taphttp#27.
+    let st = r
+        .sandbox_net_check("img", "spall-sandbox", "taphttp:8090", "taphttp:8080")
+        .await;
+    assert!(
+        matches!(&st, NetState::Waiting(w) if w.contains("taphttp#27")),
+        "{}",
+        st.summary()
+    );
+    *r.sandbox_net.write().unwrap() = st;
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["curl", "http://example.com/"]}),
+        )
+        .await;
+    assert!(
+        out.text.contains("Network: none yet") && out.text.contains("curl exited 6"),
+        "{}",
+        out.text
+    );
+    assert!(
+        stub.clients().is_empty(),
+        "no credential without the listener"
+    );
+    assert_eq!(fake.nets.lock().unwrap().last().cloned(), Some(None));
+    let st = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(st["sandbox"]["network"]["state"], "waiting");
+
+    // With it: a credential per command.
+    *r.sandbox_net.write().unwrap() = NetState::Ready {
+        proxy: "taphttp:8090".into(),
+    };
+    *stub.0.client_sent.lock().unwrap() = 3;
+    let spent = task_of(&r, "T-1").spent;
+    let out = tools
+        .call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["curl", "http://example.com/"]}),
+        )
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+    assert!(out.text.contains("curl exited 0"), "{}", out.text);
+    assert!(
+        out.text.contains("Network: through taphttp to example.com"),
+        "{}",
+        out.text
+    );
+    assert!(
+        out.text
+            .contains("*.lab.test: covers pay.lab.test (excluded)"),
+        "left out, with why: {}",
+        out.text
+    );
+    assert!(
+        out.text.contains("3 request(s) sent, 1 refused"),
+        "{}",
+        out.text
+    );
+    let issued = stub.clients();
+    assert_eq!(issued.len(), 1);
+    assert_eq!(issued[0]["allow"], serde_json::json!(["example.com"]));
+    assert_eq!(
+        issued[0]["meta"],
+        serde_json::json!({"actor": "agent", "task": "T-1"})
+    );
+    assert_eq!(
+        issued[0]["budget"],
+        serde_json::json!(10 - (spent + 1)),
+        "the task's remaining budget, after the command's own unit"
+    );
+    assert_eq!(
+        fake.nets.lock().unwrap().last().cloned(),
+        Some(Some("http://c-1:p%40ss%2F1@taphttp:8090".to_string())),
+        "the command's credential, escaped"
+    );
+    assert_eq!(
+        stub.revoked(),
+        vec!["c-1".to_string()],
+        "revoked after the command"
+    );
+    let t = task_of(&r, "T-1");
+    assert_eq!(
+        t.spent,
+        spent + 1 + 3,
+        "the command's unit and taphttp's three requests"
+    );
+    assert!(t.log.iter().any(|e| matches!(
+        &e.event,
+        spall::tasks::Event::Sandbox {
+            sent: Some(3),
+            refused: Some(1),
+            ..
+        }
+    )));
+    let audit = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    assert!(
+        !audit.contains("p@ss/1") && !audit.contains("p%40ss"),
+        "the password never reaches the audit log"
+    );
+    let st = body_json(&get_text(spall, "/api/status").await);
+    assert_eq!(st["sandbox"]["network"]["state"], "ready");
+
+    // The e-stop revokes a running command's credential at once.
+    *stub.0.client_sent.lock().unwrap() = 0;
+    let t2 = tools.clone();
+    let running = tokio::spawn(async move {
+        t2.call(
+            "T-1",
+            "run_in_sandbox",
+            &serde_json::json!({"argv": ["block"]}),
+        )
+        .await
+    });
+    eventually("block started", || {
+        stub.clients().len() == 2
+            && fake
+                .ran
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(_, a)| a[0] == "block")
+    })
+    .await;
+    let res = post_text(spall, "/api/estop", r#"{"reason":"test"}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), running)
+        .await
+        .expect("stopped in time");
+    assert!(
+        stub.revoked().contains(&"c-2".to_string()),
+        "revoked on the e-stop: {:?}",
+        stub.revoked()
+    );
+    assert!(fake.live().is_empty());
 }

@@ -120,6 +120,23 @@ impl Lever {
         Ok((status, bytes))
     }
 
+    /// `DELETE <base><path>` with the bearer token: the status and body.
+    pub async fn delete(&self, path: &str) -> anyhow::Result<(StatusCode, Bytes)> {
+        let req = Request::delete(format!("{}{path}", self.base))
+            .header(AUTHORIZATION, self.auth_header()?)
+            .body(Full::new(Bytes::new()))
+            .context("building request")?;
+        let res = self.send(req, Duration::from_secs(10)).await?;
+        let status = res.status();
+        let bytes = res
+            .into_body()
+            .collect()
+            .await
+            .context("reading taphttp response")?
+            .to_bytes();
+        Ok((status, bytes))
+    }
+
     /// `GET` and read the whole body.
     pub async fn get_bytes(&self, path: &str) -> anyhow::Result<(StatusCode, Bytes)> {
         let res = self.get(path).await?;

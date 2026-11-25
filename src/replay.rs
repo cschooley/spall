@@ -335,6 +335,8 @@ pub struct Replayer {
     pub oob: Option<Arc<crate::oob::Oob>>,
     /// The agent's tool sandbox (#13): off, unavailable (and why), or ready.
     pub sandbox: std::sync::RwLock<crate::sandbox::State>,
+    /// Its network (#13 slice 2): off, waiting (and why), or ready.
+    pub sandbox_net: std::sync::RwLock<crate::sandbox::NetState>,
 }
 
 /// Drafts one agent's task may make with verbs (#67) before it's told to
@@ -2878,12 +2880,14 @@ impl Replayer {
     }
 
     /// Run `cmd` in `task`'s sandbox. One command is one unit of the task's
-    /// budget, charged before it starts (so nothing runs after an e-stop).
+    /// budget, charged before it starts (so nothing runs after an e-stop);
+    /// with a network, each request it makes through taphttp is one more,
+    /// counted by taphttp on the command's own credential and charged after.
     pub async fn run_in_sandbox(
         &self,
         task: &crate::tasks::Task,
         cmd: crate::sandbox::Cmd,
-    ) -> Result<crate::sandbox::Run, String> {
+    ) -> Result<crate::sandbox::Ran, String> {
         use crate::tasks::Event;
         let eng = task.engagement.clone();
         let refuse = |why: String| {
@@ -2911,13 +2915,29 @@ impl Replayer {
             engagement: eng.clone(),
             task: task.id.clone(),
         };
+        let (grant, network) = self.sandbox_grant(&eng, &task.id).await;
+        let net = grant.as_ref().map(|(_, n)| n);
         let result = tokio::select! {
-            r = sb.exec(&key, &cmd) => r,
+            r = sb.exec(&key, &cmd, net) => r,
             why = self.sandbox_stop(&eng, &task.id) => {
+                // Revoking closes its connections at once; then the box goes.
+                if let Some((id, _)) = &grant {
+                    let _ = self.lever.delete(&format!("/clients/{id}")).await;
+                }
                 sb.teardown(&key).await;
                 Err(format!("stopped: {why}"))
             }
         };
+        let (sent, refused) = match &grant {
+            Some((id, _)) => self.sandbox_revoke(id).await,
+            None => (None, None),
+        };
+        let now = taphttp_types::Timestamp::now().to_string();
+        if let Some(n) = sent {
+            if let Err(e) = self.tasks.spend(&eng, &task.id, n, &now) {
+                tracing::warn!("charging {}'s sandbox requests: {e}", task.id);
+            }
+        }
         let (exit, ms, outcome) = match &result {
             Ok(r) if r.timed_out => (
                 None,
@@ -2934,12 +2954,13 @@ impl Replayer {
             ),
             Err(e) => (None, 0, e.clone()),
         };
-        let now = taphttp_types::Timestamp::now().to_string();
         let ev = Event::Sandbox {
             argv: cmd.argv.clone(),
             exit,
             ms,
             outcome: outcome.clone(),
+            sent,
+            refused,
         };
         // A task halted mid-command has a closed log; the audit below keeps it.
         if let Err(e) = self.tasks.log(&eng, &task.id, ev, &now) {
@@ -2951,9 +2972,172 @@ impl Replayer {
         rec.engagement = Some(eng);
         rec.decision = Some("allow");
         rec.reason = Some(outcome);
-        rec.changes = Some(serde_json::json!({"argv": cmd.argv}));
+        rec.changes = Some(serde_json::json!({
+            "argv": cmd.argv,
+            "network": network,
+            "sent": sent,
+            "refused": refused,
+        }));
         self.audit(&rec);
-        result
+        result.map(|run| crate::sandbox::Ran {
+            run,
+            network,
+            sent,
+            refused,
+        })
+    }
+
+    /// A credential for one command (slice 2), with the proxy URL and CA to
+    /// hand the sandbox, and a line saying what it reaches; or no network
+    /// and why. Its allowlist is what can't reach past scope
+    /// (`Scope::sandbox_allow`), its budget the task's remaining one, its
+    /// rate the task's, its `meta` the task's attribution.
+    async fn sandbox_grant(
+        &self,
+        eng: &str,
+        task: &str,
+    ) -> (Option<(String, crate::sandbox::Net)>, String) {
+        let proxy = match &*self.sandbox_net.read().unwrap_or_else(|p| p.into_inner()) {
+            crate::sandbox::NetState::Ready { proxy } => proxy.clone(),
+            crate::sandbox::NetState::Off => {
+                return (None, "none (no sandbox network configured)".into())
+            }
+            crate::sandbox::NetState::Waiting(why) => return (None, format!("none yet: {why}")),
+        };
+        if eng != self.engagements.active().id {
+            return (None, "none: the task isn't in the active engagement".into());
+        }
+        let Some(t) = self.tasks.get(eng, task) else {
+            return (None, "none: the task is gone".into());
+        };
+        let stack = self.stack.addresses().await;
+        let (allow, left) = self
+            .engagements
+            .scope()
+            .sandbox_allow(&t.constraints.hosts, &stack);
+        let left_note = if left.is_empty() {
+            String::new()
+        } else {
+            format!(" (left out: {})", left.join("; "))
+        };
+        if allow.is_empty() {
+            return (
+                None,
+                format!("none: nothing in scope to give a sandbox{left_note}"),
+            );
+        }
+        let mut body = serde_json::json!({
+            "allow": allow,
+            "budget": t.constraints.budget.saturating_sub(t.spent),
+            "meta": {"actor": "agent", "task": task},
+        });
+        if let Some(r) = t.constraints.rate_limit.filter(|r| *r > 0.0) {
+            body["rate"] = serde_json::json!({"per_second": r});
+        }
+        let issued = match self
+            .lever
+            .post_json(
+                "/clients",
+                body.to_string().into_bytes(),
+                std::time::Duration::from_secs(10),
+            )
+            .await
+        {
+            Ok((st, b)) if st.is_success() => serde_json::from_slice::<serde_json::Value>(&b).ok(),
+            Ok((st, _)) => {
+                return (
+                    None,
+                    format!("none: taphttp wouldn't issue a credential ({st})"),
+                )
+            }
+            Err(e) => return (None, format!("none: taphttp unreachable ({e:#})")),
+        };
+        let (Some(id), Some(user), Some(pass)) = (
+            issued
+                .as_ref()
+                .and_then(|v| v["id"].as_str())
+                .map(String::from),
+            issued
+                .as_ref()
+                .and_then(|v| v["username"].as_str())
+                .map(String::from),
+            issued
+                .as_ref()
+                .and_then(|v| v["password"].as_str())
+                .map(String::from),
+        ) else {
+            return (
+                None,
+                "none: taphttp's credential answer was unreadable".into(),
+            );
+        };
+        let ca_pem = match self.lever.get_bytes("/ca.pem").await {
+            Ok((st, b)) if st.is_success() => String::from_utf8_lossy(&b).into_owned(),
+            _ => {
+                let _ = self.lever.delete(&format!("/clients/{id}")).await;
+                return (None, "none: couldn't read taphttp's CA".into());
+            }
+        };
+        let net = crate::sandbox::Net {
+            proxy_url: format!("http://{}@{proxy}", crate::sandbox::userinfo(&user, &pass)),
+            ca_pem,
+        };
+        (
+            Some((id, net)),
+            format!("through taphttp to {}{left_note}", allow.join(", ")),
+        )
+    }
+
+    /// Revoke a command's credential (closing anything still open on it)
+    /// and read what taphttp counted on it: (sent, refused).
+    async fn sandbox_revoke(&self, id: &str) -> (Option<u32>, Option<u32>) {
+        if let Err(e) = self.lever.delete(&format!("/clients/{id}")).await {
+            tracing::warn!("revoking sandbox credential {id}: {e:#}");
+        }
+        let Ok((st, b)) = self.lever.get_bytes("/clients").await else {
+            return (None, None);
+        };
+        if !st.is_success() {
+            return (None, None);
+        }
+        let v: serde_json::Value = serde_json::from_slice(&b).unwrap_or_default();
+        let list = v.as_array().or_else(|| v["clients"].as_array());
+        let Some(c) = list.and_then(|l| l.iter().find(|c| c["id"].as_str() == Some(id))) else {
+            return (None, None);
+        };
+        let n = |k: &str| c[k].as_u64().map(|x| x.min(u32::MAX as u64) as u32);
+        (n("sent"), n("refused"))
+    }
+
+    /// Check the sandbox network (slice 2): taphttp has a credential-only
+    /// listener (`/info` `auth_proxy.auth == "issued"`, taphttp#27), and a
+    /// probe sandbox on `network` can't reach the open listener but gets a
+    /// 407 from the locked one. Ready, or waiting with why.
+    pub async fn sandbox_net_check(
+        &self,
+        image: &str,
+        network: &str,
+        proxy: &str,
+        fence: &str,
+    ) -> crate::sandbox::NetState {
+        use crate::sandbox::NetState;
+        let info = match self.lever.get_bytes("/info").await {
+            Ok((st, b)) if st.is_success() => {
+                serde_json::from_slice::<serde_json::Value>(&b).unwrap_or_default()
+            }
+            _ => return NetState::Waiting("taphttp's /info isn't readable".into()),
+        };
+        if info["auth_proxy"]["auth"].as_str() != Some("issued") {
+            return NetState::Waiting(
+                "taphttp has no credential-only listener yet (taphttp#27 --auth-listen); until it does, sandboxes have no network".into(),
+            );
+        }
+        match crate::sandbox::check_network(image, network, proxy, fence).await {
+            Ok(()) => NetState::Ready {
+                proxy: proxy.to_string(),
+            },
+            Err(why) => NetState::Waiting(why),
+        }
     }
 
     /// Resolves when `task` must stop: the e-stop, or it isn't running.

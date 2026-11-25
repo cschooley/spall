@@ -1,7 +1,10 @@
 # The execution sandbox (#13) — design
 
-Status: **slice 1 built** (`src/sandbox.rs`, `Replayer::run_in_sandbox`,
-the `run_in_sandbox` tool, `spall sandbox-shell`); slices 2-7 are the plan.
+Status: **slices 1 and 2 built** (`src/sandbox.rs`,
+`Replayer::run_in_sandbox`, the `run_in_sandbox` tool, `spall
+sandbox-shell`; per-command taphttp credentials and the sandbox network).
+Slice 2's network switches on once taphttp has its credential-only
+listener (taphttp#27). Slices 3-7 are the plan.
 This note expands `architecture.md` → *Sensors* → *The sandbox*. Read that first, and
 *Building blocks* (the five questions) before changing what the sandbox may
 do.
@@ -215,6 +218,38 @@ exercised on a `runsc` box as it lands.
   agent's flags (`sandbox::run_flags`), to see what a tool can and can't
   do. It checks without clearing anything, so it's safe while spall runs.
   It's the host's tool, never an agent's.
+
+## What slice 2 does
+
+- **Topology.** Sandboxes join `spall-sandbox`, a Docker network created
+  `internal: true` (compose defines it), whose only other member is
+  taphttp. Nothing on it routes anywhere; the only way out is taphttp.
+- **Two doors in taphttp** (taphttp#27): the open `--listen` for the
+  tester's browser, and a credential-only `--auth-listen` for sandboxes.
+  One door with `--proxy-auth-api` would have put a password on the
+  browser too.
+- **The check before anything routes** (`sandbox::check_network`, every
+  minute until it passes): taphttp's `/info` reports `auth_proxy.auth ==
+  "issued"`; the network is `--internal`; a probe sandbox on it gets no
+  answer from the open listener and a 407 from the credential-only one.
+  Until all hold, sandboxes start with `--network none` and the status
+  says why.
+- **A credential per command** (`Replayer::sandbox_grant`): `allow` from
+  `Scope::sandbox_allow` (the task's hosts or the scope's entries; never
+  `*`; a name only through an explicit entry; a wildcard or network only
+  if no exclusion or never-test entry falls inside it, since a credential
+  has no deny list; a network only if it holds none of the stack's
+  addresses), `budget` the task's remaining one after the command's own
+  unit, `rate` the task's, `meta` the task. The proxy URL and taphttp's CA
+  reach the command through `docker exec -e NAME` from docker's own
+  environment, so the password isn't on the host's process list; it's
+  never logged or audited.
+- **After the command** the credential is revoked (closing anything a
+  backgrounded process still had open), and what taphttp counted on it
+  (`sent`, `refused`) is charged to the task (`tasks::Store::spend`),
+  logged on `Event::Sandbox` and audited. The e-stop or a halt revokes it
+  at once, before the sandbox is removed.
+- **Raw TCP** (`nmap`, anything not HTTP) has no route: slice 4.
 
 ## Open questions
 

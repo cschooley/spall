@@ -166,6 +166,22 @@ pub struct Config {
     #[arg(long, env = "SPALL_SANDBOX_IMAGE")]
     pub sandbox_image: Option<String>,
 
+    /// The sandbox's network (#13 slice 2): a Docker network created with
+    /// `--internal` (no route out) whose only other member is taphttp. Off
+    /// unless set: without it a sandbox has no network at all.
+    #[arg(long, env = "SPALL_SANDBOX_NETWORK")]
+    pub sandbox_network: Option<String>,
+
+    /// taphttp's credential-only proxy listener as the sandbox reaches it
+    /// (taphttp#27 `--auth-listen`), e.g. `taphttp:8090`.
+    #[arg(long, env = "SPALL_SANDBOX_PROXY", default_value = "taphttp:8090")]
+    pub sandbox_proxy: String,
+
+    /// taphttp's open proxy listener as named on the sandbox network: spall
+    /// checks a sandbox *can't* reach it before routing anything.
+    #[arg(long, env = "SPALL_SANDBOX_FENCE", default_value = "taphttp:8080")]
+    pub sandbox_fence: String,
+
     /// Output tokens one model turn may use, thinking included.
     #[arg(long, env = "SPALL_MODEL_MAX_TOKENS", default_value_t = crate::model::DEFAULT_MAX_TOKENS, value_parser = clap::value_parser!(u32).range(1024..=128_000))]
     pub model_max_tokens: u32,

@@ -355,7 +355,8 @@ export function messages(t: Task): Message[] {
         // A command in the task's sandbox (#13): the argv as text, never run.
         const argv = Array.isArray(e.argv) ? e.argv.filter((a): a is string => typeof a === "string") : [];
         const ms = typeof e.ms === "number" ? ` (${e.ms} ms)` : "";
-        out.push({ time, who: "sys", text: `sandbox $ ${argv.join(" ")} → ${str(e.outcome)}${ms}` });
+        const reqs = typeof e.sent === "number" ? `, ${e.sent} request(s)${typeof e.refused === "number" && e.refused > 0 ? `, ${e.refused} refused` : ""}` : "";
+        out.push({ time, who: "sys", text: `sandbox $ ${argv.join(" ")} → ${str(e.outcome)}${ms}${reqs}` });
         break;
       }
     }

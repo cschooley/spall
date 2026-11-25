@@ -3,6 +3,9 @@ import { testingOf } from "./lib/engagement.ts";
 import { asEStop, type EStop } from "./lib/estop.ts";
 import { asQuad, asScorecard, type Quad, type Scorecard } from "./lib/quad.ts";
 
+/** The sandbox's network (#13 slice 2). */
+export type SandboxNet = { state: "off" } | { state: "waiting"; reason: string } | { state: "ready" };
+
 export interface SourceStatus {
   /** pending: not asked yet; unknown: /api/status failed. */
   source: "pending" | "lever" | "log" | "unknown";
@@ -40,7 +43,7 @@ export interface SourceStatus {
   /** The OOB sensor (#1): its domain and hit count, or null when none is configured. */
   oob: { domain: string; hits: number } | null;
   /** The agent's tool sandbox (#13): null when off. */
-  sandbox: { state: "ready" | "unavailable"; reason: string | null; live: number } | null;
+  sandbox: { state: "ready" | "unavailable"; reason: string | null; live: number; network: SandboxNet } | null;
 }
 
 const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null, quad: null, lastQuad: null, alertsSeq: null, oob: null, sandbox: null };
@@ -72,7 +75,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           last_quad?: unknown;
           alerts?: unknown;
           oob?: { domain?: unknown; hits?: unknown } | null;
-          sandbox?: { state?: unknown; reason?: unknown; live?: unknown } | null;
+          sandbox?: { state?: unknown; reason?: unknown; live?: unknown; network?: { state?: unknown; reason?: unknown } } | null;
         };
         const ex = body.export;
         const fx = body.flux;
@@ -108,6 +111,12 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
                   state: body.sandbox.state,
                   reason: typeof body.sandbox.reason === "string" ? body.sandbox.reason : null,
                   live: typeof body.sandbox.live === "number" && Number.isInteger(body.sandbox.live) && body.sandbox.live >= 0 ? body.sandbox.live : 0,
+                  network:
+                    body.sandbox.network?.state === "ready"
+                      ? { state: "ready" }
+                      : body.sandbox.network?.state === "waiting"
+                        ? { state: "waiting", reason: typeof body.sandbox.network.reason === "string" ? body.sandbox.network.reason : "" }
+                        : { state: "off" },
                 }
               : null,
         });

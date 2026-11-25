@@ -232,7 +232,17 @@ audited (`Outcome::Sandbox`); `sandbox_reap` (every 2 s) removes a
 finished task's sandbox. `spall sandbox-shell` is the tester's shell with
 the same `run_flags`. Image `sandbox/Dockerfile` (alpine pinned by
 digest). Real-runtime test: `SPALL_TEST_RUNSC=1 cargo test --lib sandbox
--- --include-ignored`. No network until slice 2 (taphttp `/clients`).
+-- --include-ignored`. Slice 2 (network): `Replayer::sandbox_net` is a
+`sandbox::NetState` (off / waiting with why / ready), checked every minute
+by `sandbox_net_check` (taphttp `/info` `auth_proxy.auth == "issued"`,
+taphttp#27, then `sandbox::check_network`: `--internal`, a probe sandbox
+gets no answer from the open listener and 407 from the credential-only
+one); ready, `Runsc::set_network` puts new sandboxes on `spall-sandbox`
+(compose, internal, taphttp the only other member). Each command gets its
+own credential (`sandbox_grant`: `Scope::sandbox_allow`, remaining budget,
+task rate and `meta`; proxy URL and CA via `docker exec -e NAME` from
+docker's env, never logged), revoked after (`sandbox_revoke`) or at once on
+stop; taphttp's `sent` is charged with `tasks::Store::spend`.
 
 Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
 ids that must match `T-n` / `I-n` / an engagement id, a time; anything else

@@ -484,6 +484,12 @@ pub enum Event {
         exit: Option<i32>,
         ms: u64,
         outcome: String,
+        /// Requests it sent through taphttp, and ones taphttp refused
+        /// (slice 2); absent without a network.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sent: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<u32>,
     },
 }
 
@@ -1458,6 +1464,22 @@ impl Store {
 
     pub fn charge(&self, engagement: &str, id: &str, now: &str) -> Result<u32, Error> {
         self.charge_as(engagement, id, now, None)
+    }
+
+    /// Record `n` requests a task already sent (#13 slice 2: what taphttp
+    /// counted on a sandbox command's credential, whose budget was the
+    /// task's remaining one). Counted whatever the task's state: it's what
+    /// happened, not a permission.
+    pub fn spend(&self, engagement: &str, id: &str, n: u32, now: &str) -> Result<(), Error> {
+        if n == 0 {
+            return Ok(());
+        }
+        self.change(engagement, |book| {
+            let t = find(book, id)?;
+            t.spent = t.spent.saturating_add(n);
+            t.updated = now.into();
+            Ok(())
+        })
     }
 
     /// [`Store::charge`] for a request sent on an "approve once": the

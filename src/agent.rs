@@ -707,7 +707,8 @@ impl Tools {
         let cmd = crate::sandbox::Cmd::new(a.argv, a.timeout_seconds)
             .map_err(|e| err(format!("run_in_sandbox: {e}")))?;
         match self.replayer.run_in_sandbox(t, cmd).await {
-            Ok(r) => {
+            Ok(ran) => {
+                let r = &ran.run;
                 let head = if r.timed_out {
                     format!("{} was killed at its time limit", r.argv[0])
                 } else {
@@ -716,6 +717,11 @@ impl Tools {
                         r.argv[0],
                         r.exit.map(|c| c.to_string()).unwrap_or("?".into())
                     )
+                };
+                let counted = match (ran.sent, ran.refused) {
+                    (Some(s), Some(f)) if f > 0 => format!(" {s} request(s) sent, {f} refused by taphttp (out of scope, over rate or budget); each sent one is charged to the task."),
+                    (Some(s), _) => format!(" {s} request(s) sent, each charged to the task."),
+                    _ => String::new(),
                 };
                 let v = serde_json::json!({
                     "exit": r.exit,
@@ -726,8 +732,9 @@ impl Tools {
                     "stderr": r.stderr,
                 });
                 Ok(ok(format!(
-                    "{head} in {} ms.\n{}",
+                    "{head} in {} ms. Network: {}.{counted}\n{}",
                     r.ms,
+                    ran.network,
                     untrusted::wrap_json("sandbox output", &v)
                 )))
             }

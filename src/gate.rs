@@ -274,6 +274,98 @@ impl Scope {
     }
 }
 
+impl Rule {
+    /// Whether two rules can match a common host or address: a name against
+    /// a wildcard, nested wildcards, overlapping networks. Names and
+    /// networks don't meet (the gate decides by name, like this).
+    fn overlaps(&self, other: &Rule) -> bool {
+        match (self, other) {
+            (Rule::Host(h), o) | (o, Rule::Host(h)) => o.matches(h, None),
+            (Rule::Subdomains(a), Rule::Subdomains(b)) => {
+                a == b || a.ends_with(&format!(".{b}")) || b.ends_with(&format!(".{a}"))
+            }
+            (Rule::Net(a, x), Rule::Net(b, y)) => {
+                let bits = (*x).min(*y);
+                in_network(*a, *b, bits)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Scope {
+    /// What a sandbox's proxy credential may reach (#13 slice 2): taphttp's
+    /// allowlist has no deny list, so it gets only what can't reach past
+    /// this scope. The task's `hosts`, or every in-scope entry; never `*`;
+    /// a name only if it's in scope now; a wildcard or network only if no
+    /// exclusion or never-test entry falls inside it; a network only if it
+    /// holds none of `stack` (spall's and taphttp's addresses). Returns the
+    /// allowlist and what was left out, with why.
+    pub fn sandbox_allow(&self, hosts: &[String], stack: &[IpAddr]) -> (Vec<String>, Vec<String>) {
+        let (mut allow, mut left) = (Vec::new(), Vec::new());
+        let candidates: Vec<Rule> = if hosts.is_empty() {
+            if self.all {
+                left.push("* (every host): not given to a sandbox; name the hosts in scope".into());
+            }
+            self.rules.clone()
+        } else {
+            hosts
+                .iter()
+                .filter_map(|h| match parse_rule(h) {
+                    Ok(r) => Some(r),
+                    Err(_) => {
+                        left.push(format!("{h}: not a scope entry"));
+                        None
+                    }
+                })
+                .collect()
+        };
+        for r in candidates {
+            let entry = r.entry();
+            let why = match &r {
+                // In scope through an entry, not through `*`.
+                Rule::Host(h) => {
+                    let v = self.explain(h);
+                    (v.state != HostState::In || v.by.as_deref() == Some("*"))
+                        .then(|| "not in scope by an entry".to_string())
+                }
+                wide => self
+                    .excludes
+                    .iter()
+                    .map(|x| (x, "excluded"))
+                    .chain(self.never.iter().map(|x| (x, "on the never-test list")))
+                    .find(|(x, _)| wide.overlaps(x))
+                    .map(|(x, what)| {
+                        format!(
+                            "covers {} ({what}); a credential can't carry exclusions",
+                            x.entry()
+                        )
+                    })
+                    .or_else(|| match wide {
+                        Rule::Net(net, bits) => stack
+                            .iter()
+                            .find(|ip| in_network(**ip, *net, *bits))
+                            .map(|ip| format!("holds {ip}, spall's own stack")),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        (!hosts.is_empty()
+                            && !self.rules.iter().any(|s| {
+                                s == wide || (s.overlaps(wide) && !matches!(s, Rule::Host(_)))
+                            }))
+                        .then(|| "not in scope now".to_string())
+                    }),
+            };
+            match why {
+                Some(w) => left.push(format!("{entry}: {w}")),
+                None if !allow.contains(&entry) => allow.push(entry),
+                None => {}
+            }
+        }
+        (allow, left)
+    }
+}
+
 /// Why an in-scope entry is too wide to add without the override (#83),
 /// with what to do; `Ok(None)` if it's fine; `Err` if it doesn't parse.
 /// Exclusions may be as wide as you like: they only narrow.
@@ -657,6 +749,34 @@ fn display_host(h: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sandbox_gets_only_what_cant_reach_past_scope() {
+        let s =
+            Scope::parse("app.test,*.acme.test,!pay.acme.test,*.lab.test,10.20.0.0/16,*").unwrap();
+        let stack = ["10.20.0.5".parse().unwrap()];
+        let (allow, left) = s.sandbox_allow(&[], &stack);
+        assert_eq!(allow, vec!["app.test", "*.lab.test"]);
+        let left = left.join(" | ");
+        assert!(left.contains("* (every host)"), "{left}");
+        assert!(
+            left.contains("*.acme.test: covers pay.acme.test (excluded)"),
+            "{left}"
+        );
+        assert!(left.contains("10.20.0.0/16: holds 10.20.0.5"), "{left}");
+        // A task's own hosts: kept if in scope, else left out.
+        let (allow, left) = s.sandbox_allow(
+            &["app.test".into(), "evil.test".into(), "x.lab.test".into()],
+            &[],
+        );
+        assert_eq!(allow, vec!["app.test", "x.lab.test"]);
+        assert!(left
+            .join(" ")
+            .contains("evil.test: not in scope by an entry"));
+        // Only `*`: nothing at all.
+        let all = Scope::parse("*").unwrap();
+        assert!(all.sandbox_allow(&[], &[]).0.is_empty());
+    }
 
     fn scope(s: &str) -> Scope {
         Scope::parse(s).unwrap()

@@ -100,9 +100,41 @@ pub struct Key {
     pub task: String,
 }
 
+/// Network for one command (slice 2): a proxy URL carrying a per-command
+/// taphttp credential, and taphttp's CA so HTTPS through it verifies.
+pub struct Net {
+    pub proxy_url: String,
+    pub ca_pem: String,
+}
+
+impl std::fmt::Debug for Net {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The URL holds the credential's password: never printed.
+        f.write_str("Net { proxy_url: <secret>, .. }")
+    }
+}
+
+/// The env vars a command gets with a network: every proxy spelling tools
+/// read, and taphttp's CA as the trust root.
+pub const PROXY_VARS: [&str; 5] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "ALL_PROXY",
+];
+pub const CA_VARS: [&str; 3] = ["SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"];
+pub const CA_PATH: &str = "/tmp/spall-ca.pem";
+
 pub trait Sandbox: Send + Sync {
-    /// Run `cmd` in `key`'s sandbox, starting it first if needed.
-    fn exec<'a>(&'a self, key: &'a Key, cmd: &'a Cmd) -> BoxFuture<'a, Result<Run, String>>;
+    /// Run `cmd` in `key`'s sandbox, starting it first if needed; with
+    /// `net`, through taphttp on that command's credential.
+    fn exec<'a>(
+        &'a self,
+        key: &'a Key,
+        cmd: &'a Cmd,
+        net: Option<&'a Net>,
+    ) -> BoxFuture<'a, Result<Run, String>>;
     /// Kill and remove `key`'s sandbox and its scratch; nothing if it has none.
     fn teardown<'a>(&'a self, key: &'a Key) -> BoxFuture<'a, ()>;
     /// The sandboxes running now.
@@ -129,6 +161,54 @@ impl State {
     }
 }
 
+/// Whether sandboxes get a network (slice 2).
+pub enum NetState {
+    /// No `--sandbox-network`: sandboxes have none.
+    Off,
+    /// Configured, but not safe yet: why (rechecked every minute).
+    Waiting(String),
+    /// Checked: sandboxes join the network and each command gets its own
+    /// credential on taphttp's credential-only listener at `proxy`.
+    Ready { proxy: String },
+}
+
+impl NetState {
+    pub fn summary(&self) -> serde_json::Value {
+        match self {
+            NetState::Off => serde_json::json!({"state": "off"}),
+            NetState::Waiting(why) => serde_json::json!({"state": "waiting", "reason": why}),
+            NetState::Ready { .. } => serde_json::json!({"state": "ready"}),
+        }
+    }
+}
+
+/// A command's outcome with its network: what it could reach and what
+/// taphttp counted on its credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ran {
+    pub run: Run,
+    /// One line for the agent and the log: the hosts, or why none.
+    pub network: String,
+    pub sent: Option<u32>,
+    pub refused: Option<u32>,
+}
+
+/// `user:pass` for a URL's userinfo: everything but unreserved escaped.
+pub fn userinfo(user: &str, pass: &str) -> String {
+    let enc = |s: &str| -> String {
+        s.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect()
+    };
+    format!("{}:{}", enc(user), enc(pass))
+}
+
 /// The container name for a task: `spall-sbx-<engagement>-<t-n>`.
 pub fn container_name(key: &Key) -> String {
     let clean = |s: &str| -> String {
@@ -149,13 +229,13 @@ pub fn container_name(key: &Key) -> String {
 /// `docker run` flags for a sandbox: gVisor, no network, read-only, a tmpfs
 /// scratch, an unprivileged user, capped resources. The agent's sandbox and
 /// `spall sandbox-shell` share them, so the shell is what the agent gets.
-pub fn run_flags(name: &str, labels: &[(&str, &str)]) -> Vec<String> {
+pub fn run_flags(name: &str, labels: &[(&str, &str)], network: Option<&str>) -> Vec<String> {
     let mut v: Vec<String> = [
         "--name",
         name,
         "--runtime=runsc",
         "--network",
-        "none",
+        network.unwrap_or("none"),
         "--read-only",
         "--tmpfs",
         "/scratch:rw,size=256m,mode=1777",
@@ -209,6 +289,11 @@ fn keep(bytes: &[u8]) -> (String, bool) {
 pub struct Runsc {
     image: String,
     live: Mutex<HashSet<Key>>,
+    /// The internal network new sandboxes join once it checks out (slice
+    /// 2); `None`: `--network none`. Fixed per container when it starts.
+    network: Mutex<Option<String>>,
+    /// Sandboxes that have taphttp's CA in place.
+    with_ca: Mutex<HashSet<Key>>,
 }
 
 /// Run `docker args`, its output, or why not.
@@ -250,6 +335,64 @@ pub async fn check(image: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether `network` is safe to put sandboxes on (slice 2), or why not:
+/// it's `--internal` (no route out), and from a sandbox on it taphttp's
+/// open listener (`fence`) doesn't answer while its credential-only one
+/// (`proxy`) asks for a credential (407). Probed with a throwaway sandbox,
+/// so what's checked is what a sandbox sees.
+pub async fn check_network(
+    image: &str,
+    network: &str,
+    proxy: &str,
+    fence: &str,
+) -> Result<(), String> {
+    let out = docker(&["network", "inspect", "--format", "{{.Internal}}", network]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "no Docker network {network}: create it with `docker network create --internal {network}` and attach taphttp"
+        ));
+    }
+    if String::from_utf8_lossy(&out.stdout).trim() != "true" {
+        return Err(format!(
+            "the network {network} isn't --internal: a sandbox on it could route around taphttp"
+        ));
+    }
+    let probe = format!(
+        "curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{fence} http://probe.invalid/; echo; \
+         curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{proxy} http://probe.invalid/"
+    );
+    let name = format!("spall-sbx-probe-{}", std::process::id());
+    let mut args: Vec<String> = vec!["run".into(), "--rm".into()];
+    args.extend(run_flags(&name, &[("spall.probe", "1")], Some(network)));
+    args.extend([image.to_string(), "sh".into(), "-c".into(), probe]);
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = docker(&refs).await?;
+    judge_probe(&String::from_utf8_lossy(&out.stdout), network, proxy, fence).map_err(|e| {
+        let err = String::from_utf8_lossy(&out.stderr);
+        if err.trim().is_empty() {
+            e
+        } else {
+            format!("{e} ({})", err.trim())
+        }
+    })
+}
+
+/// The probe's two HTTP codes: the open listener must not answer (000),
+/// the credential-only one must ask for a credential (407).
+fn judge_probe(stdout: &str, network: &str, proxy: &str, fence: &str) -> Result<(), String> {
+    let codes: Vec<&str> = stdout.lines().map(str::trim).collect();
+    match codes.as_slice() {
+        [open, _] if *open != "000" => Err(format!(
+            "a sandbox on {network} reaches taphttp's open listener ({fence} answered {open}): fence it off (taphttp#27) before sandboxes get a network"
+        )),
+        [_, auth] if *auth != "407" => Err(format!(
+            "taphttp's credential-only listener ({proxy}) answered {auth}, not 407: it must refuse a sandbox without a credential (taphttp#27 --auth-listen)"
+        )),
+        [_, _] => Ok(()),
+        _ => Err("the network probe didn't run".into()),
+    }
+}
+
 /// `spall sandbox-shell`: a shell for the tester in a sandbox with exactly
 /// the agent's flags (gVisor, no network, read-only, scratch, uid 10001,
 /// the limits), to see what an agent's tools can and can't do. The host's
@@ -264,7 +407,7 @@ pub async fn shell(image: &str, argv: &[String]) -> anyhow::Result<i32> {
     if std::io::stdin().is_terminal() {
         args.push("-t".into());
     }
-    args.extend(run_flags(&name, &[("spall.shell", "1")]));
+    args.extend(run_flags(&name, &[("spall.shell", "1")], None));
     args.push(image.to_string());
     if argv.is_empty() {
         args.push("sh".into());
@@ -294,9 +437,54 @@ impl Runsc {
         let s = Runsc {
             image: image.to_string(),
             live: Mutex::new(HashSet::new()),
+            network: Mutex::new(None),
+            with_ca: Mutex::new(HashSet::new()),
         };
         s.clear_leftovers().await;
         Ok(s)
+    }
+
+    /// New sandboxes join `network` (checked by [`check_network`]), or none.
+    pub fn set_network(&self, network: Option<String>) {
+        *self.network.lock().unwrap_or_else(|p| p.into_inner()) = network;
+    }
+
+    fn ca_lock(&self) -> std::sync::MutexGuard<'_, HashSet<Key>> {
+        self.with_ca.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Put taphttp's CA at [`CA_PATH`] in `key`'s sandbox, once.
+    async fn install_ca(&self, key: &Key, name: &str, pem: &str) -> Result<(), String> {
+        use tokio::io::AsyncWriteExt;
+        if self.ca_lock().contains(key) {
+            return Ok(());
+        }
+        let mut child = tokio::process::Command::new("docker")
+            .args(["exec", "-i", name, "sh", "-c", &format!("cat > {CA_PATH}")])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("docker: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(pem.as_bytes())
+                .await
+                .map_err(|e| format!("writing the CA: {e}"))?;
+        }
+        let out = child
+            .wait_with_output()
+            .await
+            .map_err(|e| format!("docker: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "putting taphttp's CA in the sandbox: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        self.ca_lock().insert(key.clone());
+        Ok(())
     }
 
     async fn clear_leftovers(&self) {
@@ -325,6 +513,11 @@ impl Runsc {
         if self.lock().contains(key) {
             return Ok(name);
         }
+        let network = self
+            .network
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
         let mut args: Vec<String> = vec!["run".into(), "-d".into()];
         args.extend(run_flags(
             &name,
@@ -332,6 +525,7 @@ impl Runsc {
                 ("spall.engagement", &key.engagement),
                 ("spall.task", &key.task),
             ],
+            network.as_deref(),
         ));
         args.push(self.image.clone());
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -348,18 +542,39 @@ impl Runsc {
 }
 
 impl Sandbox for Runsc {
-    fn exec<'a>(&'a self, key: &'a Key, cmd: &'a Cmd) -> BoxFuture<'a, Result<Run, String>> {
+    fn exec<'a>(
+        &'a self,
+        key: &'a Key,
+        cmd: &'a Cmd,
+        net: Option<&'a Net>,
+    ) -> BoxFuture<'a, Result<Run, String>> {
         Box::pin(async move {
             let name = self.ensure(key).await?;
+            if let Some(n) = net {
+                self.install_ca(key, &name, &n.ca_pem).await?;
+            }
             let secs = cmd.timeout.as_secs().to_string();
             // `timeout` runs inside the container, so a timed-out command
             // dies there (killing the outer `docker exec` wouldn't kill it).
-            let mut args: Vec<&str> = vec![
-                "exec", "-w", "/scratch", &name, "timeout", "-s", "KILL", &secs,
-            ];
+            let mut args: Vec<&str> = vec!["exec", "-w", "/scratch"];
+            let mut command = tokio::process::Command::new("docker");
+            if let Some(n) = net {
+                // `-e NAME` takes the value from docker's own environment:
+                // the credential stays off the host's process list.
+                for v in PROXY_VARS {
+                    args.extend(["-e", v]);
+                    command.env(v, &n.proxy_url);
+                }
+                for v in CA_VARS {
+                    args.extend(["-e", v]);
+                    command.env(v, CA_PATH);
+                }
+                args.extend(["-e", "NO_PROXY=", "-e", "no_proxy="]);
+            }
+            args.extend([name.as_str(), "timeout", "-s", "KILL", &secs]);
             args.extend(cmd.argv.iter().map(String::as_str));
             let start = Instant::now();
-            let mut child = tokio::process::Command::new("docker")
+            let mut child = command
                 .args(&args)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -406,6 +621,7 @@ impl Sandbox for Runsc {
                 && (errs.contains("is not running") || errs.contains("No such container"))
             {
                 self.lock().remove(key);
+                self.ca_lock().remove(key);
                 let _ = docker(&["rm", "-f", &name]).await;
                 return Ok(Run {
                     argv: cmd.argv.clone(),
@@ -438,6 +654,7 @@ impl Sandbox for Runsc {
     fn teardown<'a>(&'a self, key: &'a Key) -> BoxFuture<'a, ()> {
         Box::pin(async move {
             let had = self.lock().remove(key);
+            self.ca_lock().remove(key);
             if had {
                 let name = container_name(key);
                 if let Err(e) = docker(&["rm", "-f", &name]).await {
@@ -461,6 +678,8 @@ impl Sandbox for Runsc {
 #[derive(Default)]
 pub struct Fake {
     pub ran: Mutex<Vec<(Key, Vec<String>)>>,
+    /// The proxy URL each command got, if any.
+    pub nets: Mutex<Vec<Option<String>>>,
     pub torn: Mutex<Vec<Key>>,
     live: Mutex<HashSet<Key>>,
     gone: tokio::sync::Notify,
@@ -473,10 +692,16 @@ impl Fake {
 }
 
 impl Sandbox for Fake {
-    fn exec<'a>(&'a self, key: &'a Key, cmd: &'a Cmd) -> BoxFuture<'a, Result<Run, String>> {
+    fn exec<'a>(
+        &'a self,
+        key: &'a Key,
+        cmd: &'a Cmd,
+        net: Option<&'a Net>,
+    ) -> BoxFuture<'a, Result<Run, String>> {
         Box::pin(async move {
             Self::lock(&self.live).insert(key.clone());
             Self::lock(&self.ran).push((key.clone(), cmd.argv.clone()));
+            Self::lock(&self.nets).push(net.map(|n| n.proxy_url.clone()));
             let args = &cmd.argv[1..];
             let (exit, stdout, stderr) = match cmd.argv[0].as_str() {
                 "echo" => (Some(0), format!("{}\n", args.join(" ")), String::new()),
@@ -493,6 +718,8 @@ impl Sandbox for Fake {
                     )
                 }
                 "touch" => (Some(0), String::new(), String::new()),
+                // With a network, through taphttp; without, no route.
+                "curl" if net.is_some() => (Some(0), "via taphttp\n".into(), String::new()),
                 "curl" => (
                     Some(6),
                     String::new(),
@@ -571,7 +798,7 @@ mod tests {
             }),
             "spall-sbx----x-y-t-1"
         );
-        let f = run_flags("n", &[("spall.task", "T-3")]).join(" ");
+        let f = run_flags("n", &[("spall.task", "T-3")], None).join(" ");
         for must in [
             "--runtime=runsc",
             "--network none",
@@ -587,6 +814,37 @@ mod tests {
             assert!(f.contains(must), "{must} missing from {f}");
         }
         assert!(!f.contains("-v ") && !f.contains("--volume") && !f.contains("--privileged"));
+        let g = run_flags("n", &[], Some("spall-sandbox")).join(" ");
+        assert!(g.contains("--network spall-sandbox") && !g.contains("none"));
+    }
+
+    #[test]
+    fn the_network_probe_wants_the_open_door_shut_and_the_locked_one_asking() {
+        let j = |out: &str| judge_probe(out, "spall-sandbox", "taphttp:8090", "taphttp:8080");
+        assert_eq!(j("000\n407\n"), Ok(()));
+        assert!(j("502\n407\n")
+            .unwrap_err()
+            .contains("reaches taphttp's open listener"));
+        assert!(j("000\n000\n")
+            .unwrap_err()
+            .contains("answered 000, not 407"));
+        assert!(j("000\n502\n").unwrap_err().contains("not 407"));
+        assert!(j("").is_err());
+        assert_eq!(
+            format!(
+                "{:?}",
+                Net {
+                    proxy_url: "http://u:secret@x".into(),
+                    ca_pem: String::new()
+                }
+            ),
+            "Net { proxy_url: <secret>, .. }"
+        );
+    }
+
+    #[test]
+    fn credentials_are_escaped_in_the_proxy_url() {
+        assert_eq!(userinfo("c-1", "a:b@c/d"), "c-1:a%3Ab%40c%2Fd");
     }
 
     #[test]
@@ -603,24 +861,67 @@ mod tests {
         let run =
             |argv: &[&str]| Cmd::new(argv.iter().map(|s| s.to_string()).collect(), None).unwrap();
         assert_eq!(
-            f.exec(&k, &run(&["echo", "hi"])).await.unwrap().stdout,
+            f.exec(&k, &run(&["echo", "hi"]), None)
+                .await
+                .unwrap()
+                .stdout,
             "hi\n"
         );
         assert_eq!(
-            f.exec(&k, &run(&["touch", "/etc/x"])).await.unwrap().exit,
+            f.exec(&k, &run(&["touch", "/etc/x"]), None)
+                .await
+                .unwrap()
+                .exit,
             Some(1)
         );
         assert_eq!(
-            f.exec(&k, &run(&["curl", "http://x"])).await.unwrap().exit,
+            f.exec(&k, &run(&["curl", "http://x"]), None)
+                .await
+                .unwrap()
+                .exit,
             Some(6)
         );
         let (f2, k2) = (f.clone(), k.clone());
-        let blocked = tokio::spawn(async move { f2.exec(&k2, &run(&["block"])).await });
+        let blocked = tokio::spawn(async move { f2.exec(&k2, &run(&["block"]), None).await });
         tokio::time::sleep(Duration::from_millis(20)).await;
         f.teardown(&k).await;
         assert_eq!(blocked.await.unwrap(), Err("killed".into()));
         assert!(f.live().is_empty());
         assert_eq!(*Fake::lock(&f.torn), vec![k]);
+    }
+
+    /// The network check for real (slice 2): a non-internal network is
+    /// refused; an internal one with no credential-only listener on it is
+    /// refused because nothing answers 407. With gVisor and the image:
+    /// SPALL_TEST_RUNSC=1 cargo test --lib sandbox -- --include-ignored
+    #[tokio::test]
+    #[ignore]
+    async fn the_network_check_refuses_what_isnt_fenced_for_real() {
+        if std::env::var("SPALL_TEST_RUNSC").is_err() {
+            return;
+        }
+        let (open, internal) = (
+            format!("spall-test-open-{}", std::process::id()),
+            format!("spall-test-int-{}", std::process::id()),
+        );
+        docker(&["network", "create", &open]).await.unwrap();
+        docker(&["network", "create", "--internal", &internal])
+            .await
+            .unwrap();
+        let a = check_network(IMAGE_DEFAULT, &open, "taphttp:8090", "taphttp:8080").await;
+        let b = check_network(IMAGE_DEFAULT, &internal, "taphttp:8090", "taphttp:8080").await;
+        let c = check_network(
+            IMAGE_DEFAULT,
+            "no-such-net-spall",
+            "taphttp:8090",
+            "taphttp:8080",
+        )
+        .await;
+        docker(&["network", "rm", &open, &internal]).await.unwrap();
+        assert!(a.unwrap_err().contains("isn't --internal"));
+        let b = b.unwrap_err();
+        assert!(b.contains("not 407"), "{b}");
+        assert!(c.unwrap_err().contains("no Docker network"));
     }
 
     /// The real thing, on a host with gVisor and the image built:
@@ -636,36 +937,46 @@ mod tests {
         let run = |argv: &[&str], t: u64| {
             Cmd::new(argv.iter().map(|s| s.to_string()).collect(), Some(t)).unwrap()
         };
-        let r = s.exec(&k, &run(&["uname", "-r"], 20)).await.unwrap();
+        let r = s.exec(&k, &run(&["uname", "-r"], 20), None).await.unwrap();
         assert!(r.stdout.contains("gvisor"), "{r:?}");
         let r = s
             .exec(
                 &k,
                 &run(&["sh", "-c", "echo hi > /scratch/a && cat /scratch/a"], 20),
+                None,
             )
             .await
             .unwrap();
         assert_eq!((r.exit, r.stdout.as_str()), (Some(0), "hi\n"));
-        let r = s.exec(&k, &run(&["touch", "/etc/x"], 20)).await.unwrap();
+        let r = s
+            .exec(&k, &run(&["touch", "/etc/x"], 20), None)
+            .await
+            .unwrap();
         assert_ne!(r.exit, Some(0), "wrote outside scratch: {r:?}");
         let r = s
             .exec(
                 &k,
                 &run(&["curl", "-sS", "-m", "3", "http://example.com"], 20),
+                None,
             )
             .await
             .unwrap();
         assert_ne!(r.exit, Some(0), "reached the network: {r:?}");
-        let r = s.exec(&k, &run(&["sleep", "30"], 2)).await.unwrap();
+        let r = s.exec(&k, &run(&["sleep", "30"], 2), None).await.unwrap();
         assert!(r.timed_out && r.exit.is_none(), "{r:?}");
         // A fork bomb backgrounds itself and keeps forking until it hits the
         // pids and memory caps; under gVisor that takes the sandbox down,
         // never the host. spall says it died and starts a fresh one.
-        let _ = s.exec(&k, &run(&["sh", "-c", ":(){ :|:& };:"], 3)).await;
+        let _ = s
+            .exec(&k, &run(&["sh", "-c", ":(){ :|:& };:"], 3), None)
+            .await;
         tokio::time::sleep(Duration::from_secs(2)).await;
         let mut alive = false;
         for _ in 0..3 {
-            let r = s.exec(&k, &run(&["echo", "alive"], 20)).await.unwrap();
+            let r = s
+                .exec(&k, &run(&["echo", "alive"], 20), None)
+                .await
+                .unwrap();
             if r.stdout == "alive\n" {
                 alive = true;
                 break;

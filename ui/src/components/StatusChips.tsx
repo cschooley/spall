@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { apiJson } from "../lib/engagement.ts";
 import { asCaInfo, type CaInfo } from "../lib/ca.ts";
+import type { SandboxNet } from "../useStatus.ts";
 
 type Source = "pending" | "lever" | "log" | "unknown";
 
@@ -139,7 +140,7 @@ export function FluxChip({ flux }: { flux: { crate: string; spec: string; rules:
   );
 }
 
-export function SandboxChip({ sandbox }: { sandbox: { state: "ready" | "unavailable"; reason: string | null; live: number } }) {
+export function SandboxChip({ sandbox }: { sandbox: { state: "ready" | "unavailable"; reason: string | null; live: number; network: SandboxNet } }) {
   const { open, toggle, root, style } = usePopover();
   const ready = sandbox.state === "ready";
   return (
@@ -164,7 +165,13 @@ export function SandboxChip({ sandbox }: { sandbox: { state: "ready" | "unavaila
             <dt>isolation</dt>
             <dd>gVisor (runsc), read-only, uid 10001, 1 CPU, 512 MB, 128 pids</dd>
             <dt>network</dt>
-            <dd>none yet: requests go through fetch, replay and sweep</dd>
+            <dd>
+              {sandbox.network.state === "ready"
+                ? "through taphttp only: a credential per command, in-scope hosts, charged and recorded"
+                : sandbox.network.state === "waiting"
+                  ? `none yet: ${sandbox.network.reason}`
+                  : "none (no sandbox network configured): agents send with fetch, replay and sweep"}
+            </dd>
             <dt>lifetime</dt>
             <dd>one per task; removed when it ends or on the e-stop</dd>
           </dl>

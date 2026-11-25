@@ -120,7 +120,7 @@ test("the sandbox chip shows its state; its popover says why it's unavailable (#
   engagementApi(page);
   const P = `<img src=x onerror="window.__pwned=1">`;
   await page.route("**/api/status", (r) =>
-    r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.example"], sandbox: { state: "unavailable", reason: `gVisor's runsc isn't a Docker runtime here ${P}` } } }),
+    r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.example"], sandbox: { state: "unavailable", reason: `gVisor's runsc isn't a Docker runtime here ${P}`, network: { state: "waiting", reason: "taphttp has no credential-only listener yet (taphttp#27)" } } } }),
   );
   await page.goto("/#engagement");
   const chip = page.getByRole("button", { name: "sandbox status" });
@@ -129,6 +129,7 @@ test("the sandbox chip shows its state; its popover says why it's unavailable (#
   const pop = page.getByRole("dialog", { name: "sandbox details" });
   await expect(pop).toContainText(`runsc isn't a Docker runtime here ${P}`);
   await expect(pop).toContainText("spall sandbox-shell");
+  await expect(pop).toContainText("none yet: taphttp has no credential-only listener yet (taphttp#27)");
   expect(await page.locator(".statusbar img").count()).toBe(0);
 });
 

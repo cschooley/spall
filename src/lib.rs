@@ -316,6 +316,10 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                     Some(_) => sandbox::State::Unavailable("not checked yet".into()),
                     None => sandbox::State::Off,
                 }),
+                sandbox_net: std::sync::RwLock::new(match &config.sandbox_network {
+                    Some(_) => sandbox::NetState::Waiting("not checked yet".into()),
+                    None => sandbox::NetState::Off,
+                }),
             }))
         }
         None => None,
@@ -456,6 +460,9 @@ impl App {
         // remove sandboxes whose task is over, every couple of seconds.
         let sandbox_replayer = state.replayer.clone();
         let sandbox_image = config.sandbox_image.clone();
+        let sandbox_network = config.sandbox_network.clone();
+        let (sandbox_proxy, sandbox_fence) =
+            (config.sandbox_proxy.clone(), config.sandbox_fence.clone());
         let sandboxes = async {
             let Some(r) = sandbox_replayer else {
                 return std::future::pending().await;
@@ -464,11 +471,14 @@ impl App {
                 &*r.sandbox.read().unwrap_or_else(|p| p.into_inner()),
                 sandbox::State::Unavailable(_)
             );
-            if let (Some(image), true) = (sandbox_image, unchecked) {
+            let mut runsc: Option<Arc<sandbox::Runsc>> = None;
+            if let (Some(image), true) = (sandbox_image.clone(), unchecked) {
                 let st = match sandbox::Runsc::preflight(&image).await {
                     Ok(s) => {
-                        tracing::info!("agent sandbox: {image} under gVisor, no network (slice 1)");
-                        sandbox::State::Ready(Arc::new(s))
+                        tracing::info!("agent sandbox: {image} under gVisor");
+                        let s = Arc::new(s);
+                        runsc = Some(s.clone());
+                        sandbox::State::Ready(s)
                     }
                     Err(why) => {
                         tracing::warn!("agent sandbox unavailable: {why}");
@@ -477,8 +487,39 @@ impl App {
                 };
                 *r.sandbox.write().unwrap_or_else(|p| p.into_inner()) = st;
             }
+            // The network (slice 2): checked now and every minute until it
+            // passes, so it comes on by itself once taphttp has the listener.
+            let mut tick: u32 = 0;
             loop {
+                let due = tick.is_multiple_of(30);
+                if let (true, Some(s), Some(image), Some(net)) =
+                    (due, &runsc, &sandbox_image, &sandbox_network)
+                {
+                    let ready = matches!(
+                        &*r.sandbox_net.read().unwrap_or_else(|p| p.into_inner()),
+                        sandbox::NetState::Ready { .. }
+                    );
+                    if !ready {
+                        let st = r
+                            .sandbox_net_check(image, net, &sandbox_proxy, &sandbox_fence)
+                            .await;
+                        match &st {
+                            sandbox::NetState::Ready { proxy } => {
+                                tracing::info!(
+                                    "sandbox network: {net}, HTTP through taphttp at {proxy}"
+                                );
+                                s.set_network(Some(net.clone()));
+                            }
+                            sandbox::NetState::Waiting(why) if tick == 0 => {
+                                tracing::warn!("sandbox network not on: {why}");
+                            }
+                            _ => {}
+                        }
+                        *r.sandbox_net.write().unwrap_or_else(|p| p.into_inner()) = st;
+                    }
+                }
                 r.sandbox_reap().await;
+                tick = tick.wrapping_add(1);
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
         };
