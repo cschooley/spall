@@ -932,6 +932,13 @@ export function App() {
           )}
           {status.proxy ? <span className="addr">{` ${status.proxy}`}</span> : null}
         </span>
+        {status.oob ? (
+          <a className="oob-status" href="#engagement" title="Out-of-band callback sensor (#1): payloads and hits are in the Engagement view (1).">
+            {"OAST "}
+            <span className="ok">{`● ${status.oob.domain}`}</span>
+            {status.oob.hits > 0 ? <span className="addr">{` · ${status.oob.hits} hit${status.oob.hits === 1 ? "" : "s"}`}</span> : null}
+          </a>
+        ) : null}
         {status.engagement ? (
           <span className="engagement-name" title={`Engagement ${status.engagement.id} (engagement in the console)`}>
             {status.engagement.name}

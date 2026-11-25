@@ -94,3 +94,24 @@ test("when the clipboard refuses, the payload is shown selected to copy by hand 
   await expect(field).toHaveValue("http://interactsh/abc");
   expect(await field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, "http://interactsh/abc".length]);
 });
+
+test("the status bar shows the OOB sensor with its domain and hit count (#1)", async ({ page }) => {
+  engagementApi(page);
+  // A configured sensor: /api/status carries oob.
+  await page.route("**/api/status", (r) =>
+    r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.example"], oob: { domain: "oast.lab", hits: 3 } } }),
+  );
+  await page.goto("/#engagement");
+  const chip = page.locator(".statusbar a.oob-status");
+  await expect(chip).toContainText("OAST");
+  await expect(chip).toContainText("oast.lab");
+  await expect(chip).toContainText("3 hits");
+  await expect(chip).toHaveAttribute("href", "#engagement");
+});
+
+test("the status bar has no OOB chip when no sensor is configured (#1)", async ({ page }) => {
+  engagementApi(page); // its /api/status has no oob field
+  await page.goto("/#engagement");
+  await expect(page.locator(".statusbar")).toBeVisible();
+  await expect(page.locator(".statusbar a.oob-status")).toHaveCount(0);
+});

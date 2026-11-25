@@ -37,9 +37,11 @@ export interface SourceStatus {
   lastQuad: Scorecard | null;
   /** The newest alert's seq (#86); null without the lever API. */
   alertsSeq: number | null;
+  /** The OOB sensor (#1): its domain and hit count, or null when none is configured. */
+  oob: { domain: string; hits: number } | null;
 }
 
-const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null, quad: null, lastQuad: null, alertsSeq: null };
+const UNKNOWN = { connected: null, proxy: null, replay: false, scope: [], scopeAll: false, engagement: null, testing: null, toTriage: null, flux: null, export: null, estop: null, waitingApproval: null, agentModel: null, quad: null, lastQuad: null, alertsSeq: null, oob: null };
 
 /** Poll spall's /api/status for the status bar; a new `nonce` polls now. */
 export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
@@ -67,6 +69,7 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           quad?: unknown;
           last_quad?: unknown;
           alerts?: unknown;
+          oob?: { domain?: unknown; hits?: unknown } | null;
         };
         const ex = body.export;
         const fx = body.flux;
@@ -92,6 +95,10 @@ export function useSourceStatus(intervalMs = 5000, nonce = 0): SourceStatus {
           quad: asQuad(body.quad),
           lastQuad: asScorecard(body.last_quad),
           alertsSeq: typeof body.alerts === "number" ? body.alerts : null,
+          oob:
+            body.oob && typeof body.oob.domain === "string" && typeof body.oob.hits === "number" && Number.isInteger(body.oob.hits) && body.oob.hits >= 0
+              ? { domain: body.oob.domain, hits: body.oob.hits }
+              : null,
         });
       } catch {
         if (live) setStatus({ source: "unknown", ...UNKNOWN });

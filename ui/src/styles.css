@@ -394,6 +394,8 @@ button.link:hover { color: var(--vg-text-primary); background: none; }
 /* scope all on: every host is in scope, so say so where it's always seen. */
 .statusbar .scope-all, .statusbar .testing-closed { color: var(--vg-accent-rust); font-weight: 600; }
 .statusbar a.to-triage { color: var(--vg-accent-rust); font-weight: 600; text-decoration: none; }
+.statusbar a.oob-status { color: var(--vg-text-tertiary); text-decoration: none; }
+.statusbar a.oob-status:hover { color: var(--vg-text-secondary); }
 .statusbar .engagement-name { color: var(--vg-text-secondary); max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Compare (#20). Added: verdigris; removed: rust; volatile: muted. */
