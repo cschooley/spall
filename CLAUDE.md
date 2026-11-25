@@ -169,6 +169,16 @@ that is a wildcard on a public suffix (`src/psl.rs`, the list vendored in
 refuses a wide `--scope` unless `--allow-wide-scope`. Exclusions are
 never too wide. The paste preview marks `wide` items.
 
+Never-test list (#84, done): `Scope.never` is a third list, checked after
+the engagement's exclusions and before its entries and `*` (`by:
+never-test: <entry>`, its own denial text), never saved in `entries()`.
+`engagement::Store` keeps it in `<engagements>/never-test` (JSON, not
+`.json`: every `*.json` there is an engagement; a file that doesn't read
+stops spall) and applies it in `scope()` and `scope_of(e)` less the
+engagement's `never_test_exceptions` (each must be on the list).
+`Replayer::change_never` audits; `GET/POST /api/never-test`, console
+`never-test` (policy), the Engagement view's Never tested panel.
+
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
 command, served at `GET /api/commands`. The UI's `registry.ts` adds

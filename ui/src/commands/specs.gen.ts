@@ -264,6 +264,35 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "entry": {
+          "description": "a host, *.domain, IP or CIDR",
+          "type": "string"
+        },
+        "op": {
+          "description": "default: show",
+          "enum": [
+            "show",
+            "add",
+            "remove"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "hosts no engagement may reach (your own company, shared providers, .gov): checked after scope, never approvable; an engagement can be exempted from an entry",
+    "hidden": false,
+    "mcp": false,
+    "name": "never-test",
+    "risk": "policy",
+    "ui": true,
+    "usage": "never-test [add|remove <entry>]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "field": {
           "description": "for set",
           "enum": [

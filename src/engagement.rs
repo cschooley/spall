@@ -56,6 +56,11 @@ pub struct Engagement {
     /// Imported API descriptions (#40): servers and paths, for Surface.
     #[serde(default)]
     pub api_specs: Vec<ApiSpec>,
+    /// Entries of the global never-test list (#84) this engagement is
+    /// explicitly allowed to reach (a government client, say). Each must
+    /// be on the list; changed by a human, audited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub never_test_exceptions: Vec<String>,
     pub created: String,
     pub updated: String,
 }
@@ -89,6 +94,7 @@ pub struct Patch {
     pub target_notes: Option<BTreeMap<String, String>>,
     pub rules: Option<RulesPatch>,
     pub api_specs: Option<Vec<ApiSpec>>,
+    pub never_test_exceptions: Option<Vec<String>>,
 }
 
 /// A change to the rules of engagement; absent fields are left alone.
@@ -278,6 +284,16 @@ impl Engagement {
         if let Some(v) = p.api_specs {
             set!(api_specs, v);
         }
+        if let Some(v) = p.never_test_exceptions {
+            let mut v: Vec<String> = v
+                .iter()
+                .map(|e| e.trim().to_lowercase())
+                .filter(|e| !e.is_empty())
+                .collect();
+            v.sort();
+            v.dedup();
+            set!(never_test_exceptions, v);
+        }
         if let Some(r) = p.rules {
             let upper = |v: Vec<String>| -> Vec<String> {
                 v.iter()
@@ -387,6 +403,19 @@ impl std::fmt::Display for Error {
 struct State {
     active: Engagement,
     scope: Scope,
+    /// The global never-test list (#84): its in-scope entries are the list.
+    never: Scope,
+}
+
+/// The never-test list's file, beside the engagements (not `.json`: every
+/// `*.json` there is an engagement).
+const NEVER_FILE: &str = "never-test";
+
+/// The never-test list as saved.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NeverFile {
+    entries: Vec<String>,
 }
 
 pub struct Store {
@@ -455,6 +484,7 @@ impl Store {
                     target_notes: BTreeMap::new(),
                     rules: defaults.clone(),
                     api_specs: Vec::new(),
+                    never_test_exceptions: Vec::new(),
                     created: ts.clone(),
                     updated: ts,
                 };
@@ -472,6 +502,7 @@ impl Store {
             state: Mutex::new(State {
                 scope: active.parsed_scope().map_err(anyhow::Error::msg)?,
                 active,
+                never: load_never(&dir.join(NEVER_FILE))?,
             }),
             defaults: defaults.clone(),
         };
@@ -488,9 +519,50 @@ impl Store {
         self.lock().active.clone()
     }
 
-    /// The active engagement's scope (never allowing every host).
+    /// The active engagement's scope (never allowing every host), with the
+    /// never-test list applied (#84) less its exceptions.
     pub fn scope(&self) -> Scope {
-        self.lock().scope.clone()
+        let st = self.lock();
+        st.scope
+            .with_never(&st.never, &st.active.never_test_exceptions)
+    }
+
+    /// Any engagement's scope as the gate would see it if it were active:
+    /// its own entries and the never-test list (#84), for planning.
+    pub fn scope_of(&self, e: &Engagement) -> Scope {
+        let never = self.lock().never.clone();
+        e.parsed_scope()
+            .unwrap_or_default()
+            .with_never(&never, &e.never_test_exceptions)
+    }
+
+    /// The never-test list's entries (#84).
+    pub fn never_list(&self) -> Vec<String> {
+        self.lock().never.entries()
+    }
+
+    /// Change the never-test list with `f` (`add_wide`/`remove` on its
+    /// entries), and save it. Returns (before, after) entries; on error
+    /// nothing changes. A human's `policy` change: the caller audits it.
+    pub fn change_never(
+        &self,
+        f: impl FnOnce(&mut Scope) -> Result<(), String>,
+    ) -> Result<(Vec<String>, Vec<String>), Error> {
+        let mut st = self.lock();
+        let before = st.never.clone();
+        let mut after = before.clone();
+        f(&mut after).map_err(Error::Invalid)?;
+        if after != before {
+            let file = NeverFile {
+                entries: after.entries(),
+            };
+            let bytes = serde_json::to_vec_pretty(&file)
+                .map_err(|err| Error::Io(format!("saving the never-test list: {err}")))?;
+            write_atomic(&self.dir.join(NEVER_FILE), &bytes)
+                .map_err(|err| Error::Io(format!("saving the never-test list: {err:#}")))?;
+            st.never = after.clone();
+        }
+        Ok((before.entries(), after.entries()))
     }
 
     /// Change the active engagement's scope with `f`, and save it. Returns
@@ -525,6 +597,15 @@ impl Store {
             return Ok((e, changes));
         }
         e.validate().map_err(Error::Invalid)?;
+        // An exception names an entry of the never-test list (#84).
+        for x in &e.never_test_exceptions {
+            if !st.never.has_entry(x) {
+                return Err(Error::Invalid(format!(
+                    "never_test_exceptions: {x} isn't on the never-test list ({})",
+                    st.never.entries().join(", ")
+                )));
+            }
+        }
         e.updated = now();
         save(&self.dir, &e).map_err(|err| Error::Io(format!("saving the engagement: {err:#}")))?;
         st.active = e.clone();
@@ -596,6 +677,7 @@ impl Store {
             target_notes: BTreeMap::new(),
             rules: self.defaults.clone(),
             api_specs: Vec::new(),
+            never_test_exceptions: Vec::new(),
             created: ts.clone(),
             updated: ts,
         };
@@ -641,6 +723,26 @@ impl Store {
         st.scope = scope;
         Ok(())
     }
+}
+
+/// The never-test list (#84); empty if there's no file yet. A file that
+/// doesn't read stops spall: silently testing a never-test host is worse.
+fn load_never(path: &Path) -> anyhow::Result<Scope> {
+    use anyhow::Context;
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Scope::default()),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let file: NeverFile = serde_json::from_str(&text)
+        .with_context(|| format!("{}: not a never-test list", path.display()))?;
+    let mut s = Scope::default();
+    for e in &file.entries {
+        s.add_wide(e)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("{}", path.display()))?;
+    }
+    Ok(s)
 }
 
 fn load(path: &Path) -> anyhow::Result<Engagement> {

@@ -336,6 +336,25 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "never-test",
+        usage: "never-test [add|remove <entry>]",
+        desc: "hosts no engagement may reach (your own company, shared providers, .gov): checked after scope, never approvable; an engagement can be exempted from an entry",
+        // A list of refusals for every engagement: the tester's, like scope.
+        risk: Risk::Policy,
+        mcp: false,
+        hidden: false,
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    ("op", one_of(&["show", "add", "remove"], "default: show")),
+                    ("entry", text("a host, *.domain, IP or CIDR")),
+                ],
+                &[],
+            )
+        },
+    },
+    Command {
         name: "engagement",
         usage: "engagement [list | new <name> | use <id|name> | set <field> <value>]",
         desc: "the engagement you're testing under: details, and switching between engagements",

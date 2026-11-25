@@ -25,10 +25,21 @@ export function engagementApi(page: Page, over: Json = {}) {
       ...over,
     } as Json & { scope: string[]; rules: Json; target_notes: Record<string, string> },
     others: [{ id: "beta-9f00", name: "Beta", client: "", active: false }],
+    never: [] as string[],
     testing: { allowed: true, reason: null as string | null },
     calls: [] as { method: string; path: string; body: unknown }[],
   };
   const answer = () => ({ ...state.e, testing_now: state.testing, scope_all: false });
+  void page.route("**/api/never-test", async (r) => {
+    if (r.request().method() === "POST") {
+      const c = r.request().postDataJSON() as { op: string; entry: string };
+      state.calls.push({ method: "POST", path: "/api/never-test", body: c });
+      if (c.op === "add" && !state.never.includes(c.entry)) state.never.push(c.entry);
+      if (c.op === "remove") state.never = state.never.filter((x) => x !== c.entry);
+      return r.fulfill({ json: { entries: state.never, changed: true } });
+    }
+    return r.fulfill({ json: { entries: state.never, exceptions: (state.e.never_test_exceptions as string[] | undefined) ?? [] } });
+  });
   void page.route("**/api/status", (r) =>
     r.fulfill({
       json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: state.e.scope, scope_all: false, engagement: { id: state.e.id, name: state.e.name }, testing: state.testing },

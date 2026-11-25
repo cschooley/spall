@@ -270,7 +270,7 @@ impl Intake {
                     .all()
                     .iter()
                     .map(|e| {
-                        let scope = e.parsed_scope().unwrap_or_default();
+                        let scope = self.r.engagements.scope_of(e);
                         let auth = authorized(&e.rules, &e.period(), &scope, now);
                         json!({
                             "id": e.id, "name": e.name, "client": e.client,
@@ -340,7 +340,7 @@ impl Intake {
                     .clone()
                     .unwrap_or_else(|| self.r.engagements.active().id);
                 let e = self.engagement(&eng)?;
-                let scope = e.parsed_scope().unwrap_or_default();
+                let scope = self.r.engagements.scope_of(&e);
                 authorized(&e.rules, &e.period(), &scope, now).map_err(|why| {
                     format!("{} isn't authorized now ({why}): nothing can be planned in it; the only thing you can draft is an engagement (propose_engagement)", e.id)
                 })?;
@@ -475,7 +475,7 @@ impl Intake {
         use crate::verbs::{Evidence, Exchange, Object};
         let e = self.engagement(eng)?;
         self.bind(d, &e.id)?;
-        let scope = e.parsed_scope().unwrap_or_default();
+        let scope = self.r.engagements.scope_of(&e);
         if let Err(why) = authorized(&e.rules, &e.period(), &scope, jiff::Timestamp::now()) {
             d.proposal = Some(Proposal::Extension {
                 engagement: e.id.clone(),

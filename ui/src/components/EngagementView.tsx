@@ -3,6 +3,7 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
+import { changeNever, loadNever, setException, SUGGESTED, type NeverList } from "../lib/never.ts";
 import { By } from "./Attribution.tsx";
 import { activityOf, type ActivityLine } from "../lib/attribution.ts";
 import { Approvals } from "./Approvals.tsx";
@@ -68,6 +69,7 @@ export function EngagementView({
       <div className="eng-grid">
         <Details e={e} onChanged={done} />
         <ScopePanel e={e} onChanged={done} />
+        <NeverPanel key={e.id} onChanged={done} />
         <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
         <Waiting toTriage={toTriage} waitingApproval={waitingApproval} onChanged={onChanged} />
@@ -252,6 +254,84 @@ function Details({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) {
           <dd className="pre">{e.notes || "—"}</dd>
         </dl>
       )}
+    </Section>
+  );
+}
+
+/** The global never-test list (#84), and this engagement's exceptions. */
+function NeverPanel({ onChanged }: { onChanged(): void }) {
+  const [list, setList] = useState<NeverList | string | null>(null);
+  const [entry, setEntry] = useState("");
+  const [err, setErr] = useState<Result>(null);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void loadNever().then((l) => live && setList(l));
+    return () => {
+      live = false;
+    };
+  }, [nonce]);
+  const reload = () => {
+    setNonce((n) => n + 1);
+    onChanged();
+  };
+  const change = async (op: "add" | "remove", value: string) => {
+    const r = await changeNever(op, value);
+    if (typeof r === "string") return setErr(r);
+    setErr(null);
+    if (op === "add") setEntry("");
+    reload();
+  };
+  const l = typeof list === "string" || list === null ? null : list;
+  const missing = l ? SUGGESTED.filter((s) => !l.entries.includes(s)) : [];
+  return (
+    <Section title="Never tested" label="Never tested">
+      <p className="note">Every engagement: refused after scope, even with every host allowed, and no approval reaches them. An engagement can be exempted from an entry.</p>
+      {typeof list === "string" ? <ErrorLine msg={list} /> : null}
+      {l && l.entries.length ? (
+        <ul className="entries" aria-label="Never-test list">
+          {l.entries.map((x) => (
+            <li key={x}>
+              <span className="entry">{x}</span>
+              <label className="note">
+                <input
+                  type="checkbox"
+                  checked={l.exceptions.includes(x)}
+                  onChange={(ev) => {
+                    const on = ev.target.checked;
+                    // Shown at once; the server's answer follows on reload.
+                    setList({ ...l, exceptions: on ? [...l.exceptions, x] : l.exceptions.filter((y) => y !== x) });
+                    void setException(l, x, on).then((r) => {
+                      setErr(r);
+                      reload();
+                    });
+                  }}
+                />
+                {" allowed in this engagement"}
+              </label>
+              <span className="row-actions">
+                <button type="button" aria-label={`Remove ${x} from the never-test list`} onClick={() => void change("remove", x)}>
+                  remove
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : l ? (
+        <p className="none">Empty.</p>
+      ) : null}
+      <form className="inline" onSubmit={(ev) => (ev.preventDefault(), void change("add", entry))}>
+        <input aria-label="Never-test entry" placeholder="mycompany.example, *.okta.com, 203.0.113.0/24" value={entry} onChange={(ev) => setEntry(ev.target.value)} />
+        <button type="submit" disabled={!entry.trim()}>
+          add
+        </button>
+        {missing.length ? (
+          <button type="button" onClick={() => void missing.reduce<Promise<unknown>>((p, s) => p.then(() => changeNever("add", s)), Promise.resolve()).then(reload)}>
+            {`add ${missing.join(" and ")}`}
+          </button>
+        ) : null}
+      </form>
+      <ErrorLine msg={err} />
     </Section>
   );
 }

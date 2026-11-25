@@ -21,7 +21,13 @@ pub struct Scope {
     rules: Vec<Rule>,
     excludes: Vec<Rule>,
     all: bool,
+    /// The global never-test list (#84), less the engagement's exceptions:
+    /// out whatever the entries or `*` say, and never saved with them.
+    never: Vec<Rule>,
 }
+
+/// `by` for a host on the never-test list: `never-test: <entry>`.
+pub const NEVER_BY: &str = "never-test: ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Rule {
@@ -194,6 +200,30 @@ impl Scope {
         self.rules.len() + self.excludes.len() != before
     }
 
+    /// The same scope with the never-test list's entries (#84) applied:
+    /// `list`'s in-scope entries, except those named in `exempt` (an
+    /// engagement's exceptions, by entry).
+    pub fn with_never(&self, list: &Scope, exempt: &[String]) -> Scope {
+        let exempt: Vec<Rule> = exempt
+            .iter()
+            .filter_map(|e| parse_rule(e.trim()).ok())
+            .collect();
+        Scope {
+            never: list
+                .rules
+                .iter()
+                .filter(|r| !exempt.contains(r))
+                .cloned()
+                .collect(),
+            ..self.clone()
+        }
+    }
+
+    /// Whether `entry` is one of this list's in-scope entries (as parsed).
+    pub fn has_entry(&self, entry: &str) -> bool {
+        parse_rule(entry.trim()).is_ok_and(|r| self.rules.contains(&r))
+    }
+
     /// The same entries with every host allowed, or not.
     pub fn with_all(&self, all: bool) -> Scope {
         Scope {
@@ -215,6 +245,8 @@ impl Scope {
         let ip = parse_ip(&host);
         let (state, by) = if let Some(r) = self.excludes.iter().find(|r| r.matches(&host, ip)) {
             (HostState::Out, Some(format!("!{}", r.entry())))
+        } else if let Some(r) = self.never.iter().find(|r| r.matches(&host, ip)) {
+            (HostState::Out, Some(format!("{NEVER_BY}{}", r.entry())))
         } else if let Some(r) = self.rules.iter().find(|r| r.matches(&host, ip)) {
             (HostState::In, Some(r.entry()))
         } else if self.all {
@@ -597,6 +629,13 @@ fn host_denial(scope: &Scope, host: &str, what: &str) -> Option<Decision> {
     let shown = display_host(host);
     match v.state {
         HostState::In => None,
+        HostState::Out if v.by.as_deref().is_some_and(|b| b.starts_with(NEVER_BY)) => {
+            let by = v.by.unwrap_or_default();
+            let entry = by.trim_start_matches(NEVER_BY);
+            Some(Decision::Deny(format!(
+                "{what}{shown} is on the never-test list ({entry}): no engagement reaches it unless that engagement is explicitly exempted from {entry}"
+            )))
+        }
         HostState::Out => {
             let by = v.by.unwrap_or_default();
             Some(Decision::Deny(format!(
@@ -848,6 +887,54 @@ mod tests {
             r.contains("SPALL_SCOPE") && r.contains("scope all on"),
             "{r}"
         );
+    }
+
+    #[test]
+    fn the_never_test_list_wins_over_scope_unless_exempted() {
+        let list = Scope::parse("*.gov, 203.0.113.0/24, partner.test").unwrap();
+        let mine = Scope::parse("*.agency.gov, partner.test, 203.0.113.9")
+            .unwrap()
+            .with_all(true);
+        let s = mine.with_never(&list, &[]);
+        for h in [
+            "portal.agency.gov",
+            "partner.test",
+            "203.0.113.9",
+            "anything.gov",
+        ] {
+            let v = s.explain(h);
+            assert_eq!(v.state, HostState::Out, "{h}");
+            assert!(v.by.as_deref().unwrap().starts_with(NEVER_BY), "{h}: {v:?}");
+        }
+        assert!(s.contains("elsewhere.test"), "* still allows the rest");
+        // Not saved with the engagement's entries.
+        assert_eq!(s.entries(), mine.entries());
+        // The gate's refusal says what it is.
+        let d = check(
+            &s,
+            &MethodPolicy::default(),
+            &Action {
+                method: "GET",
+                url: "https://portal.agency.gov/",
+                host_header: None,
+                actor: crate::roe::Actor::Human,
+                class: crate::roe::Class::Send,
+            },
+        );
+        let Decision::Deny(why) = d else {
+            panic!("{d:?}")
+        };
+        assert!(why.contains("never-test list (*.gov)"), "{why}");
+        // An engagement exempted from an entry, by that entry.
+        let s = mine.with_never(&list, &["*.GOV".into()]);
+        assert_eq!(s.explain("portal.agency.gov").state, HostState::In);
+        assert_eq!(s.explain("partner.test").state, HostState::Out);
+        // The engagement's own exclusions still come first.
+        let ex = Scope::parse("*.gov, !x.gov")
+            .unwrap()
+            .with_never(&list, &["*.gov".into()]);
+        assert_eq!(ex.explain("x.gov").by.as_deref(), Some("!x.gov"));
+        assert!(list.has_entry("*.GOV") && !list.has_entry("*.mil"));
     }
 
     #[test]

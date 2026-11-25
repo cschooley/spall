@@ -381,3 +381,36 @@ test("too-wide scope entries are refused until you say so; the override is expli
   await expect(panel).toHaveCount(0);
   expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/scope", body: { op: "apply", add: ["*.com", "app.acme.test"], exclude: [], wide: true } });
 });
+
+test("the never-test list: add, the offered .gov and .mil, an exemption for this engagement, remove (#84)", async ({ page }) => {
+  const api = engagementApi(page);
+  const p = `<img src=x onerror="window.__pwned=1">`;
+  await page.goto("/#engagement");
+  const panel = page.getByRole("region", { name: "Never tested" });
+  await expect(panel).toContainText("Empty.");
+  await panel.getByLabel("Never-test entry").fill("mycompany.example");
+  await panel.getByLabel("Never-test entry").press("Enter");
+  const list = panel.getByRole("list", { name: "Never-test list" });
+  await expect(list).toContainText("mycompany.example");
+  await panel.getByRole("button", { name: "add *.gov and *.mil" }).click();
+  await expect(list.locator(".entry")).toHaveText(["mycompany.example", "*.gov", "*.mil"]);
+  await expect(panel.getByRole("button", { name: /add \*\.gov/ })).toHaveCount(0);
+  // Exempt this engagement from *.gov (a government client).
+  await list.locator("li", { hasText: "*.gov" }).getByRole("checkbox").check();
+  await expect.poll(() => api.calls.filter((c) => c.path === "/api/engagement").at(-1)?.body).toEqual({ never_test_exceptions: ["*.gov"] });
+  await expect(list.locator("li", { hasText: "*.gov" }).getByRole("checkbox")).toBeChecked();
+  await panel.getByRole("button", { name: "Remove mycompany.example from the never-test list" }).click();
+  await expect(list.locator(".entry")).toHaveText(["*.gov", "*.mil"]);
+  // A hostile entry is text.
+  await panel.getByLabel("Never-test entry").fill(p);
+  await panel.getByLabel("Never-test entry").press("Enter");
+  await expect(list).toContainText(p);
+  expect(await page.locator(".eng img").count()).toBe(0);
+  expect(api.calls.filter((c) => c.path === "/api/never-test").map((c) => c.body)).toEqual([
+    { op: "add", entry: "mycompany.example" },
+    { op: "add", entry: "*.gov" },
+    { op: "add", entry: "*.mil" },
+    { op: "remove", entry: "mycompany.example" },
+    { op: "add", entry: p },
+  ]);
+});

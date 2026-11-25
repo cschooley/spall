@@ -1,3 +1,4 @@
+import { changeNever, loadNever } from "./lib/never.ts";
 import { runVerb } from "./lib/verbs.ts";
 import { quadCall } from "./lib/quad.ts";
 import { QuadCard, QuadChip, QuadGlow } from "./components/Quad.tsx";
@@ -533,6 +534,13 @@ export function App() {
       },
       rules: loadCatalog,
       verb: (name, id, category) => runVerb(name, id, category),
+      neverTest: async (op, entry) => {
+        if (op && entry) {
+          const r = await changeNever(op, entry);
+          if (typeof r === "string") return r;
+        }
+        return loadNever();
+      },
       quad: async (what) => {
         const r = await quadCall(what);
         setStatusNonce((n) => n + 1);

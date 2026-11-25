@@ -92,6 +92,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/exchanges/{id}", get(api_exchange))
         .route("/api/audit", get(api_audit))
         .route("/api/scope", post(api_scope))
+        .route("/api/never-test", get(api_never).post(api_never_change))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
@@ -1036,6 +1037,60 @@ async fn api_scope(State(state): State<AppState>, body: axum::body::Bytes) -> Re
             "changed": changed,
         }))
         .into_response(),
+        Err(e) => engagement_error(&e),
+    }
+}
+
+/// The global never-test list (#84) and the active engagement's
+/// exceptions to it.
+async fn api_never(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the never-test list needs taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    axum::Json(serde_json::json!({
+        "entries": r.engagements.never_list(),
+        "exceptions": r.engagements.active().never_test_exceptions,
+    }))
+    .into_response()
+}
+
+/// Change the never-test list: `{"op": "add" | "remove", "entry"}`. A
+/// human's `policy` change (same-origin), audited.
+async fn api_never_change(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "the never-test list needs taphttp's lever API (start spall with --taphttp-api)",
+        );
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Change {
+        op: String,
+        entry: String,
+    }
+    let c: Change = match serde_json::from_slice(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"op": "add"|"remove", "entry"}}: {e}"#),
+            )
+        }
+    };
+    let add = match c.op.as_str() {
+        "add" => true,
+        "remove" => false,
+        _ => return json_error(StatusCode::BAD_REQUEST, r#"op: "add" or "remove""#),
+    };
+    match r.change_never(add, &c.entry) {
+        Ok((entries, changed)) => {
+            axum::Json(serde_json::json!({ "entries": entries, "changed": changed }))
+                .into_response()
+        }
         Err(e) => engagement_error(&e),
     }
 }

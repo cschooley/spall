@@ -486,6 +486,38 @@ impl Replayer {
         Ok((now, changed))
     }
 
+    /// Add to or remove from the global never-test list (#84): a human's
+    /// `policy` change, audited with before and after. `add` takes any
+    /// in-scope-style entry, however wide (the list only refuses).
+    pub fn change_never(
+        &self,
+        add: bool,
+        entry: &str,
+    ) -> Result<(Vec<String>, bool), EngagementError> {
+        let entry = entry.trim();
+        let (before, after) = self.engagements.change_never(|s| {
+            if add {
+                s.add_wide(entry).map(|_| ())
+            } else if s.remove(entry) {
+                Ok(())
+            } else {
+                Err(format!("{entry} isn't on the never-test list"))
+            }
+        })?;
+        let changed = before != after;
+        let mut rec = Record::new("never-test", "", Outcome::ScopeChanged);
+        rec.engagement = Some(self.engagements.active().id);
+        rec.reason = Some(format!(
+            "never-test {} {entry}",
+            if add { "add" } else { "remove" }
+        ));
+        rec.scope_before = Some(before);
+        rec.scope_after = Some(after.clone());
+        rec.error = (!changed).then(|| "no change".to_string());
+        self.audit(&rec);
+        Ok((after, changed))
+    }
+
     /// Whether the rules allow testing right now (dates, windows), and why not.
     pub fn testing_now(&self) -> serde_json::Value {
         let e = self.engagements.active();

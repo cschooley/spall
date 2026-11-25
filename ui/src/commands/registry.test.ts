@@ -86,6 +86,7 @@ function fakeCtx(over: Partial<Ctx> = {}) {
       dropped: 0,
     }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
+    neverTest: async (op, entry) => (calls.push(`never:${op ?? "show"}:${entry ?? ""}`), { entries: ["*.gov"], exceptions: [] }),
     quad: async (what) => (calls.push(`quad:${JSON.stringify(what)}`), { ok: true, lines: ["QUAD for 2:00"] }),
     verb: async (name, id, category) => (calls.push(`verb:${name}:${id}${category ? `:${category}` : ""}`), { id: "T-9", role: "tester", cost: "~5 requests, safe methods" }),
     ...over,
@@ -113,6 +114,14 @@ test("quad: default, seconds, stop; anything else is usage (#66)", async () => {
   for (const l of ["quad", "quad 30", "quad stop", "quad 601", "quad 0", "quad x", "quad 30 more"]) await execute(l, ctx);
   assert.deepEqual(calls.filter((c) => c.startsWith("quad:")), ['quad:{}', 'quad:{"seconds":30}', 'quad:{"stop":true}']);
   assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: quad")).length, 4);
+});
+
+test("never-test: show, add, remove; anything else is usage (#84)", async () => {
+  const { ctx, calls, lines } = fakeCtx();
+  for (const l of ["never-test", "never-test add *.gov", "never-test remove *.gov", "never-test add", "never-test frob x", "never-test add a b"]) await execute(l, ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("never:")), ["never:show:", "never:add:*.gov", "never:remove:*.gov"]);
+  assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: never-test")).length, 3);
+  assert.ok(lines.some(([t]) => t === "never-test: *.gov"));
 });
 
 test("tokenize splits on whitespace and honors quotes", () => {
@@ -313,6 +322,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["replay", "send"],
       ["fetch", "send"],
       ["scope", "policy"],
+      ["never-test", "policy"],
       ["engagement", "policy"],
       ["roe", "policy"],
       ["estop", "policy"],

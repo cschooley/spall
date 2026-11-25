@@ -5694,3 +5694,116 @@ async fn too_wide_scope_entries_need_the_audited_override() {
         "{reasons:?}"
     );
 }
+
+/// The global never-test list (#84): after scope, for humans and agents,
+/// past `scope all on`, never approvable; an engagement can be exempted
+/// from an entry, explicitly and audited; the list survives a restart.
+#[tokio::test]
+async fn the_never_test_list_refuses_whatever_scope_says_unless_exempted() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let token = dir.path().join("api-token");
+    let never =
+        |body: &'static str| async move { post_text(spall, "/api/never-test", body, None).await };
+    let human = || async { post_text(spall, "/api/replay", r#"{"id":"e1"}"#, None).await };
+    assert!(
+        human().await.starts_with("HTTP/1.1 200"),
+        "in scope, not listed yet"
+    );
+    let res = never(r#"{"op":"add","entry":"example.com"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert_eq!(
+        body_json(&res)["entries"],
+        serde_json::json!(["example.com"])
+    );
+    let sent = stub.replays().len();
+
+    let res = human().await;
+    assert!(
+        res.starts_with("HTTP/1.1 403") && res.contains("never-test list (example.com)"),
+        "{res}"
+    );
+    let res = post_text(spall, "/api/scope", r#"{"op":"all","on":true}"#, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(
+        human().await.starts_with("HTTP/1.1 403"),
+        "scope all on doesn't reach it"
+    );
+    // An agent is refused, not paused: no approval reaches it.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"e1"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(task_of(&r, "T-1").status, spall::tasks::Status::Running);
+    assert_eq!(stub.replays().len(), sent, "nothing was sent");
+    // Shown where scope is shown.
+    let v = body_json(&get_text(spall, "/api/scope/check?target=example.com").await);
+    assert_eq!(
+        (v["state"].as_str(), v["by"].as_str()),
+        (Some("out"), Some("never-test: example.com"))
+    );
+
+    // An exception names an entry on the list, and lets that engagement through.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"never_test_exceptions":["other.test"]}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 400") && res.contains("isn't on the never-test list"),
+        "{res}"
+    );
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"never_test_exceptions":["EXAMPLE.com"]}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(human().await.starts_with("HTTP/1.1 200"), "exempted");
+    let listed = body_json(&get_text(spall, "/api/never-test").await);
+    assert_eq!(listed["exceptions"], serde_json::json!(["example.com"]));
+
+    let audit = audit_records(&token);
+    assert!(audit
+        .iter()
+        .any(|a| a["reason"] == "never-test add example.com"
+            && a["scope_after"] == serde_json::json!(["example.com"])));
+    assert!(
+        audit.iter().any(|a| a["reason"]
+            .as_str()
+            .is_some_and(|s| s.contains("never_test_exceptions"))),
+        "the exception is audited"
+    );
+
+    // The list outlives the process; the exception lives on the engagement.
+    let (again, _) = spall::engagement::Store::open(
+        &dir.path().join("engagements"),
+        &spall::gate::Scope::default(),
+        &spall::roe::Rules::default(),
+    )
+    .unwrap();
+    assert_eq!(again.never_list(), ["example.com"]);
+    assert_eq!(
+        again.scope().explain("example.com").state,
+        spall::gate::HostState::In,
+        "the active engagement's exception"
+    );
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"never_test_exceptions":[]}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(human().await.starts_with("HTTP/1.1 403"));
+    let res = never(r#"{"op":"remove","entry":"example.com"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(human().await.starts_with("HTTP/1.1 200"));
+    let res = never(r#"{"op":"remove","entry":"example.com"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 400"), "not on it: {res}");
+}

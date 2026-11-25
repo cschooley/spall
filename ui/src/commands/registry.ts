@@ -69,6 +69,8 @@ export interface Ctx {
   task(id?: string): Promise<string[] | string>;
   /** Start quad mode, or end it (#66); what happened, as lines. */
   quad(what: { seconds?: number } | { stop: true }): Promise<{ ok: boolean; lines: string[] }>;
+  /** The never-test list (#84), changed when `op` is given; or why not. */
+  neverTest(op?: "add" | "remove", entry?: string): Promise<{ entries: string[]; exceptions: string[] } | string>;
   /** Engage the agent e-stop, or clear it (#57); what happened. */
   estop(action: "engage" | "clear", reason?: string): Promise<{ ok: boolean; text: string }>;
   /** Flag an exchange as a candidate (#43). */
@@ -521,6 +523,20 @@ const IMPLS: readonly Impl[] = [
       }
       const r = await ctx.estop("engage", rest);
       ctx.out(r.text, r.ok ? "stop" : "warn");
+    },
+  },
+  {
+    name: "never-test",
+    group: "app",
+    palette: { label: "Never-test list (every engagement)", hint: "never-test" },
+    run: async (args, ctx) => {
+      const [op, entry, ...extra] = args;
+      if (extra.length || (op !== undefined && (!(op === "add" || op === "remove") || !entry))) return ctx.out("usage: never-test [add|remove <entry>]", "warn");
+      const r = await ctx.neverTest(op as "add" | "remove" | undefined, entry);
+      if (typeof r === "string") return ctx.out(`never-test: ${r}`, "warn");
+      if (!r.entries.length) return ctx.out("never-test: empty (never-test add <entry>; *.gov and *.mil are offered in the Engagement view)");
+      ctx.out(`never-test: ${r.entries.join(", ")}`);
+      if (r.exceptions.length) ctx.out(`this engagement is exempted from: ${r.exceptions.join(", ")}`, "sys");
     },
   },
   {
