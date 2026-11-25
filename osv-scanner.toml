@@ -5,3 +5,21 @@
 # id = "GHSA-xxxx-xxxx-xxxx"
 # ignoreUntil = 2026-12-31T00:00:00Z
 # reason = """why it does not apply here, and when it gets fixed"""
+
+# rsa 0.9 (#1, OOB): the Marvin attack, a timing side channel on RSA
+# decryption. No fixed release yet. It needs an attacker who can submit
+# chosen ciphertexts to the decrypting side and time its answers. spall
+# decrypts only the AES key its own self-hosted interactsh server returns
+# to an authenticated poll, with a key pair generated per session and kept
+# in memory; nothing it decrypts comes from the target, and no decryption
+# result or timing is observable by anyone else. Revisit when rsa 0.10 is
+# released (it fixes this), and swap to it.
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+ignoreUntil = 2027-05-31T00:00:00Z
+reason = """Marvin timing side channel in rsa decryption. spall only decrypts the AES key from its own authenticated interactsh server, with a per-session key pair kept in memory: no attacker-chosen ciphertexts, no observable timing. Move to rsa 0.10 when it's released."""
+
+[[IgnoredVulns]]
+id = "GHSA-c38w-74pg-36hr"
+ignoreUntil = 2027-05-31T00:00:00Z
+reason = """GHSA alias of RUSTSEC-2023-0071 (rsa Marvin attack); same reasoning as above."""

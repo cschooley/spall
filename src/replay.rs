@@ -329,6 +329,8 @@ pub struct Replayer {
     /// Where finding hosts first resolved (#65), and the resolver.
     pub addresses: Arc<crate::addresses::Store>,
     pub resolver: std::sync::RwLock<Arc<dyn crate::addresses::Resolve>>,
+    /// Out-of-band callbacks (#1); `None` unless a server is configured.
+    pub oob: Option<Arc<crate::oob::Oob>>,
 }
 
 /// Drafts one agent's task may make with verbs (#67) before it's told to
@@ -1442,6 +1444,90 @@ impl Replayer {
         ));
         self.audit(&rec);
         Ok(serde_json::to_value(&summary).unwrap_or_default())
+    }
+
+    /// Mint an OOB payload (#1) in the active engagement for `task` (an
+    /// agent's) or the tester. Sends nothing; refused for agents while the
+    /// e-stop is engaged. Audited.
+    pub async fn oob_mint(
+        &self,
+        task: Option<&str>,
+    ) -> Result<crate::oob::Payload, (StatusCode, String)> {
+        let Some(o) = &self.oob else {
+            return Err((StatusCode::CONFLICT, "no OOB server is configured (--oast-server and --oast-domain; the compose oob profile runs one)".into()));
+        };
+        if task.is_some() && self.tasks.estop().is_some() {
+            return Err((
+                StatusCode::CONFLICT,
+                "the e-stop is engaged: agents mint nothing".into(),
+            ));
+        }
+        let e = self.engagements.active();
+        let by = task
+            .map(|t| format!("agent:{t}"))
+            .unwrap_or_else(|| "human".into());
+        let res = o.mint(&e.id, &by, task).await;
+        let mut rec = Record::new("oob", "", Outcome::Sent);
+        rec.actor = if task.is_some() { "agent" } else { "human" }.into();
+        rec.task = task.map(String::from);
+        rec.engagement = Some(e.id.clone());
+        match &res {
+            Ok(p) => rec.reason = Some(format!("oob payload {} for {by}", p.host)),
+            Err(err) => {
+                rec.reason = Some("oob payload".into());
+                rec.error = Some(err.to_string());
+            }
+        }
+        self.audit(&rec);
+        res.map_err(|err| (StatusCode::BAD_GATEWAY, err.to_string()))
+    }
+
+    /// One poll of the OOB server (#1): record each hit, audit it, log it
+    /// on its task, and link it to the exchange that carried its payload.
+    pub async fn oob_poll(&self) -> anyhow::Result<usize> {
+        let Some(o) = &self.oob else { return Ok(0) };
+        let hits = o.poll().await?;
+        for (eng, h) in &hits {
+            let mut rec = Record::new("oob", "", Outcome::Sent);
+            rec.actor = "oob".into();
+            rec.task = h.task.clone();
+            rec.engagement = Some(eng.clone());
+            rec.result_id = Some(h.id.clone());
+            rec.reason = Some(format!(
+                "oob hit {}: {} from {} on {}",
+                h.id, h.protocol, h.remote, h.payload
+            ));
+            // The exchange that carried it: the newest one holding the id.
+            let found = match self
+                .lever
+                .get_bytes(&format!("/exchanges?q={}&limit=20", h.payload))
+                .await
+            {
+                Ok((StatusCode::OK, b)) => serde_json::from_slice::<Vec<serde_json::Value>>(&b)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|x| x.to_string().to_ascii_lowercase().contains(&h.payload))
+                    .and_then(|x| x["id"].as_str().map(String::from)),
+                _ => None,
+            };
+            if let Some(x) = &found {
+                o.link(eng, &h.id, x);
+                rec.target = Some(x.clone());
+            }
+            self.audit(&rec);
+            if let Some(t) = &h.task {
+                let ev = crate::tasks::Event::Interaction {
+                    id: h.id.clone(),
+                    protocol: h.protocol.clone(),
+                    exchange: found,
+                };
+                let now = taphttp_types::Timestamp::now().to_string();
+                if let Err(err) = self.tasks.log(eng, t, ev, &now) {
+                    tracing::debug!("{eng}/{t}: oob hit: {err}");
+                }
+            }
+        }
+        Ok(hits.len())
     }
 
     /// Totals quad is scored on (#66): requests charged, model tokens and

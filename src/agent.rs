@@ -204,6 +204,8 @@ impl Tools {
             "report" => self.report(&t, a),
             "skill" => skill(&t, a),
             "sweep" => self.sweep(&t, a).await,
+            "oob_payload" => self.oob_payload(&t).await,
+            "oob_hits" => self.oob_hits(&t),
             "checks" => Ok(checks_text(&self.replayer.checks())),
             "retest_result" => self.retest_result(&t, a),
             v if crate::verbs::find(v).is_some() => self.verb(&t, v, a).await,
@@ -612,6 +614,37 @@ impl Tools {
         }
     }
 
+    /// `oob_payload` (#1): a callback host for this task. Sends nothing.
+    async fn oob_payload(&self, t: &Task) -> Result<Output, Output> {
+        match self.replayer.oob_mint(Some(&t.id)).await {
+            Ok(p) => Ok(ok(format!(
+                "minted {} for {}. Put it where the target might call out: a URL ({}), a hostname, an email domain. Nothing was sent. Then oob_hits; callbacks can come late.{}",
+                p.host,
+                t.id,
+                p.url,
+                p.lab_url
+                    .map(|u| format!(" In this lab, without DNS: {u}"))
+                    .unwrap_or_default()
+            ))),
+            Err((_, why)) => Err(err(format!("oob_payload: {why}"))),
+        }
+    }
+
+    /// `oob_hits` (#1): this task's callbacks, as untrusted data.
+    fn oob_hits(&self, t: &Task) -> Result<Output, Output> {
+        let Some(o) = &self.replayer.oob else {
+            return Err(err("oob_hits: no OOB server is configured; ask the tester"));
+        };
+        let (payloads, hits) = o.list(&t.engagement, Some(&t.id));
+        Ok(ok(format!(
+            "{} payload(s), {} hit(s) for {}. A hit with an exchange is evidence: propose_finding with that exchange.\n{}",
+            payloads.len(),
+            hits.len(),
+            t.id,
+            untrusted::wrap_json("oob", &json!({ "payloads": payloads, "hits": hits }))
+        )))
+    }
+
     fn report(&self, t: &Task, a: &Value) -> Result<Output, Output> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -871,6 +904,8 @@ mod tests {
                 "fetch",
                 "sweep",
                 "checks",
+                "oob_payload",
+                "oob_hits",
                 "hosts",
                 "rules",
                 "task",

@@ -21,6 +21,7 @@ pub mod lever;
 pub mod mcp;
 pub mod mcp_bridge;
 pub mod model;
+pub mod oob;
 pub mod openapi;
 pub mod plans;
 pub mod psl;
@@ -287,6 +288,19 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 plans,
                 addresses: Arc::new(addresses),
                 resolver: std::sync::RwLock::new(Arc::new(addresses::System)),
+                oob: match oob::Settings::resolve(
+                    config.oast_server.as_deref(),
+                    config.oast_domain.as_deref(),
+                    config.oast_http.as_deref(),
+                    config.oast_token_file.as_deref(),
+                    std::env::var("SPALL_OAST_TOKEN").ok(),
+                )? {
+                    Some(s) => {
+                        tracing::info!("OOB callbacks: {} for *.{}", s.server, s.domain);
+                        Some(Arc::new(oob::Oob::new(s, &config.engagements.join("oob"))?))
+                    }
+                    None => None,
+                },
             }))
         }
         None => None,
@@ -395,10 +409,24 @@ impl App {
             host: host.clone(),
             intake,
         };
+        let oob_replayer = state.replayer.clone().filter(|r| r.oob.is_some());
         let agents = async {
             match host {
                 Some(h) => h.run().await,
                 None => std::future::pending().await,
+            }
+        };
+        // OOB (#1): poll for callbacks while spall runs. Inbound only, so it
+        // goes on through the e-stop: hits are evidence.
+        let oob = async {
+            let Some(r) = oob_replayer else {
+                return std::future::pending().await;
+            };
+            loop {
+                if let Err(e) = r.oob_poll().await {
+                    tracing::warn!("OOB poll: {e:#}");
+                }
+                tokio::time::sleep(oob::POLL).await;
             }
         };
         let source = async {
@@ -421,6 +449,7 @@ impl App {
             r = axum::serve(listener, web::router(state)) => r.context("web server failed"),
             r = source => r,
             r = agents => r,
+            r = oob => r,
         }
     }
 }

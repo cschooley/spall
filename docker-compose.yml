@@ -71,6 +71,14 @@ services:
       SPALL_MODEL_URL:
       SPALL_MODEL_KEY:
       SPALL_MODEL_KEY_FILE:
+      # Out-of-band callbacks (#1), off unless set (see .env.example). With
+      # the `oob` profile: SPALL_OAST_SERVER=http://interactsh,
+      # SPALL_OAST_DOMAIN=oast.lab, SPALL_OAST_HTTP=http://interactsh.
+      SPALL_OAST_SERVER:
+      SPALL_OAST_DOMAIN:
+      SPALL_OAST_HTTP:
+      SPALL_OAST_TOKEN:
+      SPALL_OAST_TOKEN_FILE:
       RUST_LOG: info
     # A local model on this machine (Ollama, llama.cpp) at host.docker.internal.
     extra_hosts:
@@ -80,6 +88,32 @@ services:
     volumes:
       - taphttp-token:/token:ro
       - spall-data:/data
+    restart: unless-stopped
+
+  # Out-of-band callbacks in a lab (#1): `docker compose --profile oob up -d`.
+  # A self-hosted interactsh server on the compose network only (nothing
+  # published): lab targets reach it as http://interactsh/<payload id>, or
+  # by DNS if their resolver is pointed at it. For targets on the internet,
+  # run it on a VPS with a delegated subdomain instead (README). Never the
+  # public oast.* servers: callbacks can carry client data.
+  interactsh:
+    profiles: ["oob"]
+    image: projectdiscovery/interactsh-server:v1.2.4@sha256:ffde50de2cdc9113b9bb024d9dbe63a7a4826de213be1cc63a7ffd5fd3b14481
+    command:
+      - -domain
+      - ${SPALL_OAST_DOMAIN:-oast.lab}
+      # The address its DNS answers with; a lab has no public one.
+      - -ip
+      - ${SPALL_OAST_IP:-127.0.0.1}
+      - -token
+      - ${SPALL_OAST_TOKEN:-}
+      # No certificates in a lab; the id is found anywhere in a request.
+      - -skip-acme
+      - -scan-everywhere
+      - -disable-update-check
+      - -disable-version
+      - -eviction
+      - "7"
     restart: unless-stopped
 
 volumes:

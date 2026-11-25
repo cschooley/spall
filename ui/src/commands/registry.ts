@@ -18,6 +18,7 @@ import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from ".
 import { RISKS, SPECS } from "./specs.gen.ts";
 import { CATEGORIES, draftedLine, VERBS, type Drafted } from "../lib/verbs.ts";
 import { sweepLines, type CheckInfo, type SweepAnswer } from "../lib/sweep.ts";
+import { hitLine, type OobPayload, type OobState } from "../lib/oob.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
 
@@ -68,6 +69,10 @@ export interface Ctx {
   haltTask(id: string, reason: string): Promise<{ ok: boolean; text: string }>;
   /** A task's details as console lines, or every task's one-liner with no id (#54); or why not. */
   task(id?: string): Promise<string[] | string>;
+  /** OOB callbacks (#1): the state, or why not. */
+  oob(): Promise<OobState | string>;
+  /** Mint an OOB payload (#1), or why not. */
+  oobMint(): Promise<OobPayload | string>;
   /** A sweep's estimate (`yes` false) or its run (#75), or why not. */
   sweep(base: string, check: string, yes: boolean): Promise<SweepAnswer | string>;
   /** The checks a sweep can run (#75), or why not. */
@@ -567,6 +572,25 @@ const IMPLS: readonly Impl[] = [
       if (typeof r === "string") return ctx.out(`sweep: ${r}`, "warn");
       if (r.kind === "estimate") return ctx.out(`sweep ${r.check} (${r.rule}) on ${base}: ${r.cost}. sweep ${base} ${check} --yes to run it`, "sys");
       sweepLines(r).forEach((l, i) => ctx.out(l, i === 0 ? "sys" : "out"));
+    },
+  },
+  {
+    name: "oob",
+    group: "traffic",
+    palette: { label: "Out-of-band callbacks", hint: "oob [new]" },
+    run: async (args, ctx) => {
+      if (args.length > 1 || (args[0] !== undefined && args[0] !== "new")) return ctx.out("usage: oob [new]", "warn");
+      if (args[0] === "new") {
+        const p = await ctx.oobMint();
+        if (typeof p === "string") return ctx.out(`oob: ${p}`, "warn");
+        ctx.out(`oob: ${p.host}  (${p.url}${p.labUrl ? `; in the lab: ${p.labUrl}` : ""}). Nothing was sent: put it in a request.`, "sys");
+        return;
+      }
+      const s = await ctx.oob();
+      if (typeof s === "string") return ctx.out(`oob: ${s}`, "warn");
+      if (!s.configured) return ctx.out("oob: no OOB server is configured (SPALL_OAST_SERVER and SPALL_OAST_DOMAIN; the compose oob profile runs one)", "warn");
+      ctx.out(`oob: ${s.payloads.length} payload(s) under ${s.domain}, ${s.hits.length} hit(s)`, "sys");
+      for (const h of s.hits.slice(0, 20)) ctx.out(`  ${hitLine(h)}`);
     },
   },
   {

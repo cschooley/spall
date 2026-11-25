@@ -21,6 +21,14 @@ sha2 = "0.11"
 # OpenAPI import (#40): YAML specs. Pure Rust, no unsafe C; aliases are
 # size-checked before loading (src/openapi.rs).
 yaml-rust2 = { version = "0.13", default-features = false }
+# OOB callbacks (#1): interactsh wraps each poll's AES key with RSA-OAEP
+# (SHA-256) and encrypts interactions with AES-256-CFB. Pure Rust. rsa
+# carries RUSTSEC-2023-0071 (Marvin), suppressed in osv-scanner.toml with
+# the reason: spall decrypts only what its own authenticated server sends.
+rsa = { version = "0.9", default-features = false, features = ["std", "pem", "sha2", "getrandom"] }
+aes = "0.8"
+cfb-mode = { version = "0.8", features = ["std"] }
+base64 = "0.22"
 # Plain-HTTP client for taphttp's lever API (compose network, no TLS).
 http-body-util = "0.1"
 # Engagement dates (#35) and testing windows (#36). The tz database is
@@ -54,3 +62,10 @@ axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["io-util", "process"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+# RSA key generation (#1, OOB) takes seconds unoptimized: build the
+# bignum and rsa crates optimized even in dev and test builds.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.dev.package.rsa]
+opt-level = 3

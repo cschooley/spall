@@ -3,6 +3,7 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
+import { loadOob, mintOob, type OobPayload, type OobState } from "../lib/oob.ts";
 import { changeChecks, loadChecks, type CheckInfo } from "../lib/sweep.ts";
 import { changeNever, loadNever, setException, SUGGESTED, type NeverList } from "../lib/never.ts";
 import { By } from "./Attribution.tsx";
@@ -37,7 +38,10 @@ export function EngagementView({
   onChanged,
   toTriage,
   waitingApproval,
+  onOpenExchange,
 }: {
+  /** Open an exchange in Traffic's inspector. */
+  onOpenExchange(id: string): void;
   /** The status bar's count; a change reloads the list (#47). */
   toTriage: number | null;
   /** Tasks waiting on approval (#56); a change reloads them. */
@@ -72,6 +76,7 @@ export function EngagementView({
         <ScopePanel e={e} onChanged={done} />
         <NeverPanel key={e.id} onChanged={done} />
         <ChecksPanel key={`checks-${e.id}`} onChanged={done} />
+        <OobPanel key={`oob-${e.id}`} onOpenExchange={onOpenExchange} />
         <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
         <Waiting toTriage={toTriage} waitingApproval={waitingApproval} onChanged={onChanged} />
@@ -255,6 +260,77 @@ function Details({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) {
           <dt>notes</dt>
           <dd className="pre">{e.notes || "—"}</dd>
         </dl>
+      )}
+    </Section>
+  );
+}
+
+/** Out-of-band callbacks (#1): payloads and the hits on them. Hidden
+ * unless a server is configured. A hit's raw request is shown as text. */
+function OobPanel({ onOpenExchange }: { onOpenExchange(id: string): void }) {
+  const [state, setState] = useState<OobState | string | null>(null);
+  const [minted, setMinted] = useState<OobPayload | string | null>(null);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let live = true;
+    const load = () => void loadOob().then((s) => live && setState(s));
+    load();
+    // Callbacks can come late: look again now and then while it's open.
+    const id = setInterval(load, 10_000);
+    return () => {
+      live = false;
+      clearInterval(id);
+    };
+  }, [nonce]);
+  if (state === null || (typeof state !== "string" && !state.configured)) return null;
+  return (
+    <Section title="Out-of-band" label="Out-of-band">
+      {typeof state === "string" ? (
+        <ErrorLine msg={state} />
+      ) : (
+        <>
+          <p className="note">{`Callbacks to *.${state.domain}: put a payload in a request; a DNS, HTTP or SMTP hit on it lands here, tied to the exchange that carried it.`}</p>
+          <div className="inline">
+            <button
+              type="button"
+              onClick={() =>
+                void mintOob().then((p) => {
+                  setMinted(p);
+                  setNonce((n) => n + 1);
+                })
+              }
+            >
+              new payload
+            </button>
+            {minted ? <span className={typeof minted === "string" ? "error" : "entry"}>{typeof minted === "string" ? minted : `${minted.host}${minted.labUrl ? `  ·  ${minted.labUrl}` : ""}`}</span> : null}
+          </div>
+          {state.hits.length ? (
+            <ul className="entries oob-hits" aria-label="Out-of-band hits">
+              {state.hits.map((h) => (
+                <li key={h.id}>
+                  <span className="entry">{`${h.id} · ${h.protocol} from ${h.remote}`}</span>
+                  <span className="note">
+                    {`${h.at} · ${h.payload}${h.task ? ` · ${h.task}` : ""}`}
+                    {h.exchange ? (
+                      <>
+                        {" · "}
+                        <button type="button" className="link" onClick={() => onOpenExchange(h.exchange!)}>
+                          {h.exchange}
+                        </button>
+                      </>
+                    ) : null}
+                  </span>
+                  <details>
+                    <summary>raw request</summary>
+                    <pre className="oob-raw">{h.rawRequest}</pre>
+                  </details>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="none">{`No hits yet (${state.payloads.length} payload${state.payloads.length === 1 ? "" : "s"}).`}</p>
+          )}
+        </>
       )}
     </Section>
   );

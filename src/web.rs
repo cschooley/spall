@@ -95,6 +95,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/never-test", get(api_never).post(api_never_change))
         .route("/api/checks", get(api_checks).post(api_checks_change))
         .route("/api/sweep", post(api_sweep))
+        .route("/api/oob", get(api_oob).post(api_oob_mint))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
@@ -342,6 +343,19 @@ async fn api_status(State(state): State<AppState>) -> Response {
         Some(r) => serde_json::to_value(r.tasks.estop()).unwrap_or_default(),
         None => serde_json::Value::Null,
     };
+    // OOB (#1): the callback domain and the active engagement's hits, or null.
+    body["oob"] = state
+        .replayer
+        .as_ref()
+        .and_then(|r| {
+            r.oob.as_ref().map(|o| {
+                serde_json::json!({
+                    "domain": o.settings.domain,
+                    "hits": o.list(&r.engagements.active().id, None).1.len(),
+                })
+            })
+        })
+        .unwrap_or_default();
     // Quad (#66): the burst underway or null, and the last scorecard.
     body["quad"] = state
         .replayer
@@ -1169,6 +1183,37 @@ async fn api_sweep(State(state): State<AppState>, body: axum::body::Bytes) -> Re
     };
     match r.sweep(None, &a.base, &a.check, a.yes).await {
         Ok(v) => axum::Json(v).into_response(),
+        Err((status, why)) => json_error(status, &why),
+    }
+}
+
+/// OOB callbacks (#1) in the active engagement: whether a server is set
+/// up, the payloads and the hits (raw requests are captured data: shown
+/// as text).
+async fn api_oob(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let Some(o) = &r.oob else {
+        return axum::Json(serde_json::json!({ "configured": false })).into_response();
+    };
+    let (payloads, hits) = o.list(&r.engagements.active().id, None);
+    axum::Json(serde_json::json!({
+        "configured": true,
+        "domain": o.settings.domain,
+        "payloads": payloads,
+        "hits": hits,
+    }))
+    .into_response()
+}
+
+/// Mint a payload for the tester (#1). Same-origin; sends nothing.
+async fn api_oob_mint(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    match r.oob_mint(None).await {
+        Ok(p) => (StatusCode::CREATED, axum::Json(p)).into_response(),
         Err((status, why)) => json_error(status, &why),
     }
 }

@@ -3771,6 +3771,8 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "fetch",
             "sweep",
             "checks",
+            "oob_payload",
+            "oob_hits",
             "hosts",
             "rules",
             "task",
@@ -6121,4 +6123,198 @@ async fn sweep_finds_what_differs_from_the_soft_404_inside_its_bounds() {
     assert!(audit
         .iter()
         .any(|a| a["reason"] == "checks add mine (WSTG-CONF-04, 1 paths)"));
+}
+
+/// A stand-in interactsh server (#1): `/register` keeps the public key,
+/// `/poll` answers with the interactions the test queued, encrypted the
+/// way interactsh does (an AES-256 key under RSA-OAEP SHA-256, each
+/// interaction AES-256-CFB with its IV first).
+#[derive(Clone, Default)]
+struct FakeOast {
+    key: Arc<Mutex<Option<rsa::RsaPublicKey>>>,
+    queued: Arc<Mutex<Vec<serde_json::Value>>>,
+    polls: Arc<Mutex<u32>>,
+}
+
+async fn start_fake_oast() -> (FakeOast, SocketAddr) {
+    use axum::routing::{get, post};
+    let state = FakeOast::default();
+    let app = axum::Router::new()
+        .route(
+            "/register",
+            post(|State(s): State<FakeOast>, headers: axum::http::HeaderMap, body: String| async move {
+                use base64::Engine;
+                use rsa::pkcs8::DecodePublicKey;
+                assert_eq!(headers.get("authorization").and_then(|v| v.to_str().ok()), Some("oast-token"));
+                let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(v["correlation-id"].as_str().unwrap().len(), 20);
+                let pem = base64::engine::general_purpose::STANDARD.decode(v["public-key"].as_str().unwrap()).unwrap();
+                *s.key.lock().unwrap() = Some(rsa::RsaPublicKey::from_public_key_pem(std::str::from_utf8(&pem).unwrap()).unwrap());
+                axum::Json(serde_json::json!({"message": "registration successful"}))
+            }),
+        )
+        .route(
+            "/poll",
+            get(|State(s): State<FakeOast>| async move {
+                use base64::Engine;
+                use cfb_mode::cipher::{AsyncStreamCipher, KeyIvInit};
+                let b64 = base64::engine::general_purpose::STANDARD;
+                *s.polls.lock().unwrap() += 1;
+                let queued: Vec<serde_json::Value> = std::mem::take(&mut *s.queued.lock().unwrap());
+                let public = s.key.lock().unwrap().clone().unwrap();
+                let mut aes_key = [0u8; 32];
+                getrandom::fill(&mut aes_key).unwrap();
+                let wrapped = public
+                    .encrypt(&mut rsa::rand_core::OsRng, rsa::Oaep::new::<rsa::sha2::Sha256>(), &aes_key)
+                    .unwrap();
+                let data: Vec<String> = queued
+                    .iter()
+                    .map(|r| {
+                        let mut iv = [0u8; 16];
+                        getrandom::fill(&mut iv).unwrap();
+                        let mut buf = serde_json::to_vec(r).unwrap();
+                        cfb_mode::Encryptor::<aes::Aes256>::new_from_slices(&aes_key, &iv).unwrap().encrypt(&mut buf);
+                        b64.encode([iv.as_slice(), &buf].concat())
+                    })
+                    .collect();
+                axum::Json(serde_json::json!({"data": data, "extra": null, "aes_key": b64.encode(wrapped), "tld_data": null}))
+            }),
+        )
+        .with_state(state.clone());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (state, addr)
+}
+
+/// OOB callbacks (#1): an agent mints a payload (nothing sent), carries it
+/// in a gated fetch, and a DNS hit on it comes back: recorded, audited,
+/// linked to that exchange, on the task's log, and to the agent as
+/// untrusted data it can propose with. The tester can mint and list too.
+#[tokio::test]
+async fn an_oob_hit_is_tied_to_the_task_and_the_exchange_that_carried_it() {
+    let (oast, oast_addr) = start_fake_oast().await;
+    let server = format!("http://{oast_addr}");
+    std::env::set_var("SPALL_OAST_TOKEN", "oast-token");
+    let (dir, stub, spall, r) = agent_setup_with(
+        "{}",
+        &[
+            "--scope",
+            "example.com",
+            "--oast-server",
+            &server,
+            "--oast-domain",
+            "oast.lab",
+            "--oast-http",
+            "http://interactsh",
+        ],
+        &[],
+    )
+    .await;
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let sent = stub.sends().len();
+    let out = tools
+        .call("T-1", "oob_payload", &serde_json::json!({}))
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+    assert!(
+        out.text.contains(".oast.lab") && out.text.contains("http://interactsh/"),
+        "{}",
+        out.text
+    );
+    assert_eq!(stub.sends().len(), sent, "minting sends nothing");
+    let eng = r.engagements.active().id;
+    let payload = r.oob.as_ref().unwrap().list(&eng, Some("T-1")).0[0].clone();
+
+    // Carried in a request the gate allows: a fetch with it in the query.
+    let (status, body) = {
+        let res = r
+            .agent_fetch("T-1", serde_json::from_value(serde_json::json!({"url": format!("http://example.com/hook?cb={}", payload.host)})).unwrap())
+            .await;
+        let s = res.status().as_u16();
+        let b = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (s, serde_json::from_slice::<serde_json::Value>(&b).unwrap())
+    };
+    assert_eq!(status, 200, "{body}");
+    let carrier = body["id"].as_str().unwrap().to_string();
+
+    // The target calls back: a DNS lookup of the payload.
+    oast.queued.lock().unwrap().push(serde_json::json!({
+        "protocol": "dns", "unique-id": payload.id, "full-id": payload.id, "q-type": "A",
+        "raw-request": format!(";; {}.oast.lab IN A <script>x</script>", payload.id),
+        "remote-address": "203.0.113.9", "timestamp": "2026-11-25T10:00:00Z"
+    }));
+    assert_eq!(r.oob_poll().await.unwrap(), 1);
+    let (_, hits) = r.oob.as_ref().unwrap().list(&eng, None);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        (
+            hits[0].protocol.as_str(),
+            hits[0].task.as_deref(),
+            hits[0].exchange.as_deref()
+        ),
+        ("dns", Some("T-1"), Some(carrier.as_str()))
+    );
+    assert!(task_of(&r, "T-1").log.iter().any(|e| matches!(&e.event, spall::tasks::Event::Interaction { exchange: Some(x), .. } if *x == carrier)));
+    let out = tools.call("T-1", "oob_hits", &serde_json::json!({})).await;
+    assert!(
+        out.text.contains("<untrusted-")
+            && out.text.contains("203.0.113.9")
+            && out.text.contains(&carrier),
+        "{}",
+        out.text
+    );
+    // The carrier is evidence the task sent.
+    let out = tools
+        .call("T-1", "propose_finding", &serde_json::json!({"exchange_id": carrier, "rule": "WSTG-INPV-19", "message": "blind SSRF: the target looked up our callback host"}))
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+
+    // The tester's side.
+    let res = post_text(spall, "/api/oob", "", None).await;
+    assert!(
+        res.starts_with("HTTP/1.1 201") && res.contains(".oast.lab"),
+        "{res}"
+    );
+    let v = body_json(&get_text(spall, "/api/oob").await);
+    assert_eq!(v["configured"], true);
+    assert_eq!(v["payloads"].as_array().unwrap().len(), 2);
+    assert_eq!(v["hits"][0]["exchange"], carrier.as_str());
+    assert_eq!(
+        body_json(&get_text(spall, "/api/status").await)["oob"]["hits"],
+        1
+    );
+    // The e-stop stops agents minting; hits keep coming.
+    let res = post_text(spall, "/api/estop", "{}", None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert!(r
+        .oob_mint(Some("T-1"))
+        .await
+        .unwrap_err()
+        .1
+        .contains("e-stop"));
+    let audit = audit_records(&dir.path().join("api-token"));
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("oob payload ") && s.contains("agent:T-1"))));
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("oob hit I-1: dns from 203.0.113.9"))
+        && a["target"] == carrier.as_str()));
+    assert!(*oast.polls.lock().unwrap() >= 1);
+    // The session (with its key) is kept for late callbacks, 0600.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.path().join("engagements/oob/session"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "{mode:o}");
+    }
 }

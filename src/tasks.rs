@@ -462,6 +462,14 @@ pub enum Event {
     },
     /// Something a human said (steering, #61).
     Note { by: String, text: String },
+    /// An out-of-band callback hit one of the task's payloads (#1): the
+    /// hit's id, its protocol, and the exchange that carried the payload.
+    Interaction {
+        id: String,
+        protocol: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exchange: Option<String>,
+    },
     /// Quad mode started or ended while the task was live (#66).
     Quad {
         phase: String,

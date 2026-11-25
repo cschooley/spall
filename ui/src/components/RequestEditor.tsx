@@ -3,6 +3,8 @@
 // Every value is attacker-controlled: shown in inputs (as text), sent as
 // data, never rendered as HTML.
 
+import { useEffect, useRef, useState } from "react";
+import { loadOob, mintOob } from "../lib/oob.ts";
 import { changes, hostMismatch, replayBodyFor, scatteredRepeats, type Draft } from "../lib/edit.ts";
 import { bodyBytes, humanSize } from "../lib/format.ts";
 import type { Header, TrafficEntry } from "../types.ts";
@@ -22,6 +24,7 @@ export function RequestEditor({
   replay: ReplayControl;
   onCancel: () => void;
 }) {
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
   const c = changes(original, draft);
   const built = replayBodyFor(original, draft);
   const mismatch = hostMismatch(original.url, draft.headers);
@@ -104,10 +107,12 @@ export function RequestEditor({
       ) : null}
 
       <h3>Body</h3>
+      {draft.body !== null ? <OobInsert onPayload={(host) => setDraft({ ...draft, body: insertAt(draft.body ?? "", host, bodyRef.current) })} /> : null}
       {draft.body === null ? (
         <p className="note">{`Binary body (${humanSize(bodyBytes(original.req_body, original.req_body_encoding)?.length ?? 0)}): sent as captured, not editable here.`}</p>
       ) : (
         <textarea
+          ref={bodyRef}
           className={c.body ? "changed" : undefined}
           aria-label="Body"
           rows={8}
@@ -154,4 +159,42 @@ function hostOfUrl(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Text with `insert` at the textarea's cursor (or at the end). */
+function insertAt(text: string, insert: string, el: HTMLTextAreaElement | null): string {
+  const at = el ? Math.min(el.selectionStart ?? text.length, text.length) : text.length;
+  return text.slice(0, at) + insert + text.slice(at);
+}
+
+/** Insert OOB payload (#1): mints one and puts its host in the body. Shown
+ * only when an OOB server is configured. Minting sends nothing. */
+function OobInsert({ onPayload }: { onPayload(host: string): void }) {
+  const [on, setOn] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadOob().then((s) => live && setOn(typeof s !== "string" && s.configured));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!on) return null;
+  return (
+    <p className="oob-insert">
+      <button
+        type="button"
+        onClick={() =>
+          void mintOob().then((p) => {
+            if (typeof p === "string") return setErr(p);
+            setErr(null);
+            onPayload(p.host);
+          })
+        }
+      >
+        Insert OOB payload
+      </button>
+      {err ? <span className="error">{` ${err}`}</span> : null}
+    </p>
+  );
 }

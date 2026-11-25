@@ -86,6 +86,8 @@ function fakeCtx(over: Partial<Ctx> = {}) {
       dropped: 0,
     }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
+    oob: async () => ({ configured: true, domain: "oast.lab", payloads: [], hits: [{ id: "I-1", payload: "abc", protocol: "dns", remote: "203.0.113.9", at: "t", rawRequest: "", task: null, exchange: "s-4" }] }),
+    oobMint: async () => (calls.push("oob:new"), { id: "abc", host: "abc.oast.lab", url: "http://abc.oast.lab/", labUrl: null, by: "human", at: "t" }),
     sweep: async (base, check, yes) => (calls.push(`sweep:${base}:${check}:${yes}`), yes ? { kind: "done", check, rule: "WSTG-CONF-05", base, planned: 3, sent: 3, hits: [{ path: "/admin", exchange: "s-2", status: 401, size: 14 }], misses: 1, skipped: [], stopped: null } : { kind: "estimate", check, rule: "WSTG-CONF-05", planned: 3, cost: "3 GET requests" }),
     checks: async () => [{ name: "admin-interfaces", rule: "WSTG-CONF-05", title: "Admin", method: "GET", paths: 28, source: "built_in" }],
     neverTest: async (op, entry) => (calls.push(`never:${op ?? "show"}:${entry ?? ""}`), { entries: ["*.gov"], exceptions: [] }),
@@ -137,6 +139,17 @@ test("sweep says what it costs, then runs with --yes; checks lists them (#75)", 
   assert.ok(lines.some(([t]) => t.includes("hit /admin  401  14 B  open s-2 · flag s-2 --rule WSTG-CONF-05")));
   assert.ok(lines.some(([t]) => t.includes("admin-interfaces") && t.includes("28 GET paths")));
   assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: sweep")).length, 3);
+});
+
+test("oob lists the hits; oob new mints and says nothing was sent (#1)", async () => {
+  const { ctx, calls, lines } = fakeCtx();
+  await execute("oob", ctx);
+  await execute("oob new", ctx);
+  await execute("oob frob", ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("oob")), ["oob:new"]);
+  assert.ok(lines.some(([t]) => t.includes("I-1  t  dns   from 203.0.113.9  on abc  via s-4")));
+  assert.ok(lines.some(([t]) => t.includes("abc.oast.lab") && t.includes("Nothing was sent")));
+  assert.ok(lines.some(([t, k]) => k === "warn" && t === "usage: oob [new]"));
 });
 
 test("tokenize splits on whitespace and honors quotes", () => {
@@ -343,6 +356,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["estop", "policy"],
       ["quad", "send"],
       ["sweep", "send"],
+      ["oob", "record"],
       ["flag", "record"],
       ["promote", "export"],
       ["export", "export"],

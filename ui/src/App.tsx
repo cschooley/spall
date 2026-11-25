@@ -1,3 +1,4 @@
+import { loadOob, mintOob } from "./lib/oob.ts";
 import { loadChecks, runSweep } from "./lib/sweep.ts";
 import { changeNever, loadNever } from "./lib/never.ts";
 import { runVerb } from "./lib/verbs.ts";
@@ -538,6 +539,8 @@ export function App() {
       rules: loadCatalog,
       verb: (name, id, category) => runVerb(name, id, category),
       sweep: (base, check, yes) => runSweep(base, check, yes),
+      oob: () => loadOob(),
+      oobMint: () => mintOob(),
       checks: () => loadChecks(),
       neverTest: async (op, entry) => {
         if (op && entry) {
@@ -781,6 +784,10 @@ export function App() {
             toTriage={status.toTriage}
             waitingApproval={status.waitingApproval}
             onChanged={() => setStatusNonce((n) => n + 1)}
+            onOpenExchange={(id) => {
+              window.location.hash = "traffic";
+              void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
+            }}
           />
         </main>
       ) : (

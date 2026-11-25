@@ -115,6 +115,7 @@ If it only decides *what* to send or *how to judge*, it is a **check**. If it is
 | `fetch` | a new GET/HEAD to an in-scope URL; a crawl is `fetch` in a loop | #74 (done; taphttp `POST /send`) |
 | `sweep` | many requests from a list (with a check), bounded, soft-404 baseline | done (#75): `Replayer::sweep`, checks in `src/content/checks/` |
 | `session` | log in as a test user and keep the session; holds credentials the agent never sees | #76 |
+| OOB callbacks | input from outside: hits on payloads at a self-hosted interactsh; minting sends nothing, the request carrying a payload is gated | done (#1): `src/oob.rs`, `Replayer::oob_mint` / `oob_poll` |
 | `burst` | N requests released together (race conditions); breaks the rate limit by design, so its own RoE approval | #77 |
 | intercept | hold and change a live request in flight | M7 (taphttp hook) |
 | OOB listener | receive callbacks (blind SSRF, XXE) | #1 |

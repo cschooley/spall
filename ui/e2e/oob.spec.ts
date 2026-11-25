@@ -1,0 +1,69 @@
+// Out-of-band callbacks (#1) in the browser: the Engagement view's panel
+// (hidden until a server is configured), a hit's raw request as text, a
+// new payload, and Insert OOB payload in the replay editor. spall runs in
+// log mode here, so /api/oob is mocked.
+import type { Page } from "@playwright/test";
+import { append, entry, expect, filterTo, test, token } from "./fixtures.ts";
+import { engagementApi } from "./engagement-api.ts";
+
+const P = `<img src=x onerror="window.__pwned=1">`;
+
+function oobApi(page: Page) {
+  const state = { minted: 0 };
+  void page.route("**/api/oob", async (r) => {
+    if (r.request().method() === "POST") {
+      state.minted++;
+      const id = `c${"0".repeat(19)}n${String(state.minted).padStart(12, "0")}`;
+      return r.fulfill({ status: 201, json: { id, host: `${id}.oast.lab`, url: `http://${id}.oast.lab/`, lab_url: `http://interactsh/${id}`, by: "human", at: "2026-11-25T10:00:00Z" } });
+    }
+    return r.fulfill({
+      json: {
+        configured: true,
+        domain: "oast.lab",
+        payloads: [{ id: "abc", host: "abc.oast.lab", url: "http://abc.oast.lab/", by: "agent:T-1", task: "T-1", at: "t" }],
+        hits: [{ id: "I-1", payload: "abc", protocol: "http", remote: "203.0.113.9", at: "2026-11-25T10:01:00Z", raw_request: `GET /abc HTTP/1.1\nX-Evil: ${P}`, task: "T-1", exchange: "s-4" }],
+      },
+    });
+  });
+  return state;
+}
+
+test("the Out-of-band panel lists hits as text and mints payloads; hidden without a server (#1)", async ({ page }) => {
+  engagementApi(page);
+  await page.goto("/#engagement");
+  await expect(page.getByRole("region", { name: "Checks" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Out-of-band" })).toHaveCount(0);
+
+  const api = oobApi(page);
+  await page.reload();
+  const panel = page.getByRole("region", { name: "Out-of-band" });
+  await expect(panel).toContainText("Callbacks to *.oast.lab");
+  const hits = panel.getByRole("list", { name: "Out-of-band hits" });
+  await expect(hits).toContainText("I-1 · http from 203.0.113.9");
+  await expect(hits.getByRole("button", { name: "s-4" })).toBeVisible();
+  await hits.locator("summary").click();
+  await expect(hits.locator(".oob-raw")).toHaveText(`GET /abc HTTP/1.1\nX-Evil: ${P}`);
+  expect(await panel.locator("img").count()).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+  await panel.getByRole("button", { name: "new payload" }).click();
+  await expect(panel).toContainText(".oast.lab  ·  http://interactsh/");
+  expect(api.minted).toBe(1);
+});
+
+test("Insert OOB payload puts a fresh callback host in the body being edited (#1)", async ({ page }) => {
+  const t = token();
+  const e = entry({ method: "POST", host: `${t}.example`, url: `https://${t}.example/api/fetch`, req_headers: [["host", `${t}.example`], ["content-type", "application/json"]], req_body: '{"url":""}' });
+  append(e);
+  oobApi(page);
+  await page.route("**/api/status", (r) => r.fulfill({ json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["*.example"] } }));
+  await page.goto("/#traffic");
+  await filterTo(page, t);
+  await page.locator("tr.row").first().click();
+  await page.locator(".inspector [data-action='edit']").click();
+  const form = page.getByRole("form", { name: "Edit request" });
+  const body = form.getByLabel("Body");
+  await body.click();
+  await body.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(8, 8));
+  await form.getByRole("button", { name: "Insert OOB payload" }).click();
+  await expect(body).toHaveValue(/^\{"url":"c0{19}n0{11}1\.oast\.lab"\}$/);
+});

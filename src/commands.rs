@@ -501,6 +501,39 @@ pub static COMMANDS: &[Command] = &[
         args: none,
     },
     Command {
+        name: "oob",
+        usage: "oob [new]",
+        desc: "out-of-band callbacks: your payloads and the hits on them (DNS, HTTP, SMTP), each tied to the exchange that carried it; oob new mints one (sends nothing)",
+        // Minting is a record; the send that carries a payload is gated.
+        risk: Risk::Record,
+        mcp: false,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("new", flag("mint a payload"))], &[]),
+    },
+    Command {
+        name: "oob_payload",
+        usage: "oob_payload",
+        desc: "mint an out-of-band callback host for this task (blind SSRF, XXE, command injection, DNS exfiltration); it sends nothing: put it in a replay or fetch, then check oob_hits. Late callbacks still count",
+        // A record (#1): minting sends nothing; the request that carries
+        // the payload goes through the gate like any other.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: none,
+    },
+    Command {
+        name: "oob_hits",
+        usage: "oob_hits",
+        desc: "the out-of-band callbacks on this task's payloads: protocol, source, time, the raw request (untrusted), and the exchange that carried the payload (propose_finding with it)",
+        risk: Risk::Read,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: none,
+    },
+    Command {
         name: "hosts",
         usage: "hosts [--unknown]",
         desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",
@@ -1138,7 +1171,7 @@ mod tests {
         }
         assert!(COMMANDS.iter().filter(|c| !c.ui).all(|c| matches!(
             c.name,
-            "propose_finding" | "report" | "skill" | "retest_result"
+            "propose_finding" | "report" | "skill" | "retest_result" | "oob_payload" | "oob_hits"
         )));
         let k = find("skill").unwrap();
         assert_eq!((k.risk, k.mcp, k.ui), (Risk::Read, true, false));
@@ -1156,6 +1189,8 @@ mod tests {
                 "fetch",
                 "sweep",
                 "checks",
+                "oob_payload",
+                "oob_hits",
                 "hosts",
                 "rules",
                 "task",

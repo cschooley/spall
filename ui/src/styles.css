@@ -783,3 +783,8 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 /* Checks for sweep (#75): import your own as text. */
 .check-import { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: flex-end; margin-top: var(--vg-space-2); }
 .check-import textarea { flex: 1 1 18rem; min-width: 0; font: var(--vg-text-sm) var(--vg-font-mono); }
+
+/* Out-of-band callbacks (#1): a hit's raw request is captured data: text. */
+.oob-hits details { flex: 1 1 100%; }
+.oob-raw { margin: var(--vg-space-1) 0 0; padding: var(--vg-space-2); max-height: 16rem; overflow: auto; background: var(--vg-bg-surface); font: var(--vg-text-xs) var(--vg-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.oob-insert { margin: 0 0 var(--vg-space-2); }

@@ -204,6 +204,21 @@ task's remaining budget), then sends the baseline and each path through
 e-stop, and audits a summary. Registry `sweep` (send, MCP) and `checks`
 (read). WSTG-INFO-03 joined the rule catalog (75 tests).
 
+OOB callbacks (#1, done): `src/oob.rs` is an interactsh client (register a
+2048-bit RSA key under a 20-character correlation id, poll, decrypt: an
+AES-256 key under RSA-OAEP SHA-256, interactions AES-256-CFB with the IV
+first; RustCrypto `rsa`, RUSTSEC-2023-0071 suppressed in osv-scanner.toml
+with the reason). The session (id, secret, PKCS#8 key) is kept 0600 at
+`<engagements>/oob/session` so late callbacks survive a restart; payloads
+and hits per engagement beside it. `Replayer::oob_mint` (audited; agents
+refused under the e-stop) and `oob_poll` (the poller in `App::run`, every
+5 s: records, audits, links each hit to the newest exchange holding its id,
+logs `Event::Interaction` on the task). Registry `oob` (console), agent
+tools `oob_payload` (record) and `oob_hits` (read, untrusted). Compose
+profile `oob` runs `projectdiscovery/interactsh-server` pinned by digest
+on the compose network only. Tests: a fake interactsh in tests/lever.rs; a
+real-server round trip is `#[ignore]`d (`SPALL_TEST_INTERACTSH`).
+
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
 command, served at `GET /api/commands`. The UI's `registry.ts` adds

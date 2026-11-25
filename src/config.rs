@@ -136,6 +136,29 @@ pub struct Config {
     #[arg(long, env = "SPALL_MODEL_KEY_FILE")]
     pub model_key_file: Option<PathBuf>,
 
+    /// The self-hosted interactsh server for out-of-band callbacks (#1):
+    /// `http://interactsh` (the compose `oob` profile) or
+    /// `https://oast.example.net`. Never a public oast.* server: callbacks
+    /// can carry client data. Off unless this and --oast-domain are set.
+    #[arg(long, env = "SPALL_OAST_SERVER")]
+    pub oast_server: Option<String>,
+
+    /// The callback domain the server answers for (`oast.lab` in a lab, a
+    /// subdomain delegated to the server by NS records otherwise).
+    #[arg(long, env = "SPALL_OAST_DOMAIN")]
+    pub oast_domain: Option<String>,
+
+    /// A URL lab targets reach the server at when there's no DNS for the
+    /// domain (`http://interactsh` on the compose network): payloads also
+    /// come as `<url>/<id>`, which the server catches (it scans everywhere).
+    #[arg(long, env = "SPALL_OAST_HTTP")]
+    pub oast_http: Option<String>,
+
+    /// File holding the server's token. Without it, SPALL_OAST_TOKEN is
+    /// read. Never logged or shown.
+    #[arg(long, env = "SPALL_OAST_TOKEN_FILE")]
+    pub oast_token_file: Option<PathBuf>,
+
     /// Output tokens one model turn may use, thinking included.
     #[arg(long, env = "SPALL_MODEL_MAX_TOKENS", default_value_t = crate::model::DEFAULT_MAX_TOKENS, value_parser = clap::value_parser!(u32).range(1024..=128_000))]
     pub model_max_tokens: u32,

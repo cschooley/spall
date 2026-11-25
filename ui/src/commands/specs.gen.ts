@@ -516,6 +516,56 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "new": {
+          "description": "mint a payload",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "out-of-band callbacks: your payloads and the hits on them (DNS, HTTP, SMTP), each tied to the exchange that carried it; oob new mints one (sends nothing)",
+    "hidden": false,
+    "mcp": false,
+    "name": "oob",
+    "risk": "record",
+    "ui": true,
+    "usage": "oob [new]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "desc": "mint an out-of-band callback host for this task (blind SSRF, XXE, command injection, DNS exfiltration); it sends nothing: put it in a replay or fetch, then check oob_hits. Late callbacks still count",
+    "hidden": false,
+    "mcp": true,
+    "name": "oob_payload",
+    "risk": "record",
+    "ui": false,
+    "usage": "oob_payload"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "desc": "the out-of-band callbacks on this task's payloads: protocol, source, time, the raw request (untrusted), and the exchange that carried the payload (propose_finding with it)",
+    "hidden": false,
+    "mcp": true,
+    "name": "oob_hits",
+    "risk": "read",
+    "ui": false,
+    "usage": "oob_hits"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "unknown": {
           "description": "only hosts neither in scope nor excluded",
           "type": "boolean"
