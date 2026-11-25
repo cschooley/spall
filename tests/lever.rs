@@ -3773,6 +3773,8 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "checks",
             "oob_payload",
             "oob_hits",
+            "surface",
+            "record_coverage",
             "hosts",
             "rules",
             "task",
@@ -6459,4 +6461,126 @@ async fn a_declined_task_says_why_and_alerts_say_what_needs_you() {
             "{keys:?}"
         );
     }
+}
+
+/// Surface (#95, #94): endpoints from traffic and an imported spec, with
+/// who touched them and coverage by WSTG category: found (a candidate),
+/// tested (a sweep, the tester's mark, an agent's record with its own
+/// evidence). Out-of-scope hosts only on request.
+#[tokio::test]
+async fn surface_shows_endpoints_and_what_was_tested_where() {
+    let (_dir, _stub, spall, r) = agent_setup("{}").await;
+    // An imported API description: a documented endpoint nobody touched.
+    let spec = r#"{"api_specs":[{"title":"shop","version":"1","format":"openapi 3.1.0","servers":["http://example.com/api"],"paths":["/orders/{orderId}"],"imported":"t"}]}"#;
+    let res = send_text(spall, "PATCH", "/api/engagement", spec, None).await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    // Found: a candidate on e1.
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"e1","rule":"WSTG-INFO-02"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    // Tested: a sweep, the tester's mark, an agent's record.
+    let res = post_text(
+        spall,
+        "/api/sweep",
+        r#"{"base":"http://example.com/sweep-site","check":"metafiles","yes":true}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let key_e1 = "example.com|GET|/e1";
+    let res = post_text(
+        spall,
+        "/api/coverage",
+        &format!(r#"{{"key":"{key_e1}","category":"ATHZ","note":"two users, no IDOR"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/coverage",
+        &format!(r#"{{"key":"{key_e1}","category":"XSS"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 400"), "{res}");
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let out = tools
+        .call(
+            "T-1",
+            "record_coverage",
+            &serde_json::json!({"exchange_id": "e1", "category": "INPV", "note": "q"}),
+        )
+        .await;
+    assert!(
+        out.is_error && out.text.contains("isn't an exchange"),
+        "evidence first: {}",
+        out.text
+    );
+    assert!(
+        !tools
+            .call("T-1", "open", &serde_json::json!({"id": "e1"}))
+            .await
+            .is_error
+    );
+    let out = tools.call("T-1", "record_coverage", &serde_json::json!({"exchange_id": "e1", "category": "INPV", "note": "quotes in q, no SQL error"})).await;
+    assert!(!out.is_error, "{}", out.text);
+
+    let v = body_json(&get_text(spall, "/api/surface").await);
+    assert_eq!(v["categories"].as_array().unwrap().len(), 12);
+    let eps = v["endpoints"].as_array().unwrap();
+    let row = |k: &str| {
+        eps.iter()
+            .find(|e| e["key"] == k)
+            .cloned()
+            .unwrap_or_else(|| panic!("{k} in {v}"))
+    };
+    let e1 = row(key_e1);
+    assert_eq!(e1["scope"], "in");
+    assert_eq!(e1["coverage"]["INFO"]["state"], "found");
+    assert_eq!(e1["coverage"]["ATHZ"]["state"], "tested");
+    assert_eq!(e1["coverage"]["ATHZ"]["by"], serde_json::json!(["human"]));
+    assert_eq!(
+        e1["coverage"]["INPV"]["by"],
+        serde_json::json!(["agent:T-1"])
+    );
+    assert!(e1["coverage"].get("SESS").is_none(), "untested");
+    let robots = row("example.com|GET|/sweep-site/robots.txt");
+    assert_eq!(
+        robots["coverage"]["INFO"]["how"],
+        serde_json::json!(["sweep metafiles"])
+    );
+    let doc = row("example.com|ANY|/api/orders/{}");
+    assert_eq!(
+        (doc["documented"].as_bool(), doc["count"].as_u64()),
+        (Some(true), Some(0))
+    );
+    assert!(
+        eps.iter().all(|e| e["host"] != "evil.test"),
+        "out of scope only on request"
+    );
+    let all = body_json(&get_text(spall, "/api/surface?scope=all").await);
+    assert!(all["endpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["host"] == "evil.test" && e["scope"] == "unknown"));
+    // The agent's view, wrapped as untrusted. (These tools have their own
+    // empty hub; in spall they share the app's, so traffic shows too.)
+    let out = tools
+        .call("T-1", "surface", &serde_json::json!({"untested": "ATHZ"}))
+        .await;
+    assert!(
+        out.text.contains("<untrusted-") && out.text.contains("/api/orders/{orderId}"),
+        "{}",
+        out.text
+    );
 }

@@ -326,6 +326,8 @@ pub struct Replayer {
     pub quad: crate::quad::Boost,
     /// The intake's plans (#65).
     pub plans: crate::plans::Store,
+    /// What was tested where (#94).
+    pub coverage: crate::coverage::Store,
     /// Where finding hosts first resolved (#65), and the resolver.
     pub addresses: Arc<crate::addresses::Store>,
     pub resolver: std::sync::RwLock<Arc<dyn crate::addresses::Resolve>>,
@@ -1387,6 +1389,29 @@ impl Replayer {
                         status: Some(404),
                         size: 0,
                     });
+                    // Coverage (#94): this endpoint was tested for the
+                    // check's category, hit or miss.
+                    if let Some(cat) = crate::surface::category_of(&check.rule) {
+                        let (h, p) = crate::surface::split_url(&join(base, &path));
+                        let _ = self.coverage.add(
+                            &e.id,
+                            crate::coverage::Record {
+                                key: crate::surface::key(
+                                    &h,
+                                    &check.method,
+                                    &crate::surface::template(&p).1,
+                                ),
+                                category: cat.to_string(),
+                                by: task
+                                    .map(|t| format!("agent:{t}"))
+                                    .unwrap_or_else(|| "human".into()),
+                                at: taphttp_types::Timestamp::now().to_string(),
+                                how: format!("sweep {}", check.name),
+                                exchange: entry.as_ref().map(|x| x.id.clone()),
+                                note: String::new(),
+                            },
+                        );
+                    }
                     if is_hit(&check, &base_line, code, size, text.as_deref()) {
                         summary.hits.push(Hit {
                             path: path.clone(),
@@ -1570,6 +1595,83 @@ impl Replayer {
             .max_by_key(|(t, _)| *t)
             .and_then(|(_, x)| id(x))
             .or_else(|| holding.first().and_then(id))
+    }
+
+    /// The Surface (#95, #94) of the active engagement: endpoints seen in
+    /// traffic and documented by its API descriptions, with scope state and
+    /// coverage (tested, found) by WSTG category.
+    pub fn surface(
+        &self,
+        seen: &crate::surface::Surface,
+        in_scope_only: bool,
+    ) -> Vec<crate::surface::Row> {
+        let e = self.engagements.active();
+        let mut specs: Vec<(String, String)> = Vec::new();
+        for spec in &e.api_specs {
+            for server in &spec.servers {
+                let (host, base) = crate::surface::split_url(server);
+                if host.is_empty() {
+                    continue;
+                }
+                let base = base
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches('/')
+                    .to_string();
+                for p in &spec.paths {
+                    specs.push((host.clone(), format!("{base}{p}")));
+                }
+            }
+        }
+        crate::surface::view(
+            seen.list(&specs),
+            &self.scope_now(),
+            &self.candidates.list(&e.id),
+            &self.coverage.list(&e.id),
+            in_scope_only,
+        )
+    }
+
+    /// Mark (or record) an endpoint tested for a WSTG category (#94), by
+    /// `by` (`human`, `agent:T-n`). Audited.
+    pub fn mark_coverage(
+        &self,
+        by: &str,
+        key: &str,
+        category: &str,
+        how: &str,
+        exchange: Option<String>,
+        note: &str,
+    ) -> Result<(), String> {
+        let e = self.engagements.active();
+        let res = self.coverage.add(
+            &e.id,
+            crate::coverage::Record {
+                key: key.to_string(),
+                category: category.to_string(),
+                by: by.to_string(),
+                at: taphttp_types::Timestamp::now().to_string(),
+                how: how.to_string(),
+                exchange,
+                note: note.to_string(),
+            },
+        );
+        let mut rec = Record::new("coverage", "", Outcome::CandidateChanged);
+        if let Some(t) = by.strip_prefix("agent:") {
+            rec.actor = "agent".into();
+            rec.task = Some(t.to_string());
+        }
+        rec.engagement = Some(e.id.clone());
+        rec.reason = Some(format!(
+            "coverage {category} on {}",
+            key.chars().take(200).collect::<String>()
+        ));
+        if let Err(err) = &res {
+            rec.error = Some(err.clone());
+        }
+        self.audit(&rec);
+        res
     }
 
     /// Totals quad is scored on (#66): requests charged, model tokens and

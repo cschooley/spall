@@ -10,6 +10,7 @@ pub mod candidates;
 pub mod commands;
 pub mod config;
 pub mod confirm;
+pub mod coverage;
 pub mod csrf;
 pub mod destructive;
 pub mod engagement;
@@ -33,6 +34,7 @@ pub mod roles;
 pub mod rules;
 pub mod scope_list;
 pub mod stack;
+pub mod surface;
 pub mod sweep;
 pub mod tailer;
 pub mod tasks;
@@ -75,6 +77,7 @@ pub fn parse_entry(text: &str) -> Result<(TrafficEntry, Option<u32>), serde_json
 /// serialized, which should not happen for a value that just parsed.
 pub fn publish_entry(entry: &TrafficEntry, hub: &Hub) -> bool {
     hub.hosts.observe(entry);
+    hub.surface.observe(entry);
     match Published::from_entry(entry) {
         Ok(p) => {
             hub.publish(p);
@@ -272,6 +275,9 @@ pub fn build(config: Config) -> anyhow::Result<App> {
             let addresses_dir = config.engagements.join("addresses");
             let addresses = addresses::Store::open(&addresses_dir)
                 .with_context(|| format!("loading addresses from {}", addresses_dir.display()))?;
+            let coverage_dir = config.engagements.join("coverage");
+            let coverage = coverage::Store::open(&coverage_dir)
+                .with_context(|| format!("loading coverage from {}", coverage_dir.display()))?;
             Some(Arc::new(replay::Replayer {
                 lever: lever.clone(),
                 engagements,
@@ -287,6 +293,7 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 spall_runs: std::sync::atomic::AtomicBool::new(false),
                 quad: quad::Boost::default(),
                 plans,
+                coverage,
                 addresses: Arc::new(addresses),
                 resolver: std::sync::RwLock::new(Arc::new(addresses::System)),
                 oob: match oob::Settings::resolve(

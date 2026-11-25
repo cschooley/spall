@@ -48,10 +48,9 @@ test("console commands drive the same actions as the UI", async ({ page }) => {
 
   await run(page, "theme blued-light");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "blued-light");
-  await run(page, "goto surface");
   await run(page, "frobnicate");
   const log = page.locator(".con-log");
-  await expect(log.locator(".l-warn")).toHaveText(["goto: surface is not built yet", "unknown command: frobnicate. try help"]);
+  await expect(log.locator(".l-warn")).toHaveText(["unknown command: frobnicate. try help"]);
   await run(page, "god");
   await expect(log.locator(".l-out").last()).toHaveText("no.");
   await run(page, "clear");

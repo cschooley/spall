@@ -1,3 +1,4 @@
+import type { SurfaceListing } from "../lib/surface.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_RULES } from "../lib/roe.ts";
@@ -89,6 +90,14 @@ function fakeCtx(over: Partial<Ctx> = {}) {
     oob: async () => ({ configured: true, domain: "oast.lab", payloads: [], hits: [{ id: "I-1", payload: "abc", protocol: "dns", remote: "203.0.113.9", at: "t", rawRequest: "", task: null, exchange: "s-4" }] }),
     oobMint: async () => (calls.push("oob:new"), { id: "abc", host: "abc.oast.lab", url: "http://abc.oast.lab/", labUrl: null, by: "human", at: "t" }),
     sweep: async (base, check, yes) => (calls.push(`sweep:${base}:${check}:${yes}`), yes ? { kind: "done", check, rule: "WSTG-CONF-05", base, planned: 3, sent: 3, hits: [{ path: "/admin", exchange: "s-2", status: 401, size: 14 }], misses: 1, skipped: [], stopped: null } : { kind: "estimate", check, rule: "WSTG-CONF-05", planned: 3, cost: "3 GET requests" }),
+    surface: async (): Promise<SurfaceListing> => ({
+      categories: [{ code: "ATHZ", name: "Authorization" }, { code: "INPV", name: "Input validation" }],
+      rows: [
+        { key: "a.test|GET|/u/{}", host: "a.test", method: "GET", template: "/u/{id}", count: 2, statuses: [200], params: [], firstSeen: "", lastSeen: "", example: "s-1", byYou: 2, tasks: [], documented: false, scope: "in" as const, coverage: { INPV: { state: "tested" as const, candidates: [], by: ["human"], how: ["marked"] } } },
+        { key: "a.test|POST|/login", host: "a.test", method: "POST", template: "/login", count: 1, statuses: [302], params: ["user"], firstSeen: "", lastSeen: "", example: "s-2", byYou: 0, tasks: ["T-3"], documented: false, scope: "in" as const, coverage: { ATHZ: { state: "found" as const, candidates: ["c-1"], by: [], how: [] } } },
+      ],
+      dropped: 0,
+    }),
     checks: async () => [{ name: "admin-interfaces", rule: "WSTG-CONF-05", title: "Admin", method: "GET", paths: 28, source: "built_in" }],
     neverTest: async (op, entry) => (calls.push(`never:${op ?? "show"}:${entry ?? ""}`), { entries: ["*.gov"], exceptions: [] }),
     quad: async (what) => (calls.push(`quad:${JSON.stringify(what)}`), { ok: true, lines: ["QUAD for 2:00"] }),
@@ -139,6 +148,19 @@ test("sweep says what it costs, then runs with --yes; checks lists them (#75)", 
   assert.ok(lines.some(([t]) => t.includes("hit /admin  401  14 B  open s-2 · flag s-2 --rule WSTG-CONF-05")));
   assert.ok(lines.some(([t]) => t.includes("admin-interfaces") && t.includes("28 GET paths")));
   assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: sweep")).length, 3);
+});
+
+test("surface lists endpoints with marks; untested narrows by category (#94)", async () => {
+  const { ctx, lines } = fakeCtx();
+  await execute("surface", ctx);
+  await execute("surface untested athz", ctx);
+  await execute("surface untested NOPE", ctx);
+  await execute("surface frob", ctx);
+  const text = lines.map(([t]) => t);
+  assert.ok(text.includes("  GET    a.test/u/{id}  2× ·✓  you"), text.join("\n"));
+  assert.ok(text.includes("untested: ATHZ 1, INPV 1"));
+  assert.ok(text.some((t) => t.startsWith("surface: 1 endpoint(s) never tested for ATHZ")));
+  assert.equal(text.filter((t) => t.startsWith("usage: surface")).length, 2);
 });
 
 test("oob lists the hits; oob new mints and says nothing was sent (#1)", async () => {

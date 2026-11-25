@@ -14,7 +14,7 @@ export interface View {
 export const VIEWS: readonly View[] = [
   { id: "engagement", label: "Engagement", key: "1", icon: "icons/views/engagement", built: true },
   { id: "traffic", label: "Traffic", key: "2", icon: "icons/views/traffic", built: true },
-  { id: "surface", label: "Surface", key: "3", icon: "icons/views/surface", built: false },
+  { id: "surface", label: "Surface", key: "3", icon: "icons/views/surface", built: true },
   { id: "tasks", label: "Tasks", key: "4", icon: "icons/views/tasks", built: true },
   { id: "findings", label: "Findings", key: "5", icon: "icons/views/findings", built: true },
 ];

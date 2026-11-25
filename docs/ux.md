@@ -201,7 +201,7 @@ Open (single tester, single agent): all five views, tasks, triage, export.
 | Tasks + MCP, e-stop, approval gates | M6a |
 | Intake chat, orchestrator plans, roles | M6b |
 | Agent buttons (PoC, Escalate impact, Find variants, Retest, Explain for devs, Test for…, Map auth, Why is this interesting) | M6b (PoC needs the M6c sandbox); Find variants uses route maps fully from M8; Retest closes Kudzu tickets from M8 |
-| Surface (coverage) | M6a–M8: needs task and check attribution (M6a); seeded from route maps (M8) |
+| Surface (coverage) | M6c (done: #94, endpoints of #95); services from scan imports (#95); seeded from route maps (M8) |
 | Engagement home, targets, scope, rules of engagement | M3 (done); home view since M6a (#71) |
 | Command palette and `` ` `` console (one registry) | M1, grows with each milestone |
 | Quad mode | M6b, with the agent host |

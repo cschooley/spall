@@ -3,13 +3,13 @@
 import { expect, test } from "./fixtures.ts";
 import { engagementApi } from "./engagement-api.ts";
 
-test("a bare URL opens Engagement, the home view; unbuilt views fall back to it (#71)", async ({ page }) => {
+test("a bare URL opens Engagement, the home view; unknown views fall back to it (#71)", async ({ page }) => {
   engagementApi(page);
   await page.goto("/");
   await expect(page.locator(".rail [data-view='engagement']")).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("heading", { name: "ACME Q4" })).toBeVisible();
   await expect(page.getByLabel("Filter")).toHaveCount(0);
-  await page.goto("/#surface");
+  await page.goto("/#nonsense");
   await expect(page.locator(".rail [data-view='engagement']")).toHaveAttribute("aria-current", "page");
   await page.goto("/#traffic");
   await expect(page.getByLabel("Filter")).toBeVisible();
@@ -129,11 +129,8 @@ test("switching and creating engagements; not testing now says why", async ({ pa
   await page.getByLabel("New engagement name").fill("Gamma");
   await page.getByRole("button", { name: "create" }).click();
   await expect.poll(() => created).toEqual({ name: "Gamma" });
-  // Unbuilt panels are dimmed and inert.
-  const todo = page.locator(".todo-panels li");
-  await expect(todo).toHaveText([/Coverage: endpoints seen vs\. tested/]);
-  await expect(todo.first()).toHaveAttribute("aria-disabled", "true");
-  expect(await todo.first().evaluate((e) => Number(getComputedStyle(e).opacity))).toBeLessThan(0.5);
+  // Coverage (#94) links to the Surface; nothing is seen yet here.
+  await expect(page.getByRole("link", { name: "Coverage · 0 endpoints in scope, 0 tested" })).toHaveAttribute("href", "#surface");
 });
 
 test("hostile engagement, scope and rule strings render as text", async ({ page }) => {

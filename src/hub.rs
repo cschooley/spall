@@ -29,6 +29,8 @@ impl Published {
 pub struct Hub {
     /// Hosts seen in everything published (#39).
     pub hosts: crate::hosts::Hosts,
+    /// Endpoints seen in everything published (#95).
+    pub surface: crate::surface::Surface,
     history: Mutex<VecDeque<Arc<Published>>>,
     capacity: usize,
     tx: broadcast::Sender<Arc<Published>>,
@@ -41,6 +43,7 @@ impl Hub {
         let (tx, _) = broadcast::channel(1024);
         Self {
             hosts: crate::hosts::Hosts::default(),
+            surface: crate::surface::Surface::default(),
             history: Mutex::new(VecDeque::with_capacity(history_capacity.min(4096))),
             capacity: history_capacity,
             tx,

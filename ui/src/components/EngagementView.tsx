@@ -15,6 +15,7 @@ import { OpenApiImport } from "./OpenApiImport.tsx";
 import { BrowserSetup } from "./BrowserSetup.tsx";
 import type { TrafficEntry } from "../types.ts";
 import { parentWildcard, type HostListing, type HostState } from "../lib/hosts.ts";
+import { loadSurface, totals, type SurfaceListing } from "../lib/surface.ts";
 import { timeOf } from "../lib/format.ts";
 import type { EngagementInfo, ScopeVerdict } from "../commands/registry.ts";
 import { apiJson, expiryText } from "../lib/engagement.ts";
@@ -962,9 +963,39 @@ function SetupSection({ proxy, latestHttps }: { proxy: string | null; latestHttp
   );
 }
 
-/** Panels that grow later: dimmed and inert until they ship (docs/ux.md). */
 /** Shown at most, oldest first; the rest are in Findings. */
 const WAITING_SHOWN = 5;
+
+/** Coverage (#94): in-scope endpoints and how many are untested per WSTG category; the Surface has the rest. */
+function Coverage({ nonce }: { nonce: number }) {
+  const [s, setS] = useState<SurfaceListing | string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadSurface(false).then((l) => live && setS(l));
+    return () => {
+      live = false;
+    };
+  }, [nonce]);
+  if (s === null) return null;
+  if (typeof s === "string") return <p className="error">{`coverage: ${s}`}</p>;
+  const t = totals(s.rows, s.categories);
+  const tested = s.rows.filter((r) => Object.values(r.coverage).some((c) => c.state === "tested")).length;
+  return (
+    <div className="waiting coverage" role="group" aria-label="Coverage">
+      <h4>
+        <a href="#surface">{`Coverage · ${s.rows.length} endpoints in scope, ${tested} tested`}</a>
+      </h4>
+      {s.rows.length === 0 ? (
+        <p className="note">No in-scope endpoints yet: browse the app through the proxy, or import its OpenAPI description.</p>
+      ) : (
+        <p className="note cov-sum">
+          {s.categories.map((c) => `${c.code} ${t[c.code]?.untested ?? 0}`).join(" · ")}
+          <span>{" untested"}</span>
+        </p>
+      )}
+    </div>
+  );
+}
 
 function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | null; waitingApproval: number | null; onChanged(): void }) {
   const [list, setList] = useState<Candidate[] | string | null>(null);
@@ -976,7 +1007,6 @@ function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | 
     };
   }, [toTriage]);
   const waiting = Array.isArray(list) ? list.filter((c) => stateOf(c) === "to triage").reverse() : [];
-  const todo: [string, string][] = [["Coverage: endpoints seen vs. tested", "Surface"]];
   return (
     <Section title="Waiting on you">
       <div className="waiting" role="group" aria-label="Candidates to triage">
@@ -999,14 +1029,7 @@ function Waiting({ toTriage, waitingApproval, onChanged }: { toTriage: number | 
       </div>
       <Approvals count={waitingApproval} onChanged={onChanged} />
       <Activity nonce={(toTriage ?? 0) + (waitingApproval ?? 0)} />
-      <ul className="todo-panels">
-        {todo.map(([what, when]) => (
-          <li key={what} className="todo" aria-disabled="true" title={`${what} · not built yet (${when})`}>
-            <span>{what}</span>
-            <span className="note">{`not built yet · ${when}`}</span>
-          </li>
-        ))}
-      </ul>
+      <Coverage nonce={toTriage ?? 0} />
     </Section>
   );
 }

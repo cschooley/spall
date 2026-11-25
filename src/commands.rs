@@ -534,6 +534,44 @@ pub static COMMANDS: &[Command] = &[
         args: none,
     },
     Command {
+        name: "surface",
+        usage: "surface [untested <CATEGORY>]",
+        desc: "the endpoints seen and documented, with who touched each and its coverage by WSTG category (found, tested); untested ATHZ lists those never tested for authorization",
+        risk: Risk::Read,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    ("untested", one_of(&["INFO", "CONF", "IDNT", "ATHN", "ATHZ", "SESS", "INPV", "ERRH", "CRYP", "BUSL", "CLNT", "APIT"], "only endpoints not yet tested for this WSTG category")),
+                    ("host", text("only this host")),
+                ],
+                &[],
+            )
+        },
+    },
+    Command {
+        name: "record_coverage",
+        usage: "record_coverage",
+        desc: "record that you tested an endpoint for a WSTG category (what you examined and how, in a line), with an exchange this task sent or read on it; it fills the Surface's coverage. Not a finding: propose_finding for those",
+        // A record (#94): sends nothing; the evidence must be the task's.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: || {
+            obj(
+                &[
+                    ("exchange_id", id("an exchange this task sent or read, on the endpoint")),
+                    ("category", one_of(&["INFO", "CONF", "IDNT", "ATHN", "ATHZ", "SESS", "INPV", "ERRH", "CRYP", "BUSL", "CLNT", "APIT"], "the WSTG category tested")),
+                    ("note", text("one line: what you examined and how")),
+                ],
+                &["exchange_id", "category", "note"],
+            )
+        },
+    },
+    Command {
         name: "hosts",
         usage: "hosts [--unknown]",
         desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",
@@ -1171,7 +1209,13 @@ mod tests {
         }
         assert!(COMMANDS.iter().filter(|c| !c.ui).all(|c| matches!(
             c.name,
-            "propose_finding" | "report" | "skill" | "retest_result" | "oob_payload" | "oob_hits"
+            "propose_finding"
+                | "report"
+                | "skill"
+                | "retest_result"
+                | "oob_payload"
+                | "oob_hits"
+                | "record_coverage"
         )));
         let k = find("skill").unwrap();
         assert_eq!((k.risk, k.mcp, k.ui), (Risk::Read, true, false));
@@ -1191,6 +1235,8 @@ mod tests {
                 "checks",
                 "oob_payload",
                 "oob_hits",
+                "surface",
+                "record_coverage",
                 "hosts",
                 "rules",
                 "task",

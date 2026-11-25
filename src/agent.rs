@@ -205,6 +205,8 @@ impl Tools {
             "skill" => skill(&t, a),
             "sweep" => self.sweep(&t, a).await,
             "oob_payload" => self.oob_payload(&t).await,
+            "surface" => self.surface(a),
+            "record_coverage" => self.record_coverage(&t, a).await,
             "oob_hits" => self.oob_hits(&t),
             "checks" => Ok(checks_text(&self.replayer.checks())),
             "retest_result" => self.retest_result(&t, a),
@@ -614,6 +616,83 @@ impl Tools {
         }
     }
 
+    /// `surface` (#95, #94): in-scope endpoints with their coverage, as
+    /// untrusted data (templates and parameter names come from traffic).
+    fn surface(&self, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            untested: Option<String>,
+            host: Option<String>,
+        }
+        let a: A = args("surface", a)?;
+        let rows = self.replayer.surface(&self.hub.surface, true);
+        let rows: Vec<Value> = rows
+            .into_iter()
+            .filter(|r| a.host.as_deref().is_none_or(|h| r.endpoint.host.eq_ignore_ascii_case(h)))
+            .filter(|r| a.untested.as_deref().is_none_or(|c| !r.coverage.contains_key(c)))
+            .take(100)
+            .map(|r| {
+                json!({
+                    "method": r.endpoint.method, "host": r.endpoint.host, "template": r.endpoint.template,
+                    "seen": r.endpoint.count, "statuses": r.endpoint.statuses, "params": r.endpoint.params,
+                    "example": r.endpoint.example, "documented": r.endpoint.documented,
+                    "coverage": r.coverage.iter().map(|(c, cell)| (c.to_string(), json!(cell.state))).collect::<serde_json::Map<String, Value>>(),
+                })
+            })
+            .collect();
+        Ok(ok(format!(
+            "{} endpoint(s) (at most 100). open an example exchange to work on one; record_coverage when you've tested one for a category.\n{}",
+            rows.len(),
+            untrusted::wrap_json("surface", &json!(rows))
+        )))
+    }
+
+    /// `record_coverage` (#94): this task tested an endpoint for a category,
+    /// shown by an exchange it sent or read there.
+    async fn record_coverage(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            exchange_id: String,
+            category: String,
+            note: String,
+        }
+        let a: A = args("record_coverage", a)?;
+        let seen = t.log.iter().any(|e| match &e.event {
+            Event::Request {
+                exchange: Some(id), ..
+            } => *id == a.exchange_id,
+            Event::Read { exchange } => *exchange == a.exchange_id,
+            _ => false,
+        });
+        if !seen {
+            return Err(err(format!(
+                "record_coverage: {} isn't an exchange {} sent or read: open or send one on the endpoint first",
+                a.exchange_id, t.id
+            )));
+        }
+        let x = self.exchange(&a.exchange_id).await?;
+        let (h, p) = crate::surface::split_url(&x.url);
+        let key = crate::surface::key(&h, &x.method, &crate::surface::template(&p).1);
+        let category = a.category.trim().to_ascii_uppercase();
+        self.replayer
+            .mark_coverage(
+                &format!("agent:{}", t.id),
+                &key,
+                &category,
+                "agent",
+                Some(a.exchange_id.clone()),
+                &a.note,
+            )
+            .map_err(|why| err(format!("record_coverage: {why}")))?;
+        Ok(ok(format!(
+            "recorded: {} {} tested for {category}",
+            x.method,
+            crate::surface::template(&p).0
+        )))
+    }
+
     /// `oob_payload` (#1): a callback host for this task. Sends nothing.
     async fn oob_payload(&self, t: &Task) -> Result<Output, Output> {
         match self.replayer.oob_mint(Some(&t.id)).await {
@@ -906,6 +985,8 @@ mod tests {
                 "checks",
                 "oob_payload",
                 "oob_hits",
+                "surface",
+                "record_coverage",
                 "hosts",
                 "rules",
                 "task",

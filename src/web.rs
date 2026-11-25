@@ -97,6 +97,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sweep", post(api_sweep))
         .route("/api/oob", get(api_oob).post(api_oob_mint))
         .route("/api/alerts", get(api_alerts))
+        .route("/api/surface", get(api_surface))
+        .route("/api/coverage", post(api_coverage))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
@@ -1191,6 +1193,58 @@ async fn api_sweep(State(state): State<AppState>, body: axum::body::Bytes) -> Re
     match r.sweep(None, &a.base, &a.check, a.yes).await {
         Ok(v) => axum::Json(v).into_response(),
         Err((status, why)) => json_error(status, &why),
+    }
+}
+
+/// The Surface (#95, #94): `?scope=all` includes hosts out of scope.
+async fn api_surface(State(state): State<AppState>, RawQuery(raw): RawQuery) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let all = raw
+        .as_deref()
+        .unwrap_or("")
+        .split('&')
+        .any(|kv| kv == "scope=all");
+    let rows = r.surface(&state.hub.surface, !all);
+    let cats: Vec<serde_json::Value> = crate::surface::CATEGORIES
+        .iter()
+        .map(|(c, n)| serde_json::json!({"code": c, "name": n}))
+        .collect();
+    axum::Json(serde_json::json!({
+        "categories": cats,
+        "endpoints": rows,
+        "dropped": state.hub.surface.dropped(),
+    }))
+    .into_response()
+}
+
+/// Mark an endpoint tested for a category: `{"key", "category", "note"?}`.
+/// The tester's record; same-origin, audited.
+async fn api_coverage(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Mark {
+        key: String,
+        category: String,
+        #[serde(default)]
+        note: String,
+    }
+    let m: Mark = match serde_json::from_slice(&body) {
+        Ok(m) => m,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"key", "category", "note"?}}: {e}"#),
+            )
+        }
+    };
+    match r.mark_coverage("human", &m.key, &m.category, "marked", None, &m.note) {
+        Ok(()) => axum::Json(serde_json::json!({"ok": true})).into_response(),
+        Err(why) => json_error(StatusCode::BAD_REQUEST, &why),
     }
 }
 

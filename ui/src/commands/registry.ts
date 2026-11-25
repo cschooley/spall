@@ -19,6 +19,7 @@ import { RISKS, SPECS } from "./specs.gen.ts";
 import { CATEGORIES, draftedLine, VERBS, type Drafted } from "../lib/verbs.ts";
 import { sweepLines, type CheckInfo, type SweepAnswer } from "../lib/sweep.ts";
 import { hitLine, type OobPayload, type OobState } from "../lib/oob.ts";
+import { filterRows, rowLine, totals, type SurfaceListing } from "../lib/surface.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
 
@@ -75,6 +76,8 @@ export interface Ctx {
   oobMint(): Promise<OobPayload | string>;
   /** A sweep's estimate (`yes` false) or its run (#75), or why not. */
   sweep(base: string, check: string, yes: boolean): Promise<SweepAnswer | string>;
+  /** The Surface (#95, #94): in-scope endpoints and their coverage, or why not. */
+  surface(): Promise<SurfaceListing | string>;
   /** The checks a sweep can run (#75), or why not. */
   checks(): Promise<CheckInfo[] | string>;
   /** Start quad mode, or end it (#66); what happened, as lines. */
@@ -591,6 +594,27 @@ const IMPLS: readonly Impl[] = [
       if (!s.configured) return ctx.out("oob: no OOB server is configured (SPALL_OAST_SERVER and SPALL_OAST_DOMAIN; the compose oob profile runs one)", "warn");
       ctx.out(`oob: ${s.payloads.length} payload(s) under ${s.domain}, ${s.hits.length} hit(s)`, "sys");
       for (const h of s.hits.slice(0, 20)) ctx.out(`  ${hitLine(h)}`);
+    },
+  },
+  {
+    name: "surface",
+    group: "traffic",
+    palette: { label: "Surface: endpoints and coverage", hint: "surface [untested CAT]" },
+    run: async (args, ctx) => {
+      const usage = "usage: surface [untested <INFO|CONF|IDNT|ATHN|ATHZ|SESS|INPV|ERRH|CRYP|BUSL|CLNT|APIT>]";
+      if (args.length !== 0 && !(args.length === 2 && args[0] === "untested" && /^[A-Za-z]{4}$/.test(args[1] ?? ""))) return ctx.out(usage, "warn");
+      const s = await ctx.surface();
+      if (typeof s === "string") return ctx.out(`surface: ${s}`, "warn");
+      const cat = args[1]?.toUpperCase();
+      if (cat && !s.categories.some((c) => c.code === cat)) return ctx.out(usage, "warn");
+      const rows = cat ? filterRows(s.rows, `untested:${cat}`) : s.rows;
+      ctx.out(`surface: ${rows.length} endpoint(s)${cat ? ` never tested for ${cat}` : " in scope"} · marks: ${s.categories.map((c) => c.code).join(" ")} (! found, ✓ tested, · untested)`, "sys");
+      for (const r of rows.slice(0, 50)) ctx.out(`  ${rowLine(r, s.categories)}`);
+      if (rows.length > 50) ctx.out(`  … ${rows.length - 50} more: the Surface view (3) has them all`);
+      if (!cat) {
+        const t = totals(s.rows, s.categories);
+        ctx.out(`untested: ${s.categories.map((c) => `${c.code} ${t[c.code]?.untested ?? 0}`).join(", ")}`);
+      }
     },
   },
   {

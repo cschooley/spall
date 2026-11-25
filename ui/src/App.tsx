@@ -2,6 +2,7 @@ import { alertHash, alertsAfter, alertText } from "./lib/alerts.ts";
 import { AlertsButton, alertsWanted } from "./components/AlertsButton.tsx";
 import { loadOob, mintOob } from "./lib/oob.ts";
 import { loadChecks, runSweep } from "./lib/sweep.ts";
+import { loadSurface } from "./lib/surface.ts";
 import { changeNever, loadNever } from "./lib/never.ts";
 import { runVerb } from "./lib/verbs.ts";
 import { quadCall } from "./lib/quad.ts";
@@ -26,6 +27,7 @@ import { durationText, shortId, statusLine } from "./lib/format.ts";
 import { apiJson, asEngagement, asSummaries, viewFromHash, type ViewId } from "./lib/engagement.ts";
 import { EngagementView } from "./components/EngagementView.tsx";
 import { FindingsView } from "./components/FindingsView.tsx";
+import { SurfaceView } from "./components/SurfaceView.tsx";
 import { mergeExchanges, tsKey } from "./lib/merge.ts";
 import { applyHeaderEdits, draftOf, replayBodyFor, type Draft } from "./lib/edit.ts";
 import { ARM_MS, armedFor, armLabel, postFetch, postReplay, type Armed, type FetchBody, type ReplayBody } from "./lib/replay.ts";
@@ -576,6 +578,7 @@ export function App() {
       oob: () => loadOob(),
       oobMint: () => mintOob(),
       checks: () => loadChecks(),
+      surface: () => loadSurface(false),
       neverTest: async (op, entry) => {
         if (op && entry) {
           const r = await changeNever(op, entry);
@@ -791,6 +794,16 @@ export function App() {
             available={status.replay}
             agentModel={status.agentModel}
             onChanged={() => setStatusNonce((n) => n + 1)}
+            onOpenExchange={(id) => {
+              window.location.hash = "traffic";
+              void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));
+            }}
+          />
+        </main>
+      ) : view === "surface" ? (
+        <main className="findings-main">
+          <SurfaceView
+            available={status.replay}
             onOpenExchange={(id) => {
               window.location.hash = "traffic";
               void openById(id).then((ok) => ok || out(`open: no exchange ${id}`, "warn"));

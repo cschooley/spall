@@ -11,7 +11,7 @@ test("the brand shows the spall mark from verdigris", async ({ page }) => {
   await expect(page.locator(".brand")).toHaveText("spall");
 });
 
-test("the rail shows all five views in order; all but Surface are live", async ({ page }) => {
+test("the rail shows all five views in order, all live", async ({ page }) => {
   await page.goto("/#traffic");
   const items = page.locator(".rail > *");
   await expect(items).toHaveCount(5);
@@ -33,17 +33,12 @@ test("the rail shows all five views in order; all but Surface are live", async (
   await expect(page.getByRole("link", { name: "Engagement" })).toHaveAttribute("title", "Engagement (1)");
   await expect(page.getByRole("link", { name: "Findings" })).toHaveAttribute("title", "Findings (5)");
   await expect(page.getByRole("link", { name: "Tasks" })).toHaveAttribute("title", "Tasks (4)");
-  for (const [view, key] of [["surface", "3"]] as const) {
-    const el = page.locator(`.rail [data-view='${view}']`);
-    await expect(el).toHaveAttribute("aria-disabled", "true");
-    await expect(el).toHaveClass(/todo/);
-    await expect(el).toHaveAttribute("title", new RegExp(`\\(${key}\\) · not built yet$`));
-    expect(await el.evaluate((e) => e.tagName)).toBe("SPAN"); // not a link
-    expect(Number(await el.evaluate((e) => getComputedStyle(e).opacity))).toBeLessThan(0.5);
-  }
-  // A placeholder's number key does nothing.
+  await expect(page.getByRole("link", { name: "Surface" })).toHaveAttribute("title", "Surface (3)");
+  await expect(page.locator(".rail .todo")).toHaveCount(0);
+  // 3 opens the Surface (#95).
+  await page.locator(".tablewrap").click({ position: { x: 5, y: 5 } });
   await page.keyboard.press("3");
-  await expect(traffic).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("link", { name: "Surface" })).toHaveAttribute("aria-current", "page");
 });
 
 test("the launcher lists the suite; placeholders are off and disabled", async ({ page }) => {

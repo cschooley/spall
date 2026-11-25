@@ -96,6 +96,10 @@ export const test = base.extend<{ guard: void }>({
           ? r.fulfill({ json: { checks: [{ name: "metafiles", rule: "WSTG-INFO-03", title: "Webserver metafiles", method: "GET", paths: ["/robots.txt"], source: "built_in" }] } })
           : r.fallback(),
       );
+      // And the Surface (#95): nothing yet.
+      await page.route(/\/api\/surface(\?.*)?$/, (r) => r.fulfill({ json: { categories: [], endpoints: [], dropped: 0 } }));
+      // And the Surface (#95): nothing yet.
+      await page.route(/\/api\/surface(\?.*)?$/, (r) => r.fulfill({ json: { categories: [], endpoints: [], dropped: 0 } }));
       // And the intake's draft plans (#65).
       await page.route(/\/api\/plans$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { plans: [] } }) : r.fallback()));
       page.on("dialog", async (d) => {

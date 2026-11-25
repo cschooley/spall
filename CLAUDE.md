@@ -228,6 +228,19 @@ UI: `lib/alerts.ts` words them from kind and ids; `AlertsButton.tsx` (off
 until the browser grants permission, kept in localStorage); App sends new
 ones to the console and, if on, `Notification`. A webhook is later.
 
+Surface (#95 endpoints, #94, done): `src/surface.rs` folds each exchange
+(`publish_entry` → `hub.surface.observe`) into an endpoint, key
+`host|METHOD|path` with ids as `{}` (`template`: `{id}`, `{uuid}`, `{hex}`,
+`{token}`), plus documented `ANY` rows from the engagement's `api_specs`;
+`view` adds scope and per-WSTG-category coverage: `found` (an unsuppressed
+candidate), `tested` (`src/coverage.rs` records at
+`<engagements>/coverage/<eng>.json`: a sweep per probed path, an agent's
+`record_coverage` (needs an exchange it sent or read), a human's mark via
+`POST /api/coverage`, all audited). `GET /api/surface`, registry `surface`
+(read, MCP; agents get in-scope rows, untrusted). UI `lib/surface.ts`,
+`SurfaceView.tsx` (key 3), the Engagement view's Coverage. Services (nmap
+import) are the rest of #95.
+
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
 command, served at `GET /api/commands`. The UI's `registry.ts` adds

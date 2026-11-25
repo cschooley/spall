@@ -209,8 +209,8 @@ test("Waiting on you lists candidates to triage, oldest first, and clears (#47)"
   const panel = page.getByRole("group", { name: "Candidates to triage" });
   await expect(panel.getByRole("heading")).toHaveText("Candidates to triage · 3");
   await expect(panel.locator("li a")).toHaveText(["c-00000001 · WSTG-INPV-05", "c-00000002 · WSTG-INPV-01", "c-00000003 · WSTG-ATHZ-04"]);
-  // Coverage stays dimmed until it ships; tasks waiting on approval are live (#56).
-  await expect(page.locator(".todo-panels li.todo")).toHaveCount(1);
+  // Coverage is live (#94), and so are tasks waiting on approval (#56).
+  await expect(page.getByRole("group", { name: "Coverage" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Tasks waiting on approval" })).toContainText("No task is waiting on you.");
   await panel.getByRole("link", { name: "c-00000002 · WSTG-INPV-01" }).click();
   await expect(page).toHaveURL(/#findings\/c-00000002$/);

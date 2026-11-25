@@ -566,6 +566,91 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "host": {
+          "description": "only this host",
+          "type": "string"
+        },
+        "untested": {
+          "description": "only endpoints not yet tested for this WSTG category",
+          "enum": [
+            "INFO",
+            "CONF",
+            "IDNT",
+            "ATHN",
+            "ATHZ",
+            "SESS",
+            "INPV",
+            "ERRH",
+            "CRYP",
+            "BUSL",
+            "CLNT",
+            "APIT"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "desc": "the endpoints seen and documented, with who touched each and its coverage by WSTG category (found, tested); untested ATHZ lists those never tested for authorization",
+    "hidden": false,
+    "mcp": true,
+    "name": "surface",
+    "risk": "read",
+    "ui": true,
+    "usage": "surface [untested <CATEGORY>]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "description": "the WSTG category tested",
+          "enum": [
+            "INFO",
+            "CONF",
+            "IDNT",
+            "ATHN",
+            "ATHZ",
+            "SESS",
+            "INPV",
+            "ERRH",
+            "CRYP",
+            "BUSL",
+            "CLNT",
+            "APIT"
+          ],
+          "type": "string"
+        },
+        "exchange_id": {
+          "description": "an exchange this task sent or read, on the endpoint",
+          "pattern": "^[A-Za-z0-9_-]{1,128}$",
+          "type": "string"
+        },
+        "note": {
+          "description": "one line: what you examined and how",
+          "type": "string"
+        }
+      },
+      "required": [
+        "exchange_id",
+        "category",
+        "note"
+      ],
+      "type": "object"
+    },
+    "desc": "record that you tested an endpoint for a WSTG category (what you examined and how, in a line), with an exchange this task sent or read on it; it fills the Surface's coverage. Not a finding: propose_finding for those",
+    "hidden": false,
+    "mcp": true,
+    "name": "record_coverage",
+    "risk": "record",
+    "ui": false,
+    "usage": "record_coverage"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "unknown": {
           "description": "only hosts neither in scope nor excluded",
           "type": "boolean"
