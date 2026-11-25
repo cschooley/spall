@@ -157,6 +157,11 @@ export function Inspector({
           <span className={statusClass(entry.status)}>{statusLine(entry.status)}</span>
           {entry.error ? <span className="error">{entry.error}</span> : null}
           {entry.duration_ms !== null ? <span>{durationText(entry.duration_ms)}</span> : null}
+          {typeof entry.peer === "string" ? (
+            <span className="peer" title="The address taphttp connected to">
+              {`→ ${entry.peer}`}
+            </span>
+          ) : null}
           <By who={ofExchange(entry.meta)} />
           {entry.replay_of ? (
             <button type="button" className="link orig" title="Open the original" onClick={() => onOpen(entry.replay_of!)}>

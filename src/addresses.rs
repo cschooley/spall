@@ -3,10 +3,10 @@
 //! that now resolves somewhere else (new IPs, a CDN, a new owner) before
 //! anything is sent.
 //!
-//! This is spall's own lookup, made when a candidate is flagged or
-//! proposed: a resolver's view, not the address taphttp connected to.
-//! taphttp#24 asks taphttp to record that peer on every exchange; when it
-//! does, the evidence's peers replace this.
+//! Since taphttp 0.8.0 (schema 7, taphttp#24) every exchange records its
+//! `peer`, the address taphttp actually connected to, and a retest plan
+//! uses the evidence's peers as the baseline. This store is the fallback:
+//! spall's own lookup at flag time, for evidence recorded before that.
 //!
 //! Stored at `<engagements>/addresses/<engagement>.json` (0600).
 

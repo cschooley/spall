@@ -114,3 +114,17 @@ test("a failed exchange shows why it got no response", async ({ page }) => {
   await expect(meta).toContainText("ERR (no response)");
   await expect(meta.locator(".error")).toHaveText("connect error: Connection refused (os error 111)");
 });
+
+test("the inspector shows where taphttp connected (schema 7 peer); older entries show nothing", async ({ page }) => {
+  const t = token();
+  append(
+    entry({ schema_version: 7, host: `${t}.example`, url: `http://${t}.example/with-peer`, peer: "[2001:db8::1]:443" }),
+    entry({ host: `${t}.example`, url: `http://${t}.example/old` }),
+  );
+  await page.goto("/#traffic");
+  await filterTo(page, t);
+  await page.locator("tr.row", { hasText: "/with-peer" }).click();
+  await expect(page.locator(".inspector .meta .peer")).toHaveText("→ [2001:db8::1]:443");
+  await page.locator("tr.row", { hasText: "/old" }).click();
+  await expect(page.locator(".inspector .meta .peer")).toHaveCount(0);
+});

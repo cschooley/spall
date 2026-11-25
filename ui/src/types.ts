@@ -30,4 +30,8 @@ export interface TrafficEntry {
   // for the same reason as source.
   meta?: Record<string, string>;
   error?: string | null;
+  // v7 (taphttp 0.8.0): the address taphttp connected to upstream
+  // ("203.0.113.7:443", "[2001:db8::1]:443"); null when no connection was
+  // made, absent in older entries.
+  peer?: string | null;
 }

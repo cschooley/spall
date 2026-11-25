@@ -5549,3 +5549,93 @@ async fn without_an_authorized_engagement_the_intake_drafts_only_one() {
         "{res}"
     );
 }
+
+/// Since taphttp 0.8.0 (schema 7) evidence records where taphttp actually
+/// connected (`peer`): a retest plan compares that with where the host
+/// resolves now, ahead of spall's own lookup at flag time (#65, taphttp#24).
+#[tokio::test]
+async fn a_retest_plan_compares_the_evidences_peer_with_where_the_host_resolves_now() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let token = dir.path().join("api-token");
+    write_token(&token);
+    let (stub, api) = start_stub().await;
+    stub.push_json(
+        "p1",
+        entry("p1")
+            .replace("\"schema_version\":3", "\"schema_version\":7")
+            .replace(
+                "\"replay_of\":null",
+                "\"replay_of\":null,\"peer\":\"198.51.100.7:80\"",
+            ),
+    );
+    let dns = Arc::new(FakeDns::default());
+    // spall's own lookup at flag time says one thing; taphttp's peer wins.
+    dns.set("example.com", &["192.0.2.1"]);
+    let model = Scripted::new(vec![]);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let spall = listener.local_addr().unwrap();
+    let app = spall::build(spall_config(Some(api), &token, &["--scope", "example.com"]))
+        .unwrap()
+        .with_resolver(dns.clone())
+        .with_model(model.clone());
+    let r = app.replayer.clone().unwrap();
+    tokio::spawn(app.run(listener));
+    eventually("backfill", || !stub.exchange_queries().is_empty()).await;
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/candidates",
+        r#"{"exchange":"p1","rule":"WSTG-INPV-05"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    let eng = r.engagements.active().id;
+    eventually("the lookup baseline", || {
+        r.addresses.get(&eng, "example.com").is_some()
+    })
+    .await;
+    dns.set("example.com", &["203.0.113.50"]);
+    let plan = |steps: Vec<Step>| {
+        model.steps.lock().unwrap().extend(steps);
+        async move { body_json(&post_text(spall, "/api/intake", r#"{"text":"retest it"}"#, None).await) }
+    };
+    let steps = || {
+        vec![
+            turn(
+                "",
+                vec![call(
+                    "1",
+                    "plan_retest",
+                    serde_json::json!({"engagement": eng}),
+                )],
+            ),
+            turn(
+                "",
+                vec![call(
+                    "2",
+                    "done",
+                    serde_json::json!({"summary": "one retest"}),
+                )],
+            ),
+        ]
+    };
+    let a = plan(steps()).await;
+    let w = a["plan"]["warnings"].to_string();
+    assert!(
+        w.contains("resolves to 203.0.113.50 now, not 198.51.100.7 (where taphttp connected for its findings)"),
+        "{a}"
+    );
+    // Resolving to the peer again: no warning, whatever spall's lookup said.
+    dns.set("example.com", &["198.51.100.7"]);
+    let a = plan(steps()).await;
+    assert_eq!(a["plan"]["warnings"], serde_json::json!([]), "{a}");
+}

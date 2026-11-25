@@ -5,9 +5,13 @@ here.
 
 ## Open
 
-### Upstream peer address on every entry
+### Limits enforced per client on the proxy
 
-[taphttp#24](https://github.com/cschooley/taphttp/issues/24): record the address taphttp connected to (`peer`) on every proxy, replay and send entry. spall#65 flags a finding's host that resolves somewhere else at retest time. Until taphttp records the peer, spall keeps its own DNS lookup from when the finding was made (`src/addresses.rs`): a resolver's view, not where taphttp actually went.
+[taphttp#25](https://github.com/cschooley/taphttp/issues/25): proxy credentials spall issues and revokes, each with `meta` (the task), a host allowlist, a rate and a request budget that taphttp enforces, and a revoke-all for the e-stop. The M6c sandbox (spall#13) and its headless browser send through the proxy directly, so spall's gate can't see each request; this makes them gated, not just recorded.
+
+### WebSocket and SSE messages
+
+[taphttp#26](https://github.com/cschooley/taphttp/issues/26): record WebSocket frames and SSE events on the exchange that opened them, readable through the lever API and `/feed`. spall would show, search and cite them as evidence; sending on a socket stays a later `raw send`.
 
 ### Capture filter
 
@@ -28,6 +32,17 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.8.0
+
+- **Upstream peer address on every entry:**
+  [taphttp#24](https://github.com/cschooley/taphttp/issues/24). Schema
+  v7: `peer` is the address taphttp connected to (`"203.0.113.7:443"`,
+  `"[2001:db8::1]:443"`), saved when the TCP connection opens (so a
+  failed handshake still has it), `null` when no connection was made.
+  A replay records where the replay went. spall#65's retest plan compares
+  the evidence's peer with where the host resolves now; spall's own
+  lookup (`src/addresses.rs`) is the fallback for older evidence.
 
 ## Resolved in v0.7.0
 

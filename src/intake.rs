@@ -517,6 +517,7 @@ impl Intake {
             return Err(format!("{} has no open findings to retest", e.id));
         }
         let mut hosts: Vec<String> = Vec::new();
+        let mut peers: std::collections::HashMap<String, Vec<String>> = Default::default();
         let mut skipped = Vec::new();
         for c in picked {
             if d.tasks.len() >= crate::plans::MAX_TASKS {
@@ -526,6 +527,16 @@ impl Intake {
             let mut exchanges = Vec::new();
             for x in c.exchanges().iter().take(10) {
                 if let Ok(x) = self.r.exchange_or(x).await {
+                    // Where taphttp connected for the evidence (schema 7,
+                    // taphttp#24): the baseline for "has it moved?".
+                    if let Some(peer) = x.peer {
+                        let host = crate::gate::url_host(&x.url).unwrap_or_default();
+                        let ips = peers.entry(host).or_default();
+                        let ip = peer.ip().to_string();
+                        if !ips.contains(&ip) {
+                            ips.push(ip);
+                        }
+                    }
                     exchanges.push(Exchange {
                         id: x.id.clone(),
                         method: x.method.clone(),
@@ -567,13 +578,33 @@ impl Intake {
             });
         }
         // Target unchanged? Before anything is sent.
+        // The baseline is where taphttp connected for the evidence; for
+        // evidence from before taphttp recorded it, spall's own lookup at
+        // flag time. "Now" is a lookup: nothing has been sent yet.
         let resolver = self.r.resolver();
         for h in &hosts {
             let now = resolver.lookup(h).await;
-            match compare(self.r.addresses.get(&e.id, h).as_ref(), &now) {
+            let (before, how) = match peers.get(h) {
+                Some(ips) => {
+                    let mut ips = ips.clone();
+                    ips.sort();
+                    (
+                        Some(crate::addresses::Seen {
+                            ips,
+                            at: String::new(),
+                        }),
+                        "where taphttp connected for its findings",
+                    )
+                }
+                None => (
+                    self.r.addresses.get(&e.id, h),
+                    "where it resolved when its findings were made",
+                ),
+            };
+            match compare(before.as_ref(), &now) {
                 Moved::Same => {}
                 Moved::Elsewhere(was, now) => d.warnings.push(format!(
-                    "{h} resolves to {} now, not {} as when its findings were made: check it's still the client's before approving",
+                    "{h} resolves to {} now, not {} ({how}): check it's still the client's before approving",
                     now.join(", "),
                     was.join(", ")
                 )),

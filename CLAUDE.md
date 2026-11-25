@@ -99,8 +99,10 @@ import (`src/openapi.rs`), CA setup from taphttp's `/info` and
 `/ca.pem`; the Engagement view (`#engagement`, key `1`). #33
 (scope-limited CA) moved to `later`.
 
-taphttp: v0.7.0 (`taphttp-types` 0.6.0, schema v6: every entry has
-`origin`, `proxy|replay|send`). `POST /replay` takes
+taphttp: v0.8.0 (`taphttp-types` 0.7.0, schema v7: every entry has
+`origin`, `proxy|replay|send`, and `peer`, the address taphttp connected
+to, `null` when no connection was made or before v0.8.0; bump the
+`Cargo.toml` tag and the compose image together). `POST /replay` takes
 `{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
 `req_headers` is the whole ordered list; `meta` is attribution stored on
 the recorded replay, never sent upstream (spall sends `{"actor":
@@ -305,8 +307,9 @@ nothing in it acts) read engagements and candidates and build a draft
 `plans::Plan` (`src/plans.rs`, `<engagements>/plans/`). The checks are
 code: `plan_retest` refuses an unauthorized engagement and drafts a
 `Proposal::Extension`, plans one `verbs` retest per open finding, and
-compares each host with `src/addresses.rs` (first lookup at flag time;
-taphttp#24 will give the real peer). `ask` is the pick list, `no` is
+compares each host's evidence `peer` (taphttp's real address) with a
+lookup now, falling back to `src/addresses.rs` (spall's lookup at flag
+time) for evidence older than taphttp 0.8.0. `ask` is the pick list, `no` is
 off-topic. `Replayer::plan_op` approves (all or nothing, active engagement
 only; tasks `asked_by: human (plan P-n)`, the request in their note).
 `App::with_resolver` takes a fake in tests. UI: `lib/intake.ts`,
