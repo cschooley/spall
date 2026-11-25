@@ -1486,6 +1486,14 @@ impl Replayer {
     /// on its task, and link it to the exchange that carried its payload.
     pub async fn oob_poll(&self) -> anyhow::Result<usize> {
         let Some(o) = &self.oob else { return Ok(0) };
+        // Hits not linked yet (taphttp hadn't stored the carrier when they
+        // came, e.g. a callback that is itself the carrying request): try
+        // again, for a while.
+        for (eng, h) in o.unlinked(crate::oob::LINK_FOR) {
+            if let Some(x) = self.oob_carrier(&h.payload).await {
+                o.link(&eng, &h.id, &x);
+            }
+        }
         let hits = o.poll().await?;
         for (eng, h) in &hits {
             let mut rec = Record::new("oob", "", Outcome::Sent);
@@ -1497,19 +1505,7 @@ impl Replayer {
                 "oob hit {}: {} from {} on {}",
                 h.id, h.protocol, h.remote, h.payload
             ));
-            // The exchange that carried it: the newest one holding the id.
-            let found = match self
-                .lever
-                .get_bytes(&format!("/exchanges?q={}&limit=20", h.payload))
-                .await
-            {
-                Ok((StatusCode::OK, b)) => serde_json::from_slice::<Vec<serde_json::Value>>(&b)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|x| x.to_string().to_ascii_lowercase().contains(&h.payload))
-                    .and_then(|x| x["id"].as_str().map(String::from)),
-                _ => None,
-            };
+            let found = self.oob_carrier(&h.payload).await;
             if let Some(x) = &found {
                 o.link(eng, &h.id, x);
                 rec.target = Some(x.clone());
@@ -1528,6 +1524,22 @@ impl Replayer {
             }
         }
         Ok(hits.len())
+    }
+
+    /// The exchange that carried an OOB payload: the newest one holding its id.
+    async fn oob_carrier(&self, payload: &str) -> Option<String> {
+        match self
+            .lever
+            .get_bytes(&format!("/exchanges?q={payload}&limit=20"))
+            .await
+        {
+            Ok((StatusCode::OK, b)) => serde_json::from_slice::<Vec<serde_json::Value>>(&b)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|x| x.to_string().to_ascii_lowercase().contains(payload))
+                .and_then(|x| x["id"].as_str().map(String::from)),
+            _ => None,
+        }
     }
 
     /// Totals quad is scored on (#66): requests charged, model tokens and

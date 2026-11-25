@@ -20,7 +20,7 @@ function oobApi(page: Page) {
       json: {
         configured: true,
         domain: "oast.lab",
-        payloads: [{ id: "abc", host: "abc.oast.lab", url: "http://abc.oast.lab/", by: "agent:T-1", task: "T-1", at: "t" }],
+        payloads: [{ id: "abc", host: "abc.oast.lab", url: "http://abc.oast.lab/", lab_url: "http://interactsh/abc", by: "agent:T-1", task: "T-1", at: "t" }],
         hits: [{ id: "I-1", payload: "abc", protocol: "http", remote: "203.0.113.9", at: "2026-11-25T10:01:00Z", raw_request: `GET /abc HTTP/1.1\nX-Evil: ${P}`, task: "T-1", exchange: "s-4" }],
       },
     });
@@ -45,9 +45,15 @@ test("the Out-of-band panel lists hits as text and mints payloads; hidden withou
   await expect(hits.locator(".oob-raw")).toHaveText(`GET /abc HTTP/1.1\nX-Evil: ${P}`);
   expect(await panel.locator("img").count()).toBe(0);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+  // Payloads are listed with their lab URL, and copy.
+  const payloads = panel.getByRole("list", { name: "Out-of-band payloads" });
+  await expect(payloads).toContainText("http://interactsh/abc");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await panel.getByRole("button", { name: "new payload" }).click();
-  await expect(panel).toContainText(".oast.lab  ·  http://interactsh/");
   expect(api.minted).toBe(1);
+  await payloads.getByRole("button", { name: "Copy the lab URL of abc" }).click();
+  await expect(payloads.getByRole("button", { name: "Copy the lab URL of abc" })).toHaveText("copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("http://interactsh/abc");
 });
 
 test("Insert OOB payload puts a fresh callback host in the body being edited (#1)", async ({ page }) => {

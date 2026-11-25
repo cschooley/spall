@@ -302,8 +302,22 @@ function OobPanel({ onOpenExchange }: { onOpenExchange(id: string): void }) {
             >
               new payload
             </button>
-            {minted ? <span className={typeof minted === "string" ? "error" : "entry"}>{typeof minted === "string" ? minted : `${minted.host}${minted.labUrl ? `  ·  ${minted.labUrl}` : ""}`}</span> : null}
+            {typeof minted === "string" ? <span className="error">{minted}</span> : null}
           </div>
+          {state.payloads.length ? (
+            <ul className="entries oob-payloads" aria-label="Out-of-band payloads">
+              {state.payloads.slice(0, 10).map((p) => (
+                <li key={p.id}>
+                  <span className="entry">{p.labUrl ?? p.host}</span>
+                  <span className="note">{`${p.by} · ${p.at}`}</span>
+                  <span className="row-actions">
+                    <CopyButton text={p.labUrl ?? p.url} label={`Copy ${p.labUrl ? "the lab URL" : "the URL"} of ${p.id}`} />
+                    {p.labUrl ? <CopyButton text={p.host} label={`Copy the host of ${p.id}`} caption="host" /> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {state.hits.length ? (
             <ul className="entries oob-hits" aria-label="Out-of-band hits">
               {state.hits.map((h) => (
@@ -333,6 +347,25 @@ function OobPanel({ onOpenExchange }: { onOpenExchange(id: string): void }) {
         </>
       )}
     </Section>
+  );
+}
+
+/** Copies `text`; says whether it worked (the clipboard can refuse). */
+function CopyButton({ text, label, caption = "copy" }: { text: string; label: string; caption?: string }) {
+  const [done, setDone] = useState<"ok" | "failed" | null>(null);
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={() =>
+        void navigator.clipboard.writeText(text).then(
+          () => setDone("ok"),
+          () => setDone("failed"),
+        )
+      }
+    >
+      {done === "ok" ? "copied" : done === "failed" ? "copy failed: select it" : caption}
+    </button>
   );
 }
 

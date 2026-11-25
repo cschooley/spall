@@ -6289,6 +6289,26 @@ async fn an_oob_hit_is_tied_to_the_task_and_the_exchange_that_carried_it() {
         body_json(&get_text(spall, "/api/status").await)["oob"]["hits"],
         1
     );
+    // A hit that comes before taphttp has stored its carrier (the callback
+    // is itself the carrying request): linked on a later poll.
+    let mine = r.oob.as_ref().unwrap().list(&eng, None).0[0].clone();
+    oast.queued.lock().unwrap().push(serde_json::json!({
+        "protocol": "http", "unique-id": mine.id, "full-id": mine.id,
+        "raw-request": "GET / HTTP/1.1", "remote-address": "203.0.113.10",
+        "timestamp": taphttp_types::Timestamp::now().to_string()
+    }));
+    assert_eq!(r.oob_poll().await.unwrap(), 1);
+    let hit = |r: &spall::replay::Replayer| r.oob.as_ref().unwrap().list(&eng, None).1[0].clone();
+    assert_eq!((hit(&r).id, hit(&r).exchange), ("I-2".to_string(), None));
+    stub.push_json(
+        "late",
+        entry("late").replace(
+            "http://example.com/late",
+            &format!("http://interactsh/{}", mine.id),
+        ),
+    );
+    r.oob_poll().await.unwrap();
+    assert_eq!(hit(&r).exchange.as_deref(), Some("late"));
     // The e-stop stops agents minting; hits keep coming.
     let res = post_text(spall, "/api/estop", "{}", None).await;
     assert!(res.starts_with("HTTP/1.1 200"), "{res}");

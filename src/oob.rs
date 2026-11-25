@@ -41,6 +41,8 @@ pub const MAX_PER_TASK: usize = 50;
 pub const MAX_KEPT: usize = 5000;
 /// A raw request or response kept per interaction.
 pub const MAX_RAW: usize = 16 * 1024;
+/// How long the poller keeps trying to link a hit to its exchange.
+pub const LINK_FOR: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// How often the poller asks the server.
 pub const POLL: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -541,6 +543,25 @@ impl Oob {
         for eng in touched {
             if let Some(b) = all.get(&eng) {
                 self.save(&eng, b);
+            }
+        }
+        out
+    }
+
+    /// Hits without an exchange yet, recorded within `within`, at most 20:
+    /// (engagement, hit).
+    pub fn unlinked(&self, within: std::time::Duration) -> Vec<(String, Hit)> {
+        let cutoff = jiff::Timestamp::now()
+            .checked_sub(jiff::SignedDuration::try_from(within).unwrap_or_default())
+            .unwrap_or_else(|_| jiff::Timestamp::now());
+        let all = self.lock();
+        let mut out = Vec::new();
+        for (eng, b) in all.iter() {
+            for h in b.hits.iter().rev().take(200) {
+                let recent = h.at.parse::<jiff::Timestamp>().is_ok_and(|t| t >= cutoff);
+                if h.exchange.is_none() && recent && out.len() < 20 {
+                    out.push((eng.clone(), h.clone()));
+                }
             }
         }
         out
