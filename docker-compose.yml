@@ -116,6 +116,24 @@ services:
       - "7"
     restart: unless-stopped
 
+  # A hackable target (OWASP Juice Shop, MIT): `docker compose --profile lab
+  # up -d`. Nothing is published: browse it through the proxy as
+  # http://juice.lab:3000, so every request is captured, and scope your
+  # engagement to juice.lab. It's deliberately vulnerable: keep it on the
+  # compose network. Its SSRF (profile image from URL) can reach the `oob`
+  # profile's interactsh at http://interactsh/<payload id>. Pinned by digest;
+  # it is a dev and demo target, not the academy's (M9).
+  juice-shop:
+    profiles: ["lab"]
+    image: bkimminich/juice-shop:v20.4.0@sha256:9bbaecc41791f00b002bc65931cc5ff355fbdb941fa72b06558c18dace43197b
+    networks:
+      default:
+        aliases: ["juice.lab"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    restart: unless-stopped
+
 volumes:
   traffic:
   taphttp-ca:

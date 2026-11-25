@@ -61,7 +61,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 docker compose up --build
 ```
 
-taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.7.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
+taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.9.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
 
 ```sh
 curl -x http://127.0.0.1:8080 http://example.com
@@ -77,6 +77,38 @@ Ports:
 | 3000 | spall web UI | 127.0.0.1 |
 
 If either port is already in use, override the host side: `TAPHTTP_PORT=18080 SPALL_PORT=13000 docker compose up`. They stay bound to 127.0.0.1.
+
+### A target to practice on
+
+spall needs something to test. The `lab` profile runs [OWASP Juice
+Shop](https://owasp.org/www-project-juice-shop/) (MIT-licensed), a
+deliberately vulnerable app, on the compose network with **nothing
+published**: you reach it only through the proxy, so every request is
+captured.
+
+```sh
+SPALL_SCOPE=juice.lab docker compose --profile lab up -d --build
+```
+
+`SPALL_SCOPE=juice.lab` seeds the first engagement's scope to the lab host
+(skip it and set scope later in the Engagement view). Then point a client
+at the proxy and browse it:
+
+```sh
+curl -x http://127.0.0.1:8080 http://juice.lab:3000/
+```
+
+Open <http://127.0.0.1:3000>, and the traffic is in the Traffic view. From
+there the whole workflow has something to chew on: filter and inspect, flag
+a candidate, run a sweep, watch the Surface (`3`) fill in, and — with the
+`oob` profile also up — mint an out-of-band payload and feed it to Juice
+Shop's SSRF (its "profile image from URL" feature reaches
+`http://interactsh/<id>`), then see the callback land under the exchange
+that carried it.
+
+Juice Shop is deliberately insecure: keep it on the compose network, never
+publish its port, and don't point it at anything real. It's the dev and
+demo target; the academy's graded exercises (M9) are a separate app.
 
 ### HTTPS
 
