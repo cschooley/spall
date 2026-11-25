@@ -369,6 +369,7 @@ impl Constraints {
             agents_allowed: true,
             destructive_allowed: self.destructive,
             refuse_destructive_looking: rules.refuse_destructive_looking,
+            sweep_max: rules.sweep_max,
         }
     }
 

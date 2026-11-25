@@ -28,6 +28,8 @@ export interface Rules {
   destructive_allowed: boolean;
   /** Refuse requests that look destructive by path or payload (#85); off: ask first. */
   refuse_destructive_looking: boolean;
+  /** Requests one sweep may send (#75); 0: no sweeps. */
+  sweep_max: number;
 }
 
 export const DEFAULT_RULES: Rules = {
@@ -40,6 +42,7 @@ export const DEFAULT_RULES: Rules = {
   agents_allowed: false,
   destructive_allowed: false,
   refuse_destructive_looking: false,
+  sweep_max: 200,
 };
 
 const isDay = (s: string): s is Day => (DAYS as readonly string[]).includes(s);
@@ -120,7 +123,7 @@ export function describeRules(r: Rules): string[] {
     `methods: ${methods} · ${safe} · ${rate} · time zone ${r.time_zone}`,
     `testing windows: ${windows}`,
     `no-test windows: ${blackouts}`,
-    `agents: ${yes(r.agents_allowed)} · destructive actions: ${yes(r.destructive_allowed)} · requests that look destructive: ${r.refuse_destructive_looking ? "refused" : "asked for"}`,
+    `agents: ${yes(r.agents_allowed)} · destructive actions: ${yes(r.destructive_allowed)} · requests that look destructive: ${r.refuse_destructive_looking ? "refused" : "asked for"} · sweeps: ${r.sweep_max ? `up to ${r.sweep_max} requests` : "not allowed"}`,
   ];
 }
 
@@ -150,6 +153,7 @@ export function asRules(v: unknown): Rules {
     agents_allowed: o.agents_allowed === true,
     destructive_allowed: o.destructive_allowed === true,
     refuse_destructive_looking: o.refuse_destructive_looking === true,
+    sweep_max: typeof o.sweep_max === "number" ? o.sweep_max : DEFAULT_RULES.sweep_max,
   };
 }
 
@@ -162,6 +166,7 @@ export interface RulesForm {
   agents: boolean;
   destructive: boolean;
   refuseLooking: boolean;
+  sweepMax: string;
 }
 
 export function rulesFormOf(r: Rules): RulesForm {
@@ -173,6 +178,7 @@ export function rulesFormOf(r: Rules): RulesForm {
     agents: r.agents_allowed,
     destructive: r.destructive_allowed,
     refuseLooking: r.refuse_destructive_looking,
+    sweepMax: String(r.sweep_max),
   };
 }
 
@@ -194,5 +200,8 @@ export function rulesPatchOf(f: RulesForm, r: Rules): Partial<Rules> | string {
   if (f.agents !== r.agents_allowed) patch.agents_allowed = f.agents;
   if (f.destructive !== r.destructive_allowed) patch.destructive_allowed = f.destructive;
   if (f.refuseLooking !== r.refuse_destructive_looking) patch.refuse_destructive_looking = f.refuseLooking;
+  const sweep = Number(f.sweepMax.trim());
+  if (!(Number.isInteger(sweep) && sweep >= 0 && sweep <= 5000)) return "sweep: 0 (no sweeps) to 5000 requests";
+  if (sweep !== r.sweep_max) patch.sweep_max = sweep;
   return patch;
 }

@@ -470,6 +470,37 @@ pub static COMMANDS: &[Command] = &[
         },
     },
     Command {
+        name: "sweep",
+        usage: "sweep <base-url> <check> [--yes]",
+        desc: "request a check's paths (forced browsing: backup files, admin interfaces, metafiles) against an in-scope base URL, after a soft-404 baseline; a summary of hits, each an exchange. Every request is gated and charged; checks lists them",
+        // A primitive (#75): many sends, each through the gate. Volume is
+        // bounded by the RoE's sweep_max and the task's budget.
+        risk: Risk::Send,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || {
+            obj(
+                &[
+                    ("base", text("an in-scope http(s) URL the check's paths are relative to")),
+                    ("check", text("a check's name, from checks")),
+                    ("yes", flag("for the console: run it (without, it says what it would cost)")),
+                ],
+                &["base", "check"],
+            )
+        },
+    },
+    Command {
+        name: "checks",
+        usage: "checks",
+        desc: "the checks sweep can run: name, WSTG rule, paths, matchers; spall's vetted ones and the engagement's",
+        risk: Risk::Read,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: none,
+    },
+    Command {
         name: "hosts",
         usage: "hosts [--unknown]",
         desc: "hosts seen in traffic and whether each is in scope, excluded or undecided",
@@ -1123,6 +1154,8 @@ mod tests {
                 "open",
                 "replay",
                 "fetch",
+                "sweep",
+                "checks",
                 "hosts",
                 "rules",
                 "task",

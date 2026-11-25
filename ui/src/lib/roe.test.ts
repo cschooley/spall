@@ -28,7 +28,7 @@ test("rules read as a few lines", () => {
     "methods: any · confirm all but GET, HEAD, OPTIONS · rate 10/s · time zone UTC",
     "testing windows: any time",
     "no-test windows: none",
-    "agents: not allowed · destructive actions: not allowed · requests that look destructive: asked for",
+    "agents: not allowed · destructive actions: not allowed · requests that look destructive: asked for · sweeps: up to 200 requests",
   ]);
   const r: Rules = {
     ...DEFAULT_RULES,
@@ -44,14 +44,14 @@ test("rules read as a few lines", () => {
     "methods: GET, POST · confirm every method · no rate limit · time zone America/Chicago",
     "testing windows: 1) mon-fri 09:00-17:00  2) sat 10:00-12:00",
     "no-test windows: 1) 2026-11-26 18:00 → 2026-11-27 08:00 (release freeze)",
-    "agents: allowed · destructive actions: not allowed · requests that look destructive: asked for",
+    "agents: allowed · destructive actions: not allowed · requests that look destructive: asked for · sweeps: up to 200 requests",
   ]);
 });
 
 test("the rules form sends only what changed", async () => {
   const { rulesFormOf, rulesPatchOf } = await import("./roe.ts");
   const f = rulesFormOf(DEFAULT_RULES);
-  assert.deepEqual(f, { methods: "any", safe: "GET, HEAD, OPTIONS", rate: "10", tz: "UTC", agents: false, destructive: false, refuseLooking: false });
+  assert.deepEqual(f, { methods: "any", safe: "GET, HEAD, OPTIONS", rate: "10", tz: "UTC", agents: false, destructive: false, refuseLooking: false, sweepMax: "200" });
   assert.deepEqual(rulesPatchOf(f, DEFAULT_RULES), {});
   assert.deepEqual(rulesPatchOf({ ...f, methods: "get,post", rate: "off", tz: " Europe/Berlin ", agents: true }, DEFAULT_RULES), {
     methods: ["GET", "POST"],

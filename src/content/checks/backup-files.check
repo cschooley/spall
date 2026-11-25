@@ -1,0 +1,39 @@
+# Old, backup and unreferenced files (WSTG-CONF-04): copies and leftovers
+# that may hold source, credentials or data. GET, since status and size
+# decide a hit; nothing here changes the target.
+name backup-files
+rule WSTG-CONF-04
+title Old, backup and unreferenced files
+method GET
+hit status 200
+hit differs
+path /.env
+path /.env.bak
+path /.git/HEAD
+path /.git/config
+path /.svn/entries
+path /.hg/requires
+path /.DS_Store
+path /backup.zip
+path /backup.tar.gz
+path /backup.sql
+path /db.sql
+path /dump.sql
+path /database.sql
+path /site.zip
+path /www.zip
+path /index.php.bak
+path /index.php~
+path /index.php.old
+path /config.php.bak
+path /wp-config.php.bak
+path /web.config.bak
+path /web.config.old
+path /.htaccess.bak
+path /app.config.bak
+path /settings.py.bak
+path /config.json.bak
+path /composer.json
+path /package.json
+path /.npmrc
+path /.dockerenv

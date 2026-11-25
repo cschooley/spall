@@ -61,6 +61,10 @@ pub struct Engagement {
     /// be on the list; changed by a human, audited.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub never_test_exceptions: Vec<String>,
+    /// Checks this engagement adds to spall's vetted ones (#75), as text
+    /// (`sweep::parse`); imported by a human, never an agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<String>,
     pub created: String,
     pub updated: String,
 }
@@ -111,6 +115,7 @@ pub struct RulesPatch {
     pub agents_allowed: Option<bool>,
     pub destructive_allowed: Option<bool>,
     pub refuse_destructive_looking: Option<bool>,
+    pub sweep_max: Option<u32>,
 }
 
 /// A new engagement (`POST /api/engagements`, `engagement new`).
@@ -340,6 +345,9 @@ impl Engagement {
             if let Some(v) = r.refuse_destructive_looking {
                 rule!(refuse_destructive_looking, v);
             }
+            if let Some(v) = r.sweep_max {
+                rule!(sweep_max, v);
+            }
         }
         changes
     }
@@ -489,6 +497,7 @@ impl Store {
                     rules: defaults.clone(),
                     api_specs: Vec::new(),
                     never_test_exceptions: Vec::new(),
+                    checks: Vec::new(),
                     created: ts.clone(),
                     updated: ts,
                 };
@@ -538,6 +547,18 @@ impl Store {
         e.parsed_scope()
             .unwrap_or_default()
             .with_never(&never, &e.never_test_exceptions)
+    }
+
+    /// Replace the active engagement's own checks (#75) and save. The
+    /// caller has parsed them; on error nothing changes.
+    pub fn set_checks(&self, checks: Vec<String>) -> Result<Engagement, Error> {
+        let mut st = self.lock();
+        let mut e = st.active.clone();
+        e.checks = checks;
+        e.updated = now();
+        save(&self.dir, &e).map_err(|err| Error::Io(format!("saving the engagement: {err:#}")))?;
+        st.active = e.clone();
+        Ok(e)
     }
 
     /// The never-test list's entries (#84).
@@ -682,6 +703,7 @@ impl Store {
             rules: self.defaults.clone(),
             api_specs: Vec::new(),
             never_test_exceptions: Vec::new(),
+            checks: Vec::new(),
             created: ts.clone(),
             updated: ts,
         };

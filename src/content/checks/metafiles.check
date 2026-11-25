@@ -1,0 +1,20 @@
+# Webserver metafiles: what a site tells crawlers and tools about itself
+# (WSTG-INFO-03). A hit is a file there, not a vulnerability by itself:
+# read it for paths, hosts and contacts.
+name metafiles
+rule WSTG-INFO-03
+title Webserver metafiles (robots.txt, sitemap, security.txt)
+method GET
+hit status 200
+hit differs
+path /robots.txt
+path /sitemap.xml
+path /sitemap_index.xml
+path /.well-known/security.txt
+path /security.txt
+path /humans.txt
+path /crossdomain.xml
+path /clientaccesspolicy.xml
+path /.well-known/openid-configuration
+path /.well-known/assetlinks.json
+path /.well-known/apple-app-site-association

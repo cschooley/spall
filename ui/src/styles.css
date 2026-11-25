@@ -779,3 +779,7 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 
 /* Too-wide scope entries (#83): the explicit, audited way past the refusal. */
 .wide-ok { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: baseline; margin: var(--vg-space-2) 0; font: var(--vg-text-sm) var(--vg-font-mono); color: var(--vg-accent-rust); }
+
+/* Checks for sweep (#75): import your own as text. */
+.check-import { display: flex; flex-wrap: wrap; gap: var(--vg-space-2); align-items: flex-end; margin-top: var(--vg-space-2); }
+.check-import textarea { flex: 1 1 18rem; min-width: 0; font: var(--vg-text-sm) var(--vg-font-mono); }

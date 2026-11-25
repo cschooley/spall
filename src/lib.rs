@@ -31,6 +31,7 @@ pub mod roles;
 pub mod rules;
 pub mod scope_list;
 pub mod stack;
+pub mod sweep;
 pub mod tailer;
 pub mod tasks;
 pub mod untrusted;

@@ -3,6 +3,7 @@
 // the same audited API as the console. Engagement details are typed by the
 // tester, but everything here is still rendered as text.
 
+import { changeChecks, loadChecks, type CheckInfo } from "../lib/sweep.ts";
 import { changeNever, loadNever, setException, SUGGESTED, type NeverList } from "../lib/never.ts";
 import { By } from "./Attribution.tsx";
 import { activityOf, type ActivityLine } from "../lib/attribution.ts";
@@ -70,6 +71,7 @@ export function EngagementView({
         <Details e={e} onChanged={done} />
         <ScopePanel e={e} onChanged={done} />
         <NeverPanel key={e.id} onChanged={done} />
+        <ChecksPanel key={`checks-${e.id}`} onChanged={done} />
         <HostsPanel listing={hosts} onChanged={done} />
         <RulesPanel e={e} onChanged={done} />
         <Waiting toTriage={toTriage} waitingApproval={waitingApproval} onChanged={onChanged} />
@@ -254,6 +256,66 @@ function Details({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) {
           <dd className="pre">{e.notes || "—"}</dd>
         </dl>
       )}
+    </Section>
+  );
+}
+
+/** Checks for sweep (#75): spall's vetted ones and this engagement's own. */
+function ChecksPanel({ onChanged }: { onChanged(): void }) {
+  const [list, setList] = useState<CheckInfo[] | string | null>(null);
+  const [text, setText] = useState("");
+  const [err, setErr] = useState<Result>(null);
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    let live = true;
+    void loadChecks().then((l) => live && setList(l));
+    return () => {
+      live = false;
+    };
+  }, [nonce]);
+  const change = async (c: Parameters<typeof changeChecks>[0]) => {
+    const r = await changeChecks(c);
+    if (typeof r === "string") return setErr(r);
+    setErr(null);
+    if (c.op === "add") setText("");
+    setNonce((n) => n + 1);
+    onChanged();
+  };
+  return (
+    <Section title="Checks" label="Checks">
+      <p className="note">What `sweep &lt;base-url&gt; &lt;check&gt;` can run: paths relative to an in-scope base, GET or HEAD, judged against a soft-404 baseline.</p>
+      {typeof list === "string" ? <ErrorLine msg={list} /> : null}
+      {Array.isArray(list) ? (
+        <ul className="entries" aria-label="Checks list">
+          {list.map((c) => (
+            <li key={c.name}>
+              <span className="entry">{c.name}</span>
+              <span className="note">{`${c.rule} · ${c.paths} ${c.method} paths · ${c.source === "engagement" ? "this engagement" : "built in"}`}</span>
+              {c.source === "engagement" ? (
+                <span className="row-actions">
+                  <button type="button" aria-label={`Remove check ${c.name}`} onClick={() => void change({ op: "remove", name: c.name })}>
+                    remove
+                  </button>
+                </span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <form className="check-import" onSubmit={(ev) => (ev.preventDefault(), void change({ op: "add", text }))}>
+        <textarea
+          aria-label="Import a check"
+          rows={5}
+          spellCheck={false}
+          value={text}
+          placeholder={"name my-check\nrule WSTG-CONF-04\nhit status 200\nhit differs\npath /old/index.php"}
+          onChange={(ev) => setText(ev.target.value)}
+        />
+        <button type="submit" disabled={!text.trim()}>
+          import
+        </button>
+      </form>
+      <ErrorLine msg={err} />
     </Section>
   );
 }
@@ -568,6 +630,10 @@ function RulesPanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
             <input value={form.rate} onChange={(ev) => setForm({ ...form, rate: ev.target.value })} />
           </label>
           <label>
+            <span>Sweep size (requests, 0: no sweeps)</span>
+            <input inputMode="numeric" value={form.sweepMax} onChange={(ev) => setForm({ ...form, sweepMax: ev.target.value })} />
+          </label>
+          <label>
             <span>Time zone</span>
             <input value={form.tz} onChange={(ev) => setForm({ ...form, tz: ev.target.value })} />
           </label>
@@ -606,6 +672,8 @@ function RulesPanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
           <dd>{r.destructive_allowed ? "allowed" : "not allowed"}</dd>
           <dt>looks destructive</dt>
           <dd>{r.refuse_destructive_looking ? "refused" : "asked for first"}</dd>
+          <dt>sweeps</dt>
+          <dd>{r.sweep_max ? `up to ${r.sweep_max} requests` : "not allowed"}</dd>
         </dl>
       )}
       <h4>Testing windows</h4>

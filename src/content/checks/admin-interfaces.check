@@ -1,0 +1,36 @@
+# Admin interfaces (WSTG-CONF-05): consoles and management pages reachable
+# from outside. 401 and 403 count: the interface is there, behind a login.
+name admin-interfaces
+rule WSTG-CONF-05
+title Admin and management interfaces
+method GET
+hit status 200 401 403
+hit differs
+path /admin
+path /admin/
+path /administrator/
+path /admin/login
+path /wp-admin/
+path /wp-login.php
+path /manage/
+path /management/
+path /console/
+path /dashboard/
+path /cpanel
+path /phpmyadmin/
+path /pma/
+path /adminer.php
+path /server-status
+path /server-info
+path /actuator
+path /actuator/env
+path /actuator/health
+path /jmx-console/
+path /manager/html
+path /solr/
+path /_admin/
+path /admin.php
+path /graphql
+path /graphiql
+path /swagger-ui/
+path /api-docs

@@ -470,6 +470,52 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "base": {
+          "description": "an in-scope http(s) URL the check's paths are relative to",
+          "type": "string"
+        },
+        "check": {
+          "description": "a check's name, from checks",
+          "type": "string"
+        },
+        "yes": {
+          "description": "for the console: run it (without, it says what it would cost)",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "base",
+        "check"
+      ],
+      "type": "object"
+    },
+    "desc": "request a check's paths (forced browsing: backup files, admin interfaces, metafiles) against an in-scope base URL, after a soft-404 baseline; a summary of hits, each an exchange. Every request is gated and charged; checks lists them",
+    "hidden": false,
+    "mcp": true,
+    "name": "sweep",
+    "risk": "send",
+    "ui": true,
+    "usage": "sweep <base-url> <check> [--yes]"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "desc": "the checks sweep can run: name, WSTG rule, paths, matchers; spall's vetted ones and the engagement's",
+    "hidden": false,
+    "mcp": true,
+    "name": "checks",
+    "risk": "read",
+    "ui": true,
+    "usage": "checks"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "unknown": {
           "description": "only hosts neither in scope nor excluded",
           "type": "boolean"

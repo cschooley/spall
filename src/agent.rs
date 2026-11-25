@@ -203,6 +203,8 @@ impl Tools {
             "propose_finding" => self.propose(&t, a).await,
             "report" => self.report(&t, a),
             "skill" => skill(&t, a),
+            "sweep" => self.sweep(&t, a).await,
+            "checks" => Ok(checks_text(&self.replayer.checks())),
             "retest_result" => self.retest_result(&t, a),
             v if crate::verbs::find(v).is_some() => self.verb(&t, v, a).await,
             _ => Err(err(format!("{name}: offered but not built yet"))),
@@ -572,6 +574,44 @@ impl Tools {
         }
     }
 
+    /// `sweep` (#75): the primitive, under this task: gated, charged,
+    /// attributed; a summary back, hits as exchanges the task sent.
+    async fn sweep(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            base: String,
+            check: String,
+            #[serde(default)]
+            yes: bool,
+        }
+        let a: A = args("sweep", a)?;
+        let _ = a.yes; // agents don't confirm; the gate and budget decide
+        match self
+            .replayer
+            .sweep(Some(&t.id), &a.base, &a.check, true)
+            .await
+        {
+            Ok(v) => {
+                let hits = v["hits"].as_array().map(Vec::len).unwrap_or(0);
+                let head = format!(
+                    "sweep {} on {}: {} of {} sent, {hits} hit(s){}. A hit is a candidate only once you've opened it: open the exchange, then propose_finding with the check's rule ({}) if it holds.",
+                    a.check,
+                    a.base,
+                    v["sent"],
+                    v["planned"],
+                    v["stopped"].as_str().map(|s| format!("; stopped: {s}")).unwrap_or_default(),
+                    v["rule"].as_str().unwrap_or("")
+                );
+                Ok(ok(format!(
+                    "{head}\n{}",
+                    untrusted::wrap_json("sweep results", &v)
+                )))
+            }
+            Err((_, why)) => Err(err(format!("sweep: {why}"))),
+        }
+    }
+
     fn report(&self, t: &Task, a: &Value) -> Result<Output, Output> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -710,6 +750,28 @@ fn is_status(v: &str) -> bool {
             || (b[1].eq_ignore_ascii_case(&b'x') && b[2].eq_ignore_ascii_case(&b'x')))
 }
 
+/// `checks` (#75): what `sweep` can run.
+fn checks_text(all: &[crate::sweep::Check]) -> Output {
+    let lines: Vec<String> = all
+        .iter()
+        .map(|c| {
+            format!(
+                "- {} ({}, {} {} paths, {:?}): {}",
+                c.name,
+                c.rule,
+                c.paths.len(),
+                c.method,
+                c.source,
+                c.title
+            )
+        })
+        .collect();
+    ok(format!(
+        "checks for sweep <base> <check> (each costs its paths + 1 baseline request):\n{}",
+        lines.join("\n")
+    ))
+}
+
 /// `skill [name]` (#64): the role's skills, or one's body. Text only.
 fn skill(t: &Task, a: &Value) -> Result<Output, Output> {
     #[derive(Deserialize)]
@@ -807,6 +869,8 @@ mod tests {
                 "open",
                 "replay",
                 "fetch",
+                "sweep",
+                "checks",
                 "hosts",
                 "rules",
                 "task",
@@ -868,6 +932,6 @@ mod tests {
             .unwrap_err()
             .text
             .contains("bad arguments"));
-        assert!(rules(&Value::Null).unwrap().text.starts_with("75 rule(s)"));
+        assert!(rules(&Value::Null).unwrap().text.starts_with("76 rule(s)"));
     }
 }

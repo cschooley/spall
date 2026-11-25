@@ -1126,6 +1126,324 @@ impl Replayer {
         res
     }
 
+    /// The checks a sweep may run (#75): spall's vetted ones, then the
+    /// active engagement's own.
+    pub fn checks(&self) -> Vec<crate::sweep::Check> {
+        use crate::sweep::{built_in, parse, Source};
+        let mut all = built_in();
+        for t in &self.engagements.active().checks {
+            if let Ok(c) = parse(t, Source::Engagement) {
+                all.push(c);
+            }
+        }
+        all
+    }
+
+    /// Add a check to the active engagement (its text) or remove one (by
+    /// name): the tester's `policy` change, audited. Built-in checks can't
+    /// be replaced or removed.
+    pub fn change_checks(
+        &self,
+        add: Option<&str>,
+        remove: Option<&str>,
+    ) -> Result<Vec<crate::sweep::Check>, EngagementError> {
+        use crate::sweep::{built_in, parse, Source, MAX_LOCAL};
+        let e = self.engagements.active();
+        let mut texts = e.checks.clone();
+        let what = match (add, remove) {
+            (Some(text), None) => {
+                let c = parse(text, Source::Engagement).map_err(EngagementError::Invalid)?;
+                if built_in().iter().any(|b| b.name == c.name) {
+                    return Err(EngagementError::Invalid(format!(
+                        "{} is a built-in check: name yours differently",
+                        c.name
+                    )));
+                }
+                texts.retain(|t| {
+                    parse(t, Source::Engagement)
+                        .map(|o| o.name != c.name)
+                        .unwrap_or(true)
+                });
+                if texts.len() >= MAX_LOCAL {
+                    return Err(EngagementError::Invalid(format!(
+                        "at most {MAX_LOCAL} checks per engagement"
+                    )));
+                }
+                texts.push(text.trim().to_string());
+                format!(
+                    "checks add {} ({}, {} paths)",
+                    c.name,
+                    c.rule,
+                    c.paths.len()
+                )
+            }
+            (None, Some(name)) => {
+                let before = texts.len();
+                texts.retain(|t| {
+                    parse(t, Source::Engagement)
+                        .map(|o| o.name != name)
+                        .unwrap_or(true)
+                });
+                if texts.len() == before {
+                    return Err(EngagementError::NotFound(format!(
+                        "no engagement check {name:?} (built-in checks stay)"
+                    )));
+                }
+                format!("checks remove {name}")
+            }
+            _ => {
+                return Err(EngagementError::Invalid(
+                    "add a check's text, or remove one by name".into(),
+                ))
+            }
+        };
+        let res = self.engagements.set_checks(texts);
+        let mut rec = Record::new("checks", "", Outcome::EngagementChanged);
+        rec.engagement = Some(e.id.clone());
+        rec.reason = Some(what);
+        if let Err(err) = &res {
+            rec.error = Some(err.to_string());
+        }
+        self.audit(&rec);
+        res.map(|_| self.checks())
+    }
+
+    /// A sweep (#75): check `name`'s paths against `base`, for `task` (an
+    /// agent's) or the tester. With `run` false, only what it would cost.
+    /// Every request goes through `fetch` (the whole gate), one at a time;
+    /// a soft-404 baseline first. Stops on halt, the e-stop or a pause.
+    pub async fn sweep(
+        &self,
+        task: Option<&str>,
+        base: &str,
+        name: &str,
+        run: bool,
+    ) -> Result<serde_json::Value, (StatusCode, String)> {
+        use crate::sweep::{is_hit, join, Baseline, Hit, Summary};
+        let check = self
+            .checks()
+            .into_iter()
+            .find(|c| c.name == name)
+            .ok_or_else(|| {
+                let names: Vec<String> = self.checks().into_iter().map(|c| c.name).collect();
+                (
+                    StatusCode::NOT_FOUND,
+                    format!("no check {name:?}; checks: {}", names.join(", ")),
+                )
+            })?;
+        let base = base.trim();
+        let uri: hyper::Uri = base.parse().map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "base: an absolute http or https URL".to_string(),
+            )
+        })?;
+        if !matches!(uri.scheme_str(), Some("http" | "https"))
+            || uri.host().is_none_or(str::is_empty)
+            || uri.query().is_some()
+            || base.contains('#')
+            || base.contains('@')
+        {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "base: an absolute http or https URL, no query, fragment or user info".into(),
+            ));
+        }
+        let e = self.engagements.active();
+        let host = gate::url_host(base).unwrap_or_default();
+        let v = self.scope_now().explain(&host);
+        if v.state != gate::HostState::In {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!(
+                    "{} isn't in scope{}",
+                    v.host,
+                    v.by.map(|b| format!(" ({b})")).unwrap_or_default()
+                ),
+            ));
+        }
+        let planned = check.paths.len() + 1;
+        if e.rules.sweep_max == 0 {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "the rules of engagement allow no sweeps (roe set sweep <n>)".into(),
+            ));
+        }
+        if planned > e.rules.sweep_max as usize {
+            return Err((StatusCode::FORBIDDEN, format!(
+                "{name} sends {planned} requests (with the baseline); the rules of engagement allow {} per sweep",
+                e.rules.sweep_max
+            )));
+        }
+        if let Some(t) = task.and_then(|id| self.tasks.get(&e.id, id)) {
+            let left = t.constraints.budget.saturating_sub(t.spent) as usize;
+            if planned > left {
+                return Err((StatusCode::CONFLICT, format!(
+                    "{name} needs {planned} requests and {} has {left} left of its budget: sweep less, or ask the tester for more",
+                    t.id
+                )));
+            }
+        }
+        let estimate = serde_json::json!({
+            "check": check.name, "rule": check.rule, "title": check.title, "base": base,
+            "method": check.method, "planned": planned,
+            "cost": format!("{planned} {} requests (one is the soft-404 baseline)", check.method),
+        });
+        if !run {
+            return Ok(estimate);
+        }
+
+        let who = match task {
+            Some(t) => Who::Agent { task: t },
+            None => Who::Human,
+        };
+        let mut summary = Summary {
+            check: check.name.clone(),
+            rule: check.rule.clone(),
+            base: base.to_string(),
+            planned,
+            sent: 0,
+            baseline: None,
+            hits: Vec::new(),
+            misses: 0,
+            skipped: Vec::new(),
+            stopped: None,
+        };
+        let mut nonce = [0u8; 8];
+        let _ = getrandom::fill(&mut nonce);
+        let probe = format!(
+            "/spall-baseline-{}",
+            nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+        let paths = std::iter::once(probe.clone()).chain(check.paths.iter().cloned());
+        for (i, path) in paths.enumerate() {
+            if let Some(t) = task {
+                if self.tasks.estop().is_some() {
+                    summary.stopped = Some("the e-stop".into());
+                    break;
+                }
+                if self.tasks.get(&e.id, t).is_none_or(|t| t.status.finished()) {
+                    summary.stopped = Some(format!("{t} finished (halted or done)"));
+                    break;
+                }
+            }
+            let req = FetchRequest {
+                url: join(base, &path),
+                method: Some(check.method.clone()),
+                req_headers: None,
+                confirm: None,
+            };
+            // Rate limited: wait as told, a few times.
+            let mut answer = None;
+            for _ in 0..20 {
+                let res = self.fetch(who, req.clone()).await;
+                let status = res.status();
+                let bytes = axum::body::to_bytes(res.into_body(), 16 << 20)
+                    .await
+                    .unwrap_or_default();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+                if status == StatusCode::TOO_MANY_REQUESTS {
+                    let secs = body["retry_after_secs"]
+                        .as_f64()
+                        .unwrap_or(0.5)
+                        .clamp(0.05, 5.0);
+                    tokio::time::sleep(std::time::Duration::from_secs_f64(secs)).await;
+                    continue;
+                }
+                answer = Some((status, body));
+                break;
+            }
+            let Some((status, body)) = answer else {
+                summary.stopped = Some("rate limited for too long".into());
+                break;
+            };
+            let why = body["error"].as_str().unwrap_or("").to_string();
+            match status {
+                StatusCode::OK | StatusCode::BAD_GATEWAY if body.get("id").is_some() => {
+                    summary.sent += 1;
+                    let entry: Option<TrafficEntry> = serde_json::from_value(body).ok();
+                    let (code, size, text) = match &entry {
+                        Some(x) => {
+                            let size = match (&x.res_body, x.res_body_encoding) {
+                                (Some(b), taphttp_types::BodyEncoding::Base64) => b.len() / 4 * 3,
+                                (Some(b), _) => b.len(),
+                                (None, _) => 0,
+                            };
+                            let text = match x.res_body_encoding {
+                                taphttp_types::BodyEncoding::Utf8 => x.res_body.clone(),
+                                _ => None,
+                            };
+                            (x.status, size, text)
+                        }
+                        None => (None, 0, None),
+                    };
+                    if i == 0 {
+                        summary.baseline = Some(Baseline { status: code, size });
+                        continue;
+                    }
+                    let base_line = summary.baseline.unwrap_or(Baseline {
+                        status: Some(404),
+                        size: 0,
+                    });
+                    if is_hit(&check, &base_line, code, size, text.as_deref()) {
+                        summary.hits.push(Hit {
+                            path: path.clone(),
+                            exchange: entry.map(|x| x.id).unwrap_or_default(),
+                            status: code,
+                            size,
+                        });
+                    } else {
+                        summary.misses += 1;
+                    }
+                }
+                StatusCode::ACCEPTED => {
+                    summary.stopped = Some(format!(
+                        "paused for the tester's approval at {path}: {}",
+                        body["reason"].as_str().unwrap_or("outside the task")
+                    ));
+                    break;
+                }
+                StatusCode::PRECONDITION_REQUIRED => {
+                    summary
+                        .skipped
+                        .push((path.clone(), format!("needs confirmation: {why}")));
+                }
+                _ if i == 0 => {
+                    summary.stopped =
+                        Some(format!("the baseline request was refused or failed: {why}"));
+                    break;
+                }
+                _ => summary.skipped.push((
+                    path.clone(),
+                    if why.is_empty() {
+                        format!("HTTP {status}")
+                    } else {
+                        why
+                    },
+                )),
+            }
+        }
+        let mut rec = Record::new("sweep", "", Outcome::Sent);
+        rec.actor = if task.is_some() { "agent" } else { "human" }.into();
+        rec.task = task.map(String::from);
+        rec.engagement = Some(e.id.clone());
+        rec.target = Some(base.to_string());
+        rec.reason = Some(format!(
+            "sweep {} on {base}: {} of {} sent, {} hits{}",
+            check.name,
+            summary.sent,
+            planned,
+            summary.hits.len(),
+            summary
+                .stopped
+                .as_deref()
+                .map(|s| format!(", stopped: {s}"))
+                .unwrap_or_default()
+        ));
+        self.audit(&rec);
+        Ok(serde_json::to_value(&summary).unwrap_or_default())
+    }
+
     /// Totals quad is scored on (#66): requests charged, model tokens and
     /// agent candidates in `engagement`.
     fn quad_tally(&self, engagement: &str) -> crate::quad::Tally {

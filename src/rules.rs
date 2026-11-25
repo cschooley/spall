@@ -127,6 +127,7 @@ const OTHER_ENTRY: Entry = Entry {
 /// The catalog, in WSTG order, then `spall/other`.
 pub static CATALOG: &[Entry] = &[
     e("WSTG-INFO-02", "Fingerprint Web Server", 200, "01-Information_Gathering/02-Fingerprint_Web_Server"),
+    e("WSTG-INFO-03", "Review Webserver Metafiles for Information Leakage", 200, "01-Information_Gathering/03-Review_Webserver_Metafiles_for_Information_Leakage"),
     e("WSTG-INFO-05", "Review Webpage Content for Information Leakage", 200, "01-Information_Gathering/05-Review_Webpage_Content_for_Information_Leakage"),
     e("WSTG-CONF-04", "Review Old Backup and Unreferenced Files for Sensitive Information", 530, "02-Configuration_and_Deployment_Management_Testing/04-Review_Old_Backup_and_Unreferenced_Files_for_Sensitive_Information"),
     e("WSTG-CONF-05", "Enumerate Infrastructure and Application Admin Interfaces", 425, "02-Configuration_and_Deployment_Management_Testing/05-Enumerate_Infrastructure_and_Application_Admin_Interfaces"),

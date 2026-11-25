@@ -86,6 +86,8 @@ function fakeCtx(over: Partial<Ctx> = {}) {
       dropped: 0,
     }),
     checkScope: async (t) => (calls.push(`check:${t}`), { host: t, state: "unknown", by: null }),
+    sweep: async (base, check, yes) => (calls.push(`sweep:${base}:${check}:${yes}`), yes ? { kind: "done", check, rule: "WSTG-CONF-05", base, planned: 3, sent: 3, hits: [{ path: "/admin", exchange: "s-2", status: 401, size: 14 }], misses: 1, skipped: [], stopped: null } : { kind: "estimate", check, rule: "WSTG-CONF-05", planned: 3, cost: "3 GET requests" }),
+    checks: async () => [{ name: "admin-interfaces", rule: "WSTG-CONF-05", title: "Admin", method: "GET", paths: 28, source: "built_in" }],
     neverTest: async (op, entry) => (calls.push(`never:${op ?? "show"}:${entry ?? ""}`), { entries: ["*.gov"], exceptions: [] }),
     quad: async (what) => (calls.push(`quad:${JSON.stringify(what)}`), { ok: true, lines: ["QUAD for 2:00"] }),
     verb: async (name, id, category) => (calls.push(`verb:${name}:${id}${category ? `:${category}` : ""}`), { id: "T-9", role: "tester", cost: "~5 requests, safe methods" }),
@@ -122,6 +124,19 @@ test("never-test: show, add, remove; anything else is usage (#84)", async () => 
   assert.deepEqual(calls.filter((c) => c.startsWith("never:")), ["never:show:", "never:add:*.gov", "never:remove:*.gov"]);
   assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: never-test")).length, 3);
   assert.ok(lines.some(([t]) => t === "never-test: *.gov"));
+});
+
+test("sweep says what it costs, then runs with --yes; checks lists them (#75)", async () => {
+  const { ctx, calls, lines } = fakeCtx();
+  await execute("sweep https://a.test admin-interfaces", ctx);
+  await execute("sweep https://a.test admin-interfaces --yes", ctx);
+  await execute("checks", ctx);
+  for (const bad of ["sweep", "sweep a.test admin-interfaces", "sweep https://a.test"]) await execute(bad, ctx);
+  assert.deepEqual(calls.filter((c) => c.startsWith("sweep:")), ["sweep:https://a.test:admin-interfaces:false", "sweep:https://a.test:admin-interfaces:true"]);
+  assert.ok(lines.some(([t]) => t.includes("3 GET requests. sweep https://a.test admin-interfaces --yes to run it")));
+  assert.ok(lines.some(([t]) => t.includes("hit /admin  401  14 B  open s-2 · flag s-2 --rule WSTG-CONF-05")));
+  assert.ok(lines.some(([t]) => t.includes("admin-interfaces") && t.includes("28 GET paths")));
+  assert.equal(lines.filter(([t, k]) => k === "warn" && t.startsWith("usage: sweep")).length, 3);
 });
 
 test("tokenize splits on whitespace and honors quotes", () => {
@@ -327,6 +342,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["roe", "policy"],
       ["estop", "policy"],
       ["quad", "send"],
+      ["sweep", "send"],
       ["flag", "record"],
       ["promote", "export"],
       ["export", "export"],
@@ -521,7 +537,7 @@ test("roe shows the rules and whether testing is allowed now", async () => {
     "methods: any · confirm all but GET, HEAD, OPTIONS · rate 10/s · time zone UTC",
     "testing windows: any time",
     "no-test windows: none",
-    "agents: not allowed · destructive actions: not allowed · requests that look destructive: asked for",
+    "agents: not allowed · destructive actions: not allowed · requests that look destructive: asked for · sweeps: up to 200 requests",
     "testing now: allowed",
   ]);
   const closed = fakeCtx({ engagement: async () => ({ ...ENG, testingNow: { allowed: false, reason: "outside the testing windows (...)" } }) });
@@ -545,6 +561,7 @@ test("roe set, window and blackout build rule changes", async () => {
     "roe set agents yes",
     "roe set destructive no",
     "roe set looks-destructive refuse",
+    "roe set sweep 50",
     "roe window add mon-fri 09:00-17:00",
     "roe window remove 1",
     "roe window clear",
@@ -561,6 +578,7 @@ test("roe set, window and blackout build rule changes", async () => {
     'rules:{"agents_allowed":true}',
     'rules:{"destructive_allowed":false}',
     'rules:{"refuse_destructive_looking":true}',
+    'rules:{"sweep_max":50}',
     'rules:{"windows":[{"days":["sat"],"start":"10:00","end":"12:00"},{"days":["mon","tue","wed","thu","fri"],"start":"09:00","end":"17:00"}]}',
     'rules:{"windows":[]}',
     'rules:{"windows":[]}',
@@ -574,6 +592,7 @@ test("roe set, window and blackout build rule changes", async () => {
     "roe set rate -1",
     "roe set agents maybe",
     "roe set looks-destructive maybe",
+    "roe set sweep -1",
     "roe set colour red",
     "roe set methods G@T",
     "roe window add funday 09:00-17:00",
@@ -591,7 +610,7 @@ test("roe set, window and blackout build rule changes", async () => {
   await execute("roe set tz Mars/Olympus", refused.ctx);
   assert.equal(refused.lines.at(-1)![1], "warn");
   assert.deepEqual(complete("roe ").options, ["set", "window", "blackout"]);
-  assert.deepEqual(complete("roe set ").options, ["methods", "safe", "rate", "tz", "agents", "destructive", "looks-destructive"]);
+  assert.deepEqual(complete("roe set ").options, ["methods", "safe", "rate", "tz", "agents", "destructive", "looks-destructive", "sweep"]);
 });
 
 test("hosts lists what traffic has touched, with each host's scope state", async () => {

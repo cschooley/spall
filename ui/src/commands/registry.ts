@@ -17,6 +17,7 @@ import type { ApiSpec } from "../lib/engagement.ts";
 import { describeRules, parseDays, parseMethods, parseSpan, type Rules } from "../lib/roe.ts";
 import { RISKS, SPECS } from "./specs.gen.ts";
 import { CATEGORIES, draftedLine, VERBS, type Drafted } from "../lib/verbs.ts";
+import { sweepLines, type CheckInfo, type SweepAnswer } from "../lib/sweep.ts";
 
 export type OutKind = "cmd" | "out" | "sys" | "warn" | "stop";
 
@@ -67,6 +68,10 @@ export interface Ctx {
   haltTask(id: string, reason: string): Promise<{ ok: boolean; text: string }>;
   /** A task's details as console lines, or every task's one-liner with no id (#54); or why not. */
   task(id?: string): Promise<string[] | string>;
+  /** A sweep's estimate (`yes` false) or its run (#75), or why not. */
+  sweep(base: string, check: string, yes: boolean): Promise<SweepAnswer | string>;
+  /** The checks a sweep can run (#75), or why not. */
+  checks(): Promise<CheckInfo[] | string>;
   /** Start quad mode, or end it (#66); what happened, as lines. */
   quad(what: { seconds?: number } | { stop: true }): Promise<{ ok: boolean; lines: string[] }>;
   /** The never-test list (#84), changed when `op` is given; or why not. */
@@ -124,8 +129,8 @@ export interface EngagementSummary {
 export const ENGAGEMENT_FIELDS = ["name", "client", "starts", "ends", "expires", "notes"] as const;
 export type EngagementField = (typeof ENGAGEMENT_FIELDS)[number];
 const ROE_USAGE =
-  "usage: roe [set <methods|safe|rate|tz|agents|destructive|looks-destructive> <value> | window add <days> <HH:MM-HH:MM> | window remove <n> | window clear | blackout add <from> <to> [note] | blackout remove <n> | blackout clear]";
-const ROE_FIELDS = ["methods", "safe", "rate", "tz", "agents", "destructive", "looks-destructive"];
+  "usage: roe [set <methods|safe|rate|tz|agents|destructive|looks-destructive|sweep> <value> | window add <days> <HH:MM-HH:MM> | window remove <n> | window clear | blackout add <from> <to> [note] | blackout remove <n> | blackout clear]";
+const ROE_FIELDS = ["methods", "safe", "rate", "tz", "agents", "destructive", "looks-destructive", "sweep"];
 const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
 /** A `roe set` value as a rules change, or a message. */
@@ -150,6 +155,11 @@ function roeSet(field: string, value: string): Partial<Rules> | string {
       const b = yesNo(value);
       if (b === null) return `${field}: yes or no`;
       return field === "agents" ? { agents_allowed: b } : { destructive_allowed: b };
+    }
+    case "sweep": {
+      // #75: requests one sweep may send; 0 forbids sweeps.
+      const n = Number(value);
+      return Number.isInteger(n) && n >= 0 && n <= 5000 ? { sweep_max: n } : "sweep: 0 (no sweeps) to 5000 requests";
     }
     case "looks-destructive":
       // #85: a request that looks destructive asks first, or is refused.
@@ -540,6 +550,34 @@ const IMPLS: readonly Impl[] = [
       if (!r.entries.length) return ctx.out("never-test: empty (never-test add <entry>; *.gov and *.mil are offered in the Engagement view)");
       ctx.out(`never-test: ${r.entries.join(", ")}`);
       if (r.exceptions.length) ctx.out(`this engagement is exempted from: ${r.exceptions.join(", ")}`, "sys");
+    },
+  },
+  {
+    name: "sweep",
+    group: "traffic",
+    palette: { label: "Sweep a base URL with a check…", hint: "sweep <base-url> <check> [--yes]", needsArgs: true },
+    complete: (args) => (args.length === 2 ? ["metafiles", "backup-files", "admin-interfaces"].filter((c) => c.startsWith(args[1]!)) : []),
+    run: async (args, ctx) => {
+      const yes = args.includes("--yes");
+      const rest = args.filter((a) => a !== "--yes");
+      if (rest.length !== 2 || !/^https?:\/\//i.test(rest[0]!)) return ctx.out("usage: sweep <base-url> <check> [--yes]  (checks lists them)", "warn");
+      const [base, check] = rest as [string, string];
+      if (yes) ctx.out(`sweep: running ${check} on ${base}… (every request goes through the gate)`, "sys");
+      const r = await ctx.sweep(base, check, yes);
+      if (typeof r === "string") return ctx.out(`sweep: ${r}`, "warn");
+      if (r.kind === "estimate") return ctx.out(`sweep ${r.check} (${r.rule}) on ${base}: ${r.cost}. sweep ${base} ${check} --yes to run it`, "sys");
+      sweepLines(r).forEach((l, i) => ctx.out(l, i === 0 ? "sys" : "out"));
+    },
+  },
+  {
+    name: "checks",
+    group: "traffic",
+    palette: { label: "Checks for sweep", hint: "checks" },
+    run: async (_args, ctx) => {
+      const r = await ctx.checks();
+      if (typeof r === "string") return ctx.out(`checks: ${r}`, "warn");
+      for (const c of r) ctx.out(`  ${c.name.padEnd(18)} ${c.rule.padEnd(13)} ${String(c.paths).padStart(3)} ${c.method} paths  ${c.source === "engagement" ? "(this engagement) " : ""}${c.title}`);
+      ctx.out(`${r.length} checks · sweep <base-url> <check> to run one; import your own in the Engagement view`, "sys");
     },
   },
   {

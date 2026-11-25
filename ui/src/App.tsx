@@ -1,3 +1,4 @@
+import { loadChecks, runSweep } from "./lib/sweep.ts";
 import { changeNever, loadNever } from "./lib/never.ts";
 import { runVerb } from "./lib/verbs.ts";
 import { quadCall } from "./lib/quad.ts";
@@ -536,6 +537,8 @@ export function App() {
       },
       rules: loadCatalog,
       verb: (name, id, category) => runVerb(name, id, category),
+      sweep: (base, check, yes) => runSweep(base, check, yes),
+      checks: () => loadChecks(),
       neverTest: async (op, entry) => {
         if (op && entry) {
           const r = await changeNever(op, entry);

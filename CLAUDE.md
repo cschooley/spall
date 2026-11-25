@@ -116,7 +116,7 @@ answers); `/send` and `/replay` refuse taphttp's own listeners. Recorded
 name at its first position.
 
 **M4 "candidates": done** (tag `v0.5.0`, #48: #41-#47, #16). Rule
-catalog (`src/rules.rs`: 74 WSTG v4.2 tests mapped to CWE, plus
+catalog (`src/rules.rs`: 75 WSTG v4.2 tests mapped to CWE, plus
 `spall/other`); candidates as `flux::Finding`s per engagement
 (`src/candidates.rs`, `<engagements>/candidates/<id>.json`; flag, 409 on
 a matching fingerprint, triage ops, audited as `CandidateChanged`);
@@ -187,6 +187,17 @@ the request unsafe: the role check sees it as unsafe (a mapper is
 refused), an `Allow` becomes `NeedsConfirmation` naming the match (a
 human's two presses, an agent's pause), and RoE
 `refuse_destructive_looking` turns it into a `Deny`. It never grants.
+
+Sweep and checks (#75, done): `src/sweep.rs` parses checks (name, rule
+from the catalog, GET/HEAD, `hit status|differs|contains`, paths relative
+to the base, at most 500) and judges hits against the soft-404 baseline;
+the vetted set is `src/content/checks/*.check`, an engagement's own are
+`Engagement.checks` (text), imported by the tester (`POST /api/checks`,
+audited). `Replayer::sweep` validates (in scope, RoE `sweep_max`, the
+task's remaining budget), then sends the baseline and each path through
+`fetch` (the whole gate), waits out 429s, stops on a pause, halt or
+e-stop, and audits a summary. Registry `sweep` (send, MCP) and `checks`
+(read). WSTG-INFO-03 joined the rule catalog (75 tests).
 
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every

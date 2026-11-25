@@ -98,6 +98,17 @@ pub struct Rules {
     /// refused outright instead of asked for. Off: it asks.
     #[serde(default)]
     pub refuse_destructive_looking: bool,
+    /// Requests one sweep may send (#75): volume is its own risk, apart
+    /// from the method. 0: no sweeps.
+    #[serde(default = "default_sweep_max")]
+    pub sweep_max: u32,
+}
+
+/// The largest `sweep_max` an engagement may set.
+pub const SWEEP_MAX_CEILING: u32 = 5000;
+
+fn default_sweep_max() -> u32 {
+    200
 }
 
 fn default_safe() -> Vec<String> {
@@ -122,6 +133,7 @@ impl Default for Rules {
             agents_allowed: false,
             destructive_allowed: false,
             refuse_destructive_looking: false,
+            sweep_max: default_sweep_max(),
         }
     }
 }
@@ -239,6 +251,11 @@ impl Rules {
                     "{name}: uppercase HTTP method names, comma-separated"
                 ));
             }
+        }
+        if self.sweep_max > SWEEP_MAX_CEILING {
+            return Err(format!(
+                "sweep_max: 0 (no sweeps) to {SWEEP_MAX_CEILING} requests"
+            ));
         }
         if let Some(r) = self.rate_limit {
             if !(r > 0.0 && r <= MAX_RATE) {

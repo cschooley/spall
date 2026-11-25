@@ -93,6 +93,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/audit", get(api_audit))
         .route("/api/scope", post(api_scope))
         .route("/api/never-test", get(api_never).post(api_never_change))
+        .route("/api/checks", get(api_checks).post(api_checks_change))
+        .route("/api/sweep", post(api_sweep))
         .route("/api/scope/check", get(api_scope_check))
         .route("/api/hosts", get(api_hosts))
         .route("/api/rules", get(api_rules))
@@ -1092,6 +1094,82 @@ async fn api_never_change(State(state): State<AppState>, body: axum::body::Bytes
                 .into_response()
         }
         Err(e) => engagement_error(&e),
+    }
+}
+
+/// The checks a sweep may run (#75): built-in, then the engagement's.
+async fn api_checks(State(state): State<AppState>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    axum::Json(serde_json::json!({ "checks": r.checks() })).into_response()
+}
+
+/// Import or remove an engagement check: `{"op": "add", "text"}` or
+/// `{"op": "remove", "name"}`. The tester's `policy` change, audited.
+async fn api_checks_change(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Change {
+        op: String,
+        text: Option<String>,
+        name: Option<String>,
+    }
+    let c: Change = match serde_json::from_slice(&body) {
+        Ok(c) => c,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"op": "add", "text"}} or {{"op": "remove", "name"}}: {e}"#),
+            )
+        }
+    };
+    let res = match (c.op.as_str(), &c.text, &c.name) {
+        ("add", Some(t), None) => r.change_checks(Some(t), None),
+        ("remove", None, Some(n)) => r.change_checks(None, Some(n)),
+        _ => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                r#"want {"op": "add", "text"} or {"op": "remove", "name"}"#,
+            )
+        }
+    };
+    match res {
+        Ok(checks) => axum::Json(serde_json::json!({ "checks": checks })).into_response(),
+        Err(e) => engagement_error(&e),
+    }
+}
+
+/// A sweep (#75): `{"base", "check", "yes"?}`. Without `yes`, what it
+/// would cost; with it, the run and its summary. Same-origin; every request
+/// is gated and audited.
+async fn api_sweep(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Ask {
+        base: String,
+        check: String,
+        #[serde(default)]
+        yes: bool,
+    }
+    let a: Ask = match serde_json::from_slice(&body) {
+        Ok(a) => a,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                &format!(r#"want {{"base", "check", "yes"?}}: {e}"#),
+            )
+        }
+    };
+    match r.sweep(None, &a.base, &a.check, a.yes).await {
+        Ok(v) => axum::Json(v).into_response(),
+        Err((status, why)) => json_error(status, &why),
     }
 }
 

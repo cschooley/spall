@@ -100,14 +100,32 @@ async fn send(State(s): State<Stub>, body: String) -> Response {
     let url = v["url"].as_str().unwrap().to_string();
     let method = v["method"].as_str().unwrap_or("GET").to_string();
     let id = format!("s-{n}");
+    // A small site for sweeps (#75), under /sweep-site/ only: a soft-404
+    // page for everything, a robots.txt, and a login wall on /admin.
+    let site = |e: String| -> String {
+        if !url.contains("/sweep-site/") {
+            return e;
+        }
+        let (status, body) = if url.ends_with("/robots.txt") {
+            (200, "User-agent: *\\nDisallow: /secret\\n".to_string())
+        } else if url.ends_with("/admin") {
+            (401, "login required".to_string())
+        } else {
+            (200, "x".repeat(5000))
+        };
+        e.replace(r#""status":200"#, &format!(r#""status":{status}"#))
+            .replace(r#""res_body":null"#, &format!(r#""res_body":"{body}""#))
+    };
     let json = |status, extra: &str| {
-        let e = entry(&id)
-            .replace(&format!("http://example.com/{id}"), &url)
-            .replace(r#""method":"GET""#, &format!(r#""method":"{method}""#))
-            .replace(
-                r#""replay_of":null"#,
-                &format!(r#""replay_of":null,"origin":"send"{extra}"#),
-            );
+        let e = site(
+            entry(&id)
+                .replace(&format!("http://example.com/{id}"), &url)
+                .replace(r#""method":"GET""#, &format!(r#""method":"{method}""#))
+                .replace(
+                    r#""replay_of":null"#,
+                    &format!(r#""replay_of":null,"origin":"send"{extra}"#),
+                ),
+        );
         // Recorded, like taphttp: in history and on the feed.
         s.push_json(&id, e.clone());
         (status, [(header::CONTENT_TYPE, "application/json")], e).into_response()
@@ -3751,6 +3769,8 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "open",
             "replay",
             "fetch",
+            "sweep",
+            "checks",
             "hosts",
             "rules",
             "task",
@@ -5903,4 +5923,202 @@ async fn destructive_looking_requests_ask_first() {
         1,
         "nothing destructive-looking was sent"
     );
+}
+
+/// sweep (#75): a check's paths against a base, after a soft-404 baseline:
+/// hits are the paths that differ, each a recorded exchange; bounded by the
+/// RoE and the task's budget; every request gated and attributed; checks
+/// are vetted data, and an engagement's own are the tester's to import.
+#[tokio::test]
+async fn sweep_finds_what_differs_from_the_soft_404_inside_its_bounds() {
+    // Enough budget for admin-interfaces (29), not then backup-files (31).
+    let (dir, stub, spall, r) = agent_setup(r#"{"budget":40}"#).await;
+    let base = "http://example.com/sweep-site";
+    // The estimate first, nothing sent.
+    let res = post_text(
+        spall,
+        "/api/sweep",
+        &format!(r#"{{"base":"{base}","check":"metafiles"}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let est = body_json(&res);
+    let planned = est["planned"].as_u64().unwrap();
+    assert!(
+        est["cost"].as_str().unwrap().contains("soft-404 baseline"),
+        "{est}"
+    );
+    assert!(stub.sends().is_empty());
+
+    // A human's run: robots.txt differs from the soft 404; the rest don't.
+    let res = post_text(
+        spall,
+        "/api/sweep",
+        &format!(r#"{{"base":"{base}","check":"metafiles","yes":true}}"#),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let v = body_json(&res);
+    assert_eq!(v["sent"].as_u64(), Some(planned), "{v}");
+    assert_eq!(v["baseline"]["status"], 200);
+    let hits: Vec<&str> = v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(hits, ["/robots.txt"], "{v}");
+    assert!(v["hits"][0]["exchange"].as_str().unwrap().starts_with("s-"));
+    let sends = stub.sends();
+    assert!(sends[0]["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("http://example.com/sweep-site/spall-baseline-"));
+    assert!(sends.iter().all(|s| s["meta"]["actor"] == "human"));
+
+    // An agent's: attributed to its task, charged, an admin wall is a hit.
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    let out = tools.call("T-1", "checks", &serde_json::json!({})).await;
+    assert!(
+        out.text.contains("admin-interfaces (WSTG-CONF-05"),
+        "{}",
+        out.text
+    );
+    let before = task_of(&r, "T-1").spent;
+    let out = tools
+        .call(
+            "T-1",
+            "sweep",
+            &serde_json::json!({"base": base, "check": "admin-interfaces"}),
+        )
+        .await;
+    assert!(!out.is_error, "{}", out.text);
+    assert!(
+        out.text.contains("/admin") && out.text.contains("1 hit"),
+        "{}",
+        out.text
+    );
+    let n = spall::sweep::built_in()
+        .into_iter()
+        .find(|c| c.name == "admin-interfaces")
+        .unwrap()
+        .paths
+        .len() as u32
+        + 1;
+    assert_eq!(
+        task_of(&r, "T-1").spent,
+        before + n,
+        "every request charged"
+    );
+    assert!(stub
+        .sends()
+        .iter()
+        .rev()
+        .take(n as usize)
+        .all(|s| s["meta"]["task"] == "T-1"));
+    // Past the budget: refused up front, nothing sent.
+    let sent = stub.sends().len();
+    let out = tools
+        .call(
+            "T-1",
+            "sweep",
+            &serde_json::json!({"base": base, "check": "backup-files"}),
+        )
+        .await;
+    assert!(
+        out.is_error && out.text.contains("left of its budget"),
+        "{}",
+        out.text
+    );
+    assert_eq!(stub.sends().len(), sent);
+
+    // Bounds: out of scope, the RoE's sweep_max.
+    let res = post_text(
+        spall,
+        "/api/sweep",
+        r#"{"base":"http://evil.test/","check":"metafiles"}"#,
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 403") && res.contains("isn't in scope"),
+        "{res}"
+    );
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"sweep_max":5}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/sweep",
+        &format!(r#"{{"base":"{base}","check":"metafiles"}}"#),
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 403") && res.contains("allow 5 per sweep"),
+        "{res}"
+    );
+
+    // An engagement's own check: the tester imports it; it's data, bounded.
+    let add = |text: &str| serde_json::json!({"op": "add", "text": text}).to_string();
+    let res = post_text(
+        spall,
+        "/api/checks",
+        &add("name mine\nrule WSTG-CONF-04\nhit differs\npath https://evil.test/x"),
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 400") && res.contains("never a host"),
+        "{res}"
+    );
+    let res = post_text(
+        spall,
+        "/api/checks",
+        &add("name mine\nrule WSTG-CONF-04\nhit status 200\nhit differs\npath /robots.txt"),
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = post_text(
+        spall,
+        "/api/checks",
+        &add("name metafiles\nrule WSTG-CONF-04\nhit differs\npath /x"),
+        None,
+    )
+    .await;
+    assert!(
+        res.starts_with("HTTP/1.1 400") && res.contains("built-in"),
+        "{res}"
+    );
+    let res = post_text(
+        spall,
+        "/api/sweep",
+        &format!(r#"{{"base":"{base}","check":"mine","yes":true}}"#),
+        None,
+    )
+    .await;
+    let v = body_json(&res);
+    assert_eq!(v["hits"][0]["path"], "/robots.txt", "{v}");
+    // Agents can't import checks.
+    let out = tools.call("T-1", "scope", &serde_json::json!({})).await;
+    assert!(out.is_error);
+    let audit = audit_records(&dir.path().join("api-token"));
+    assert!(audit.iter().any(|a| a["reason"]
+        .as_str()
+        .is_some_and(|s| s.starts_with("sweep metafiles on") && s.contains("1 hits"))));
+    assert!(audit
+        .iter()
+        .any(|a| a["reason"] == "checks add mine (WSTG-CONF-04, 1 paths)"));
 }

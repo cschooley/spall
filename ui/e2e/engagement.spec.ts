@@ -415,3 +415,51 @@ test("the never-test list: add, the offered .gov and .mil, an exemption for this
     { op: "add", entry: p },
   ]);
 });
+
+test("checks for sweep: built in and imported, and sweep from the console says its cost before it runs (#75)", async ({ page }) => {
+  engagementApi(page);
+  const checks: { name: string; rule: string; title: string; method: string; paths: string[]; source: string }[] = [
+    { name: "admin-interfaces", rule: "WSTG-CONF-05", title: "Admin", method: "GET", paths: ["/admin", "/console/"], source: "built_in" },
+  ];
+  const posted: unknown[] = [];
+  await page.route("**/api/checks", async (r) => {
+    if (r.request().method() === "POST") {
+      const c = r.request().postDataJSON() as { op: string; text?: string; name?: string };
+      posted.push(c);
+      if (c.op === "add") checks.push({ name: "mine", rule: "WSTG-CONF-04", title: "mine", method: "GET", paths: ["/old"], source: "engagement" });
+      if (c.op === "remove") checks.splice(checks.findIndex((x) => x.name === c.name), 1);
+    }
+    return r.fulfill({ json: { checks } });
+  });
+  const sweeps: unknown[] = [];
+  await page.route("**/api/sweep", async (r) => {
+    const b = r.request().postDataJSON() as { yes?: boolean };
+    sweeps.push(b);
+    return r.fulfill({
+      json: b.yes
+        ? { check: "admin-interfaces", rule: "WSTG-CONF-05", base: "https://acme.test", planned: 3, sent: 3, baseline: { status: 404, size: 9 }, hits: [{ path: "/admin", exchange: "s-2", status: 401, size: 14 }], misses: 1, skipped: [], stopped: null }
+        : { check: "admin-interfaces", rule: "WSTG-CONF-05", title: "Admin", base: "https://acme.test", method: "GET", planned: 3, cost: "3 GET requests (one is the soft-404 baseline)" },
+    });
+  });
+  await page.goto("/#engagement");
+  const panel = page.getByRole("region", { name: "Checks" });
+  await expect(panel.getByRole("list", { name: "Checks list" })).toContainText("admin-interfacesWSTG-CONF-05 · 2 GET paths · built in");
+  await expect(panel.getByRole("button", { name: "Remove check admin-interfaces" })).toHaveCount(0);
+  await panel.getByLabel("Import a check").fill("name mine\nrule WSTG-CONF-04\nhit differs\npath /old");
+  await panel.getByRole("button", { name: "import" }).click();
+  await expect(panel.getByRole("list", { name: "Checks list" })).toContainText("mine");
+  expect(posted).toEqual([{ op: "add", text: "name mine\nrule WSTG-CONF-04\nhit differs\npath /old" }]);
+  await panel.getByRole("button", { name: "Remove check mine" }).click();
+  await expect(panel.getByRole("list", { name: "Checks list" })).not.toContainText("mine");
+
+  await page.keyboard.press("`");
+  const input = page.getByLabel("Console command");
+  await input.fill("sweep https://acme.test admin-interfaces");
+  await input.press("Enter");
+  const log = page.locator(".console");
+  await expect(log).toContainText("3 GET requests (one is the soft-404 baseline). sweep https://acme.test admin-interfaces --yes to run it");
+  await input.fill("sweep https://acme.test admin-interfaces --yes");
+  await input.press("Enter");
+  await expect(log).toContainText("hit /admin  401  14 B  open s-2 · flag s-2 --rule WSTG-CONF-05");
+  expect(sweeps).toEqual([{ base: "https://acme.test", check: "admin-interfaces" }, { base: "https://acme.test", check: "admin-interfaces", yes: true }]);
+});

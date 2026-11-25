@@ -88,6 +88,12 @@ export const test = base.extend<{ guard: void }>({
       await page.route(/\/api\/tasks$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { tasks: [] } }) : r.fallback()));
       // And the never-test list (#84), empty.
       await page.route(/\/api\/never-test$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { entries: [], exceptions: [] } }) : r.fallback()));
+      // And the checks for sweep (#75): the built-in ones.
+      await page.route(/\/api\/checks$/, (r) =>
+        r.request().method() === "GET"
+          ? r.fulfill({ json: { checks: [{ name: "metafiles", rule: "WSTG-INFO-03", title: "Webserver metafiles", method: "GET", paths: ["/robots.txt"], source: "built_in" }] } })
+          : r.fallback(),
+      );
       // And the intake's draft plans (#65).
       await page.route(/\/api\/plans$/, (r) => (r.request().method() === "GET" ? r.fulfill({ json: { plans: [] } }) : r.fallback()));
       page.on("dialog", async (d) => {
