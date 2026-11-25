@@ -1,0 +1,49 @@
+# Requests that look destructive (#85). Reviewed data: a match only adds
+# friction (the request is treated as unsafe: asked for, or refused for a
+# role without unsafe), never grants, and is matched only against what is
+# sent to the target (method aside): path, query and text body. Never an
+# agent's notes or reports.
+#
+# word <w>    a path segment or query-parameter name, split into words
+#             (on / - _ . and camelCase), contains the word <w>; also the
+#             value of an action-like parameter (see `action`).
+# action <p>  a parameter whose value is a verb (action=delete, op=wipe).
+# phrase <..> consecutive words anywhere in query values or the body
+#             (SQL and NoSQL that destroys data).
+#
+# Kept short on purpose: every word here is a false positive somewhere.
+# `drop` and `reset` alone are left out (dropzone, password-reset).
+
+word delete
+word remove
+word destroy
+word purge
+word wipe
+word erase
+word truncate
+word unlink
+word flush
+word nuke
+
+action action
+action op
+action operation
+action cmd
+action command
+action do
+action task
+action mode
+
+phrase reset all
+phrase factory reset
+phrase drop table
+phrase drop database
+phrase drop schema
+phrase drop collection
+phrase truncate table
+phrase delete from
+phrase flushall
+phrase flushdb
+phrase dropdatabase
+phrase dropcollection
+phrase deletemany

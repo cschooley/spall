@@ -110,6 +110,7 @@ pub struct RulesPatch {
     pub blackouts: Option<Vec<Blackout>>,
     pub agents_allowed: Option<bool>,
     pub destructive_allowed: Option<bool>,
+    pub refuse_destructive_looking: Option<bool>,
 }
 
 /// A new engagement (`POST /api/engagements`, `engagement new`).
@@ -335,6 +336,9 @@ impl Engagement {
             }
             if let Some(v) = r.destructive_allowed {
                 rule!(destructive_allowed, v);
+            }
+            if let Some(v) = r.refuse_destructive_looking {
+                rule!(refuse_destructive_looking, v);
             }
         }
         changes

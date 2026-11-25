@@ -153,6 +153,7 @@ test("hostile engagement, scope and rule strings render as text", async ({ page 
       blackouts: [{ from: "2026-12-24T00:00", to: "2026-12-27T00:00", note: p }],
       agents_allowed: false,
       destructive_allowed: false,
+      refuse_destructive_looking: false,
     },
   });
   await page.goto("/#engagement");

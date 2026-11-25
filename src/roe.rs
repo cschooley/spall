@@ -94,6 +94,10 @@ pub struct Rules {
     /// Destructive-class actions may run.
     #[serde(default)]
     pub destructive_allowed: bool,
+    /// A request that looks destructive by its path or payload (#85) is
+    /// refused outright instead of asked for. Off: it asks.
+    #[serde(default)]
+    pub refuse_destructive_looking: bool,
 }
 
 fn default_safe() -> Vec<String> {
@@ -117,6 +121,7 @@ impl Default for Rules {
             blackouts: Vec::new(),
             agents_allowed: false,
             destructive_allowed: false,
+            refuse_destructive_looking: false,
         }
     }
 }

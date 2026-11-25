@@ -21,7 +21,7 @@ export function engagementApi(page: Page, over: Json = {}) {
       notes: "",
       scope: ["*.acme.test", "!pay.acme.test"],
       target_notes: {} as Record<string, string>,
-      rules: { methods: [], safe_methods: ["GET", "HEAD", "OPTIONS"], rate_limit: 10, time_zone: "UTC", windows: [] as Json[], blackouts: [] as Json[], agents_allowed: false, destructive_allowed: false },
+      rules: { methods: [], safe_methods: ["GET", "HEAD", "OPTIONS"], rate_limit: 10, time_zone: "UTC", windows: [] as Json[], blackouts: [] as Json[], agents_allowed: false, destructive_allowed: false, refuse_destructive_looking: false },
       ...over,
     } as Json & { scope: string[]; rules: Json; target_notes: Record<string, string> },
     others: [{ id: "beta-9f00", name: "Beta", client: "", active: false }],

@@ -87,6 +87,7 @@ async function midEngagement(page: Page, traffic: TrafficEntry[] = [], toTriage 
       blackouts: [{ from: "2026-12-24T00:00", to: "2026-12-27T00:00", note: "holiday freeze" }],
       agents_allowed: false,
       destructive_allowed: false,
+      refuse_destructive_looking: false,
     },
   });
   const now = Date.now();

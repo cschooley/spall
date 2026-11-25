@@ -357,6 +357,8 @@ export function App() {
         case "confirm": {
           const label = armLabel(request.method ?? known?.method ?? "it", known ? hostOf(known) : null);
           setArmed({ id, token: result.token, label, until: Date.now() + ARM_MS });
+          // Why it asks (an unsafe method, the rules, or a request that looks destructive, #85).
+          setReplayMsg({ id, text: result.reason });
           out(`replay ${short}: ${result.reason}. ${label}, or replay ${id} --yes`, "sys");
           break;
         }

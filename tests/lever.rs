@@ -5807,3 +5807,100 @@ async fn the_never_test_list_refuses_whatever_scope_says_unless_exempted() {
     let res = never(r#"{"op":"remove","entry":"example.com"}"#).await;
     assert!(res.starts_with("HTTP/1.1 400"), "not on it: {res}");
 }
+
+/// Requests that look destructive (#85) are treated as unsafe whatever the
+/// method: a human's replay asks first, a tester's pauses naming what
+/// matched, a mapper's is refused, and the RoE can refuse them outright.
+#[tokio::test]
+async fn destructive_looking_requests_ask_first() {
+    let (_dir, stub, spall, r) = agent_setup_with(
+        "{}",
+        &["--scope", "example.com"],
+        &[("d1", "http://example.com/api/users/5/delete")],
+    )
+    .await;
+    let human =
+        |body: &'static str| async move { post_text(spall, "/api/replay", body, None).await };
+    let res = human(r#"{"id":"d1"}"#).await;
+    assert!(res.starts_with("HTTP/1.1 428"), "{res}");
+    assert!(
+        res.contains("looks destructive") && res.contains(r#"\"delete\" in the path"#),
+        "{res}"
+    );
+    let res = human(r#"{"id":"e1","body":"x'; DROP TABLE users--"}"#).await;
+    assert!(
+        res.starts_with("HTTP/1.1 428") && res.contains("drop table"),
+        "a payload: {res}"
+    );
+    assert!(
+        human(r#"{"id":"e1"}"#).await.starts_with("HTTP/1.1 200"),
+        "an ordinary GET still sends"
+    );
+    assert_eq!(stub.replays().len(), 1);
+
+    // A tester's task pauses, the approval card names the match.
+    let (status, body) = agent_send(&r, "T-1", r#"{"id":"d1"}"#).await;
+    assert_eq!(status, 202, "{body}");
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.status, spall::tasks::Status::WaitingOnApproval);
+    assert!(
+        t.pending
+            .as_ref()
+            .unwrap()
+            .reason
+            .contains("looks destructive"),
+        "{:?}",
+        t.pending
+    );
+    // A mapper's is refused, not paused.
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"map","role":"mapper"}"#,
+        None,
+    )
+    .await;
+    let id = body_json(&res)["id"].as_str().unwrap().to_string();
+    send_text(
+        spall,
+        "PATCH",
+        &format!("/api/tasks/{id}"),
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    let eng = r.engagements.active().id;
+    r.tasks
+        .transition(&eng, &id, spall::tasks::Status::Running, None, &now())
+        .unwrap();
+    let (status, body) = agent_send(&r, &id, r#"{"id":"d1"}"#).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("looks destructive"),
+        "{body}"
+    );
+
+    // Stricter rules refuse it outright.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"refuse_destructive_looking":true}}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let res = human(r#"{"id":"d1"}"#).await;
+    assert!(
+        res.starts_with("HTTP/1.1 403") && res.contains("refuse such requests"),
+        "{res}"
+    );
+    assert_eq!(
+        stub.replays().len(),
+        1,
+        "nothing destructive-looking was sent"
+    );
+}

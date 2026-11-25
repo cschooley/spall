@@ -521,7 +521,7 @@ test("roe shows the rules and whether testing is allowed now", async () => {
     "methods: any · confirm all but GET, HEAD, OPTIONS · rate 10/s · time zone UTC",
     "testing windows: any time",
     "no-test windows: none",
-    "agents: not allowed · destructive actions: not allowed",
+    "agents: not allowed · destructive actions: not allowed · requests that look destructive: asked for",
     "testing now: allowed",
   ]);
   const closed = fakeCtx({ engagement: async () => ({ ...ENG, testingNow: { allowed: false, reason: "outside the testing windows (...)" } }) });
@@ -544,6 +544,7 @@ test("roe set, window and blackout build rule changes", async () => {
     "roe set tz America/Chicago",
     "roe set agents yes",
     "roe set destructive no",
+    "roe set looks-destructive refuse",
     "roe window add mon-fri 09:00-17:00",
     "roe window remove 1",
     "roe window clear",
@@ -559,6 +560,7 @@ test("roe set, window and blackout build rule changes", async () => {
     'rules:{"time_zone":"America/Chicago"}',
     'rules:{"agents_allowed":true}',
     'rules:{"destructive_allowed":false}',
+    'rules:{"refuse_destructive_looking":true}',
     'rules:{"windows":[{"days":["sat"],"start":"10:00","end":"12:00"},{"days":["mon","tue","wed","thu","fri"],"start":"09:00","end":"17:00"}]}',
     'rules:{"windows":[]}',
     'rules:{"windows":[]}',
@@ -571,6 +573,7 @@ test("roe set, window and blackout build rule changes", async () => {
     "roe set rate fast",
     "roe set rate -1",
     "roe set agents maybe",
+    "roe set looks-destructive maybe",
     "roe set colour red",
     "roe set methods G@T",
     "roe window add funday 09:00-17:00",
@@ -588,7 +591,7 @@ test("roe set, window and blackout build rule changes", async () => {
   await execute("roe set tz Mars/Olympus", refused.ctx);
   assert.equal(refused.lines.at(-1)![1], "warn");
   assert.deepEqual(complete("roe ").options, ["set", "window", "blackout"]);
-  assert.deepEqual(complete("roe set ").options, ["methods", "safe", "rate", "tz", "agents", "destructive"]);
+  assert.deepEqual(complete("roe set ").options, ["methods", "safe", "rate", "tz", "agents", "destructive", "looks-destructive"]);
 });
 
 test("hosts lists what traffic has touched, with each host's scope state", async () => {

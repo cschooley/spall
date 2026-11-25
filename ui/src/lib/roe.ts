@@ -26,6 +26,8 @@ export interface Rules {
   blackouts: Blackout[];
   agents_allowed: boolean;
   destructive_allowed: boolean;
+  /** Refuse requests that look destructive by path or payload (#85); off: ask first. */
+  refuse_destructive_looking: boolean;
 }
 
 export const DEFAULT_RULES: Rules = {
@@ -37,6 +39,7 @@ export const DEFAULT_RULES: Rules = {
   blackouts: [],
   agents_allowed: false,
   destructive_allowed: false,
+  refuse_destructive_looking: false,
 };
 
 const isDay = (s: string): s is Day => (DAYS as readonly string[]).includes(s);
@@ -117,7 +120,7 @@ export function describeRules(r: Rules): string[] {
     `methods: ${methods} · ${safe} · ${rate} · time zone ${r.time_zone}`,
     `testing windows: ${windows}`,
     `no-test windows: ${blackouts}`,
-    `agents: ${yes(r.agents_allowed)} · destructive actions: ${yes(r.destructive_allowed)}`,
+    `agents: ${yes(r.agents_allowed)} · destructive actions: ${yes(r.destructive_allowed)} · requests that look destructive: ${r.refuse_destructive_looking ? "refused" : "asked for"}`,
   ];
 }
 
@@ -146,6 +149,7 @@ export function asRules(v: unknown): Rules {
     blackouts,
     agents_allowed: o.agents_allowed === true,
     destructive_allowed: o.destructive_allowed === true,
+    refuse_destructive_looking: o.refuse_destructive_looking === true,
   };
 }
 
@@ -157,6 +161,7 @@ export interface RulesForm {
   tz: string;
   agents: boolean;
   destructive: boolean;
+  refuseLooking: boolean;
 }
 
 export function rulesFormOf(r: Rules): RulesForm {
@@ -167,6 +172,7 @@ export function rulesFormOf(r: Rules): RulesForm {
     tz: r.time_zone,
     agents: r.agents_allowed,
     destructive: r.destructive_allowed,
+    refuseLooking: r.refuse_destructive_looking,
   };
 }
 
@@ -187,5 +193,6 @@ export function rulesPatchOf(f: RulesForm, r: Rules): Partial<Rules> | string {
   if (f.tz.trim() !== r.time_zone) patch.time_zone = f.tz.trim();
   if (f.agents !== r.agents_allowed) patch.agents_allowed = f.agents;
   if (f.destructive !== r.destructive_allowed) patch.destructive_allowed = f.destructive;
+  if (f.refuseLooking !== r.refuse_destructive_looking) patch.refuse_destructive_looking = f.refuseLooking;
   return patch;
 }

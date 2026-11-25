@@ -579,6 +579,10 @@ function RulesPanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
             <input type="checkbox" checked={form.destructive} onChange={(ev) => setForm({ ...form, destructive: ev.target.checked })} />
             <span>Destructive actions allowed</span>
           </label>
+          <label className="check">
+            <input type="checkbox" checked={form.refuseLooking} onChange={(ev) => setForm({ ...form, refuseLooking: ev.target.checked })} />
+            <span>Refuse requests that look destructive (by path or payload) instead of asking</span>
+          </label>
           <div className="actions">
             <button type="submit">save</button>
             <button type="button" onClick={() => (setForm(null), setErr(null))}>
@@ -600,6 +604,8 @@ function RulesPanel({ e, onChanged }: { e: EngagementInfo; onChanged(): void }) 
           <dd>{r.agents_allowed ? "allowed" : "not allowed"}</dd>
           <dt>destructive</dt>
           <dd>{r.destructive_allowed ? "allowed" : "not allowed"}</dd>
+          <dt>looks destructive</dt>
+          <dd>{r.refuse_destructive_looking ? "refused" : "asked for first"}</dd>
         </dl>
       )}
       <h4>Testing windows</h4>

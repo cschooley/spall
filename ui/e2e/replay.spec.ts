@@ -388,7 +388,7 @@ test("engagement commands from the console (#35); the status bar names the engag
 
 test("roe from the console (#36); the status bar says when testing isn't allowed", async ({ page }) => {
   let testing = { allowed: true, reason: null as string | null };
-  const rules = { methods: [], safe_methods: ["GET", "HEAD", "OPTIONS"], rate_limit: 10, time_zone: "UTC", windows: [] as unknown[], blackouts: [], agents_allowed: false, destructive_allowed: false };
+  const rules = { methods: [], safe_methods: ["GET", "HEAD", "OPTIONS"], rate_limit: 10, time_zone: "UTC", windows: [] as unknown[], blackouts: [], agents_allowed: false, destructive_allowed: false, refuse_destructive_looking: false };
   await page.route("**/api/status", (r) =>
     r.fulfill({
       json: { source: "log", connected: null, proxy: "127.0.0.1:8080", replay: true, scope: ["a.test"], scope_all: false, engagement: { id: "e-1", name: "E" }, testing },
@@ -419,4 +419,23 @@ test("roe from the console (#36); the status bar says when testing isn't allowed
   expect(patches).toEqual([{ rules: { windows: [{ days: ["sat"], start: "10:00", end: "12:00" }] } }]);
   await expect(page.locator(".statusbar .testing-closed")).toHaveText("● not testing now");
   await expect(page.locator(".statusbar .testing-closed")).toHaveAttribute("title", /outside the testing windows/);
+});
+
+test("a GET that looks destructive asks first, and the inspector says what matched (#85)", async ({ page }) => {
+  const t = token();
+  const orig = entry({ method: "GET", host: `${t}.example`, url: `http://${t}.example/api/users/5/delete` });
+  append(orig);
+  await replayAvailable(page);
+  const reason = 'this GET looks destructive ("delete" in the path): confirm it was meant';
+  const bodies = await mockReplay(page, (b) =>
+    b.confirm === "tok-d" ? { status: 200, json: replayOf(orig) } : { status: 428, json: { decision: "needs_confirmation", error: reason, confirm: "tok-d" } },
+  );
+  await openOnly(page, orig, t);
+  await button(page).click();
+  await expect(button(page)).toHaveText(`press again to send GET to ${t}.example⏎`);
+  await expect(page.locator(".inspector .replay-msg")).toHaveText(reason);
+  expect(bodies).toEqual([{ id: orig.id }]);
+  await button(page).click();
+  await expect(page.locator(".inspector .meta")).toContainText(`replay of ${orig.id}`);
+  expect(bodies).toEqual([{ id: orig.id }, { id: orig.id, confirm: "tok-d" }]);
 });

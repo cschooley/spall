@@ -179,6 +179,15 @@ engagement's `never_test_exceptions` (each must be on the list).
 `Replayer::change_never` audits; `GET/POST /api/never-test`, console
 `never-test` (policy), the Engagement view's Never tested panel.
 
+Destructive-looking requests (#85, done): `src/destructive.rs` checks
+what is sent (path, query, text body: `Effective.body`) against reviewed
+patterns in `src/content/destructive.txt` (words, action-like params,
+phrases), with a false-positive corpus test. In `gated_send` a match makes
+the request unsafe: the role check sees it as unsafe (a mapper is
+refused), an `Allow` becomes `NeedsConfirmation` naming the match (a
+human's two presses, an agent's pause), and RoE
+`refuse_destructive_looking` turns it into a `Deny`. It never grants.
+
 The command registry is server-side (#53, done): `src/commands.rs`
 holds name, usage, argument schema, risk class and `mcp` for every
 command, served at `GET /api/commands`. The UI's `registry.ts` adds

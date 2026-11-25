@@ -124,8 +124,8 @@ export interface EngagementSummary {
 export const ENGAGEMENT_FIELDS = ["name", "client", "starts", "ends", "expires", "notes"] as const;
 export type EngagementField = (typeof ENGAGEMENT_FIELDS)[number];
 const ROE_USAGE =
-  "usage: roe [set <methods|safe|rate|tz|agents|destructive> <value> | window add <days> <HH:MM-HH:MM> | window remove <n> | window clear | blackout add <from> <to> [note] | blackout remove <n> | blackout clear]";
-const ROE_FIELDS = ["methods", "safe", "rate", "tz", "agents", "destructive"];
+  "usage: roe [set <methods|safe|rate|tz|agents|destructive|looks-destructive> <value> | window add <days> <HH:MM-HH:MM> | window remove <n> | window clear | blackout add <from> <to> [note] | blackout remove <n> | blackout clear]";
+const ROE_FIELDS = ["methods", "safe", "rate", "tz", "agents", "destructive", "looks-destructive"];
 const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
 /** A `roe set` value as a rules change, or a message. */
@@ -151,6 +151,9 @@ function roeSet(field: string, value: string): Partial<Rules> | string {
       if (b === null) return `${field}: yes or no`;
       return field === "agents" ? { agents_allowed: b } : { destructive_allowed: b };
     }
+    case "looks-destructive":
+      // #85: a request that looks destructive asks first, or is refused.
+      return /^ask$/i.test(value) ? { refuse_destructive_looking: false } : /^refuse$/i.test(value) ? { refuse_destructive_looking: true } : "looks-destructive: ask or refuse";
     default:
       return `fields: ${ROE_FIELDS.join(", ")}`;
   }

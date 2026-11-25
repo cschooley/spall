@@ -155,6 +155,7 @@ pub fn validate_fetch(req: &FetchRequest) -> Result<Effective, String> {
                 .find(|(k, _)| k.eq_ignore_ascii_case("host"))
                 .map(|(_, v)| v.clone())
         }),
+        body: None,
     })
 }
 
@@ -229,6 +230,8 @@ pub struct Effective {
     pub method: String,
     pub url: String,
     pub host_header: Option<String>,
+    /// The request body as text, when it is text: what #85 looks at.
+    pub body: Option<String>,
 }
 
 pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
@@ -246,6 +249,16 @@ pub fn effective(original: &TrafficEntry, req: &ReplayRequest) -> Effective {
             .unwrap_or_else(|| original.method.clone()),
         url: original.url.clone(),
         host_header,
+        // The edited body if one was given as text, else the captured one
+        // if it was text; a base64 (binary) body isn't looked at.
+        body: match (&req.body, req.body_encoding.as_deref()) {
+            (Some(b), None | Some("utf8")) => Some(b.clone()),
+            (Some(_), _) => None,
+            (None, _) => match original.req_body_encoding {
+                taphttp_types::BodyEncoding::Utf8 => original.req_body.clone(),
+                _ => None,
+            },
+        },
     }
 }
 
@@ -1968,11 +1981,19 @@ impl Replayer {
                 serde_json::json!({ "error": why, "decision": "deny" }),
             );
         }
+        // A request that looks destructive by its path or payload (#85) is
+        // treated as unsafe whatever its method: asked for (or refused, if
+        // the RoE says so). It only ever adds friction.
+        let looks = crate::destructive::check(&eff.url, eff.body.as_deref());
         // The task's role (#64): a send it can't make is refused before any
         // pause or grant, since no approval widens a role.
         if let Some(t) = &task {
-            let safe = engagement.rules.is_safe(&eff.method);
-            if let Err(why) = t.role.may_send(&eff.method, safe) {
+            let safe = engagement.rules.is_safe(&eff.method) && looks.is_none();
+            let what = match &looks {
+                Some(m) => format!("{} that looks destructive ({m})", eff.method),
+                None => eff.method.clone(),
+            };
+            if let Err(why) = t.role.may_send(&what, safe) {
                 let why = format!("{}: {why}", t.id);
                 rec.outcome = Outcome::Denied;
                 rec.decision = Some("deny");
@@ -2010,6 +2031,21 @@ impl Replayer {
             },
             jiff::Timestamp::now(),
         );
+        let decision = match (decision, &looks) {
+            (Decision::Allow | Decision::NeedsConfirmation(_), Some(m))
+                if engagement.rules.refuse_destructive_looking =>
+            {
+                Decision::Deny(format!(
+                    "this {} looks destructive ({m}), and the rules of engagement refuse such requests",
+                    eff.method
+                ))
+            }
+            (Decision::Allow, Some(m)) => Decision::NeedsConfirmation(format!(
+                "this {} looks destructive ({m}): confirm it was meant",
+                eff.method
+            )),
+            (d, _) => d,
+        };
         rec.decision = Some(decision.kind());
         rec.reason = decision.reason().map(String::from);
 

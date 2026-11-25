@@ -10,6 +10,7 @@ pub mod commands;
 pub mod config;
 pub mod confirm;
 pub mod csrf;
+pub mod destructive;
 pub mod engagement;
 pub mod gate;
 pub mod host;
