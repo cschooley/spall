@@ -308,8 +308,14 @@ impl Host {
                     return;
                 }
             }
-            if !turn.text.trim().is_empty() {
-                let text = truncate(turn.text.trim(), MAX_TURN_TEXT);
+            // A turn another model answered after a decline says so.
+            let fell_back = turn.note.as_ref().filter(|_| turn.stop != Stop::Refusal);
+            if !turn.text.trim().is_empty() || fell_back.is_some() {
+                let text = match fell_back {
+                    Some(n) => format!("[{n}] {}", turn.text.trim()),
+                    None => turn.text.trim().to_string(),
+                };
+                let text = truncate(text.trim(), MAX_TURN_TEXT);
                 if let Err(e) = r.tasks.log(eng, id, Event::Turn { text }, &now) {
                     tracing::debug!("{eng}/{id}: {e}");
                 }
@@ -323,11 +329,14 @@ impl Host {
                 }
                 Stop::Refusal => {
                     self.save_transcript(eng, id, &c);
+                    let why = turn.note.as_deref().unwrap_or("no reason given");
                     self.end(
                         eng,
                         id,
                         Status::Failed,
-                        Some("the model declined to go on".into()),
+                        Some(format!(
+                            "the model API declined ({why}), and no fallback model took the turn"
+                        )),
                     );
                     return;
                 }

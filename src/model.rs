@@ -31,6 +31,10 @@ use std::time::Duration;
 
 /// The Messages API version spall speaks.
 pub const ANTHROPIC_VERSION: &str = "2026-10-21";
+/// Server-side refusal fallbacks: a turn Anthropic's safety classifiers
+/// decline (security tooling trips the `cyber` one) is re-run on the model
+/// Anthropic recommends for that category, in the same round trip.
+pub const ANTHROPIC_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 pub const ANTHROPIC_URL: &str = "https://api.anthropic.com";
 pub const ANTHROPIC_MODEL: &str = "claude-opus-5-5";
 /// Output tokens one model turn may use (thinking included).
@@ -290,6 +294,9 @@ pub struct Turn {
     pub calls: Vec<Call>,
     pub stop: Stop,
     pub usage: Usage,
+    /// Why the API declined (`cyber: …`), on a refusal; or the model that
+    /// answered instead, after a fallback. For the task log.
+    pub note: Option<String>,
 }
 
 /// A failed model call.
@@ -411,10 +418,13 @@ impl Client {
             (Provider::Anthropic, Some(k)) => {
                 req = req
                     .header("x-api-key", &k.0)
-                    .header("anthropic-version", ANTHROPIC_VERSION);
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("anthropic-beta", ANTHROPIC_FALLBACK_BETA);
             }
             (Provider::Anthropic, None) => {
-                req = req.header("anthropic-version", ANTHROPIC_VERSION);
+                req = req
+                    .header("anthropic-version", ANTHROPIC_VERSION)
+                    .header("anthropic-beta", ANTHROPIC_FALLBACK_BETA);
             }
             (Provider::Openai, Some(k)) => {
                 req = req.header("authorization", format!("Bearer {}", k.0));
@@ -564,6 +574,10 @@ pub mod anthropic {
             "messages": c.messages,
             // Cache the growing prefix: each turn resends the whole task.
             "cache_control": {"type": "ephemeral"},
+            // Security testing trips the cyber classifier on benign work: a
+            // declined turn re-runs on Anthropic's recommended model for
+            // that category instead of failing the task.
+            "fallbacks": "default",
         })
     }
 
@@ -618,12 +632,38 @@ pub mod anthropic {
                 + u("cache_read_input_tokens"),
             output_tokens: u("output_tokens"),
         };
+        // A decline says why (`stop_details`); a fallback that ran shows as
+        // a `fallback` block, and the answering model differs.
+        let note = if stop == Stop::Refusal {
+            let d = v.get("stop_details");
+            let category = d.and_then(|d| d.get("category")).and_then(Value::as_str);
+            let why = d.and_then(|d| d.get("explanation")).and_then(Value::as_str);
+            Some(match (category, why) {
+                (Some(c), Some(w)) => format!("{c}: {w}"),
+                (Some(c), None) => c.to_string(),
+                (None, Some(w)) => w.to_string(),
+                (None, None) => "no reason given".to_string(),
+            })
+        } else if content
+            .iter()
+            .any(|b| b.get("type").and_then(Value::as_str) == Some("fallback"))
+        {
+            Some(format!(
+                "answered by {} after a safety-classifier decline",
+                v.get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("a fallback model")
+            ))
+        } else {
+            None
+        };
         Ok((
             Turn {
                 text: text.join("\n"),
                 calls,
                 stop,
                 usage,
+                note,
             },
             json!({"role": "assistant", "content": content}),
         ))
@@ -744,6 +784,7 @@ pub mod openai {
             Some("stop") | None => Stop::EndTurn,
             Some(other) => Stop::Other(other.to_string()),
         };
+        let note = (stop == Stop::Refusal).then(|| "the provider's content filter".to_string());
         let u = |k: &str| {
             v.pointer(&format!("/usage/{k}"))
                 .and_then(Value::as_u64)
@@ -762,6 +803,7 @@ pub mod openai {
                     input_tokens: u("prompt_tokens"),
                     output_tokens: u("completion_tokens"),
                 },
+                note,
             },
             message,
         ))
@@ -924,6 +966,10 @@ mod tests {
         assert_eq!(req["system"], "sys");
         assert_eq!(req["tools"][0]["input_schema"]["type"], "object");
         assert_eq!(req["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            req["fallbacks"], "default",
+            "a classifier decline re-runs on the recommended model"
+        );
         assert!(
             req.get("temperature").is_none(),
             "2026-10-21 has no sampling params"
@@ -983,6 +1029,20 @@ mod tests {
             assert_eq!(t.stop, stop);
         }
         assert!(anthropic::response(&json!({"type": "error"})).is_err());
+        // A decline says why; a fallback that ran says which model answered.
+        let (t, _) = anthropic::response(&json!({"content": [], "stop_reason": "refusal",
+            "stop_details": {"type": "refusal", "category": "cyber", "explanation": "security testing"}})).unwrap();
+        assert_eq!(t.note.as_deref(), Some("cyber: security testing"));
+        let (t, _) = anthropic::response(
+            &json!({"model": "claude-opus-4-8", "stop_reason": "end_turn",
+            "content": [{"type": "fallback"}, {"type": "text", "text": "Here."}]}),
+        )
+        .unwrap();
+        assert_eq!(
+            t.note.as_deref(),
+            Some("answered by claude-opus-4-8 after a safety-classifier decline")
+        );
+        assert_eq!(t.stop, Stop::EndTurn);
     }
 
     /// A fake Messages API on loopback: what a real client sends, and
@@ -1003,6 +1063,7 @@ mod tests {
                     let n = h.fetch_add(1, Ordering::SeqCst);
                     let key = headers["x-api-key"].to_str().unwrap().to_string();
                     assert_eq!(headers["anthropic-version"], ANTHROPIC_VERSION);
+                    assert_eq!(headers["anthropic-beta"], ANTHROPIC_FALLBACK_BETA);
                     let req: Value = serde_json::from_str(&body).unwrap();
                     if req["model"] == "bad-key" {
                         let msg = json!({"error": {"message": format!("invalid x-api-key {key}")}});

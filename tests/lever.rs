@@ -4722,6 +4722,7 @@ fn turn(text: &str, calls: Vec<Call>) -> Step {
             input_tokens: 100,
             output_tokens: 10,
         },
+        note: None,
     })
 }
 

@@ -329,7 +329,11 @@ model call in flight on halt or e-stop. Each call is charged with
 `tasks::Store::charge_model` (`usage`; past `constraints.tokens` the task
 halts). Turns go in the log (4,000 characters) and the whole conversation
 in `<engagements>/tasks/transcripts/<eng>/<T-n>.json`. Tests drive it with
-a scripted `model::Model` via `App::with_model` (tests/lever.rs).
+a scripted `model::Model` via `App::with_model` (tests/lever.rs). Anthropic requests send `fallbacks: "default"`
+(beta `server-side-fallback-2026-07-01`): Opus 5.5's cyber classifier
+declines benign security tooling, and the API re-runs the turn on Opus 4.8;
+`Turn.note` carries the decline's `stop_details` or the model that answered,
+logged on the turn and in a failed task's reason.
 
 Roles (#64, done): `src/roles.rs` is the permission set (`Role::risks`,
 `may_run`, `may_send`, `may_destroy`); `src/content/roles/*.md` and
