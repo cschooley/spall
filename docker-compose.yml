@@ -57,7 +57,12 @@ services:
       - taphttp-token:/token
     # `sandbox` is spall's agent sandboxes' only way out (#13): internal (no
     # route anywhere), with taphttp as its only other member.
-    networks: [default, sandbox]
+    # A fixed address on `sandbox`: gVisor sandboxes have no Docker DNS, so
+    # they reach taphttp by IP (SPALL_SANDBOX_PROXY / _FENCE below).
+    networks:
+      default: {}
+      sandbox:
+        ipv4_address: 172.31.81.10
     restart: unless-stopped
 
   spall:
@@ -97,6 +102,8 @@ services:
       # The agent sandbox (#13) through the sandbox sensor: with the
       # `sandbox` profile, SPALL_SANDBOX_URL=http://sandboxd:8070.
       SPALL_SANDBOX_URL:
+      # taphttp's credential-only listener as a sandbox reaches it (by IP).
+      SPALL_SANDBOX_PROXY: 172.31.81.10:8090
       RUST_LOG: info
     # A local model on this machine (Ollama, llama.cpp) at host.docker.internal.
     extra_hosts:
@@ -169,8 +176,8 @@ services:
       SPALL_SANDBOXD_LISTEN: 0.0.0.0:8070
       SPALL_SANDBOX_IMAGE: spall-sandbox:dev
       SPALL_SANDBOX_NETWORK: spall-sandbox
-      SPALL_SANDBOX_PROXY: taphttp:8090
-      SPALL_SANDBOX_FENCE: taphttp:8080
+      SPALL_SANDBOX_PROXY: 172.31.81.10:8090
+      SPALL_SANDBOX_FENCE: 172.31.81.10:8080
       RUST_LOG: info
     # Root for the socket (its owner), group 10001 so the token it writes
     # (0640) is readable by spall and nobody else; no capabilities.

@@ -230,6 +230,13 @@ exercised on a `runsc` box as it lands.
   the tester's browser, fenced to the compose default network with
   `--allow-client` (which applies to `--listen` only; compose pins the
   subnets), and a credential-only `--auth-listen` for sandboxes.
+- **By address, not name.** gVisor sandboxes don't get Docker's embedded
+  DNS, so they reach taphttp at a fixed address on `sandbox`
+  (`172.31.81.10`, `--sandbox-proxy` / `--sandbox-fence` in compose). The
+  probe reports an unresolvable name as its own failure: no answer
+  because nothing resolved says nothing about the fence. It counts the
+  open listener as shut only on a connection failure (curl exit 7, 28, 52
+  or 56).
   One door with `--proxy-auth-api` would have put a password on the
   browser too.
 - **The check before anything routes** (`sandbox::check_network`, every

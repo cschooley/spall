@@ -110,7 +110,9 @@ request an issued proxy credential refused (`status: null`, `error:
 (taphttp#26). `--auth-listen` is a credential-only proxy listener
 (taphttp#27; compose: `taphttp:8090`, plaintext on the internal `sandbox`
 network), and `--allow-client 172.31.80.0/24` keeps the open `--listen`
-to the compose default network (subnets pinned in compose). Bump the `Cargo.toml` tag and the compose image together. `POST /replay` takes
+to the compose default network (subnets pinned in compose). Sandboxes
+reach taphttp by IP (`172.31.81.10`): gVisor has no Docker DNS, and the
+probe treats an unresolved name as a failure, never as a shut door. Bump the `Cargo.toml` tag and the compose image together. `POST /replay` takes
 `{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
 `req_headers` is the whole ordered list; `meta` is attribution stored on
 the recorded replay, never sent upstream (spall sends `{"actor":

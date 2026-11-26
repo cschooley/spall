@@ -375,8 +375,8 @@ pub async fn check_network(
         ));
     }
     let probe = format!(
-        "curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{fence} http://probe.invalid/; echo; \
-         curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{proxy} http://probe.invalid/"
+        "curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{fence} http://probe.invalid/; echo \" $?\"; \
+         curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{proxy} http://probe.invalid/; echo \" $?\""
     );
     let name = format!("spall-sbx-probe-{}", std::process::id());
     let mut args: Vec<String> = vec!["run".into(), "--rm".into()];
@@ -394,20 +394,42 @@ pub async fn check_network(
     })
 }
 
-/// The probe's two HTTP codes: the open listener must not answer (000),
-/// the credential-only one must ask for a credential (407).
+/// The probe's two lines, each an HTTP code and curl's exit status. The
+/// open listener must be shut (no HTTP answer, and a connection failure:
+/// refused, timed out, closed or reset), the credential-only one must ask
+/// for a credential (407). A name that doesn't resolve says nothing about
+/// either, so it's its own error, never a shut door.
 fn judge_probe(stdout: &str, network: &str, proxy: &str, fence: &str) -> Result<(), String> {
-    let codes: Vec<&str> = stdout.lines().map(str::trim).collect();
-    match codes.as_slice() {
-        [open, _] if *open != "000" => Err(format!(
-            "a sandbox on {network} reaches taphttp's open listener ({fence} answered {open}): fence it off (taphttp#27) before sandboxes get a network"
-        )),
-        [_, auth] if *auth != "407" => Err(format!(
-            "taphttp's credential-only listener ({proxy}) answered {auth}, not 407: it must refuse a sandbox without a credential (taphttp#27 --auth-listen)"
-        )),
-        [_, _] => Ok(()),
-        _ => Err("the network probe didn't run".into()),
+    let lines: Vec<(&str, &str)> = stdout
+        .lines()
+        .filter_map(|l| l.trim().split_once(' '))
+        .collect();
+    let [(open, open_exit), (auth, auth_exit)] = lines.as_slice() else {
+        return Err("the network probe didn't run".into());
+    };
+    for (addr, exit) in [(fence, *open_exit), (proxy, *auth_exit)] {
+        if exit == "5" {
+            return Err(format!(
+                "a sandbox on {network} can't resolve {addr}: give it an address there (gVisor sandboxes have no Docker DNS)"
+            ));
+        }
     }
+    if *open != "000" {
+        return Err(format!(
+            "a sandbox on {network} reaches taphttp's open listener ({fence} answered {open}): fence it off (--allow-client) before sandboxes get a network"
+        ));
+    }
+    if !matches!(*open_exit, "7" | "28" | "52" | "56") {
+        return Err(format!(
+            "the probe couldn't tell whether {fence} is shut to a sandbox on {network} (curl exit {open_exit})"
+        ));
+    }
+    if *auth != "407" {
+        return Err(format!(
+            "taphttp's credential-only listener ({proxy}) answered {auth}, not 407: it must refuse a sandbox without a credential (taphttp#27 --auth-listen)"
+        ));
+    }
+    Ok(())
 }
 
 /// `spall sandbox-shell`: a shell for the tester in a sandbox with exactly
@@ -868,15 +890,30 @@ mod tests {
     #[test]
     fn the_network_probe_wants_the_open_door_shut_and_the_locked_one_asking() {
         let j = |out: &str| judge_probe(out, "spall-sandbox", "taphttp:8090", "taphttp:8080");
-        assert_eq!(j("000\n407\n"), Ok(()));
-        assert!(j("502\n407\n")
+        // Each line: the HTTP code, then curl's exit status.
+        assert_eq!(j("000 52\n407 0\n"), Ok(()));
+        for shut in ["000 7", "000 28", "000 52", "000 56"] {
+            assert_eq!(j(&format!("{shut}\n407 0\n")), Ok(()), "{shut}");
+        }
+        assert!(j("502 0\n407 0\n")
             .unwrap_err()
             .contains("reaches taphttp's open listener"));
-        assert!(j("000\n000\n")
+        // No answer because the name doesn't resolve proves nothing about
+        // the fence (gVisor sandboxes have no Docker DNS): its own error.
+        assert!(j("000 5\n407 0\n")
+            .unwrap_err()
+            .contains("can't resolve taphttp:8080"));
+        assert!(j("000 52\n000 5\n")
+            .unwrap_err()
+            .contains("can't resolve taphttp:8090"));
+        // Some other failure isn't a shut door either.
+        assert!(j("000 6\n407 0\n").unwrap_err().contains("curl exit 6"));
+        assert!(j("000 52\n000 52\n")
             .unwrap_err()
             .contains("answered 000, not 407"));
-        assert!(j("000\n502\n").unwrap_err().contains("not 407"));
+        assert!(j("000 52\n502 0\n").unwrap_err().contains("not 407"));
         assert!(j("").is_err());
+        assert!(j("000\n407\n").is_err());
         assert_eq!(
             format!(
                 "{:?}",
@@ -956,7 +993,11 @@ mod tests {
             .await
             .unwrap();
         let a = check_network(IMAGE_DEFAULT, &open, "taphttp:8090", "taphttp:8080").await;
+        // By name: a gVisor sandbox has no Docker DNS, and that's said.
         let b = check_network(IMAGE_DEFAULT, &internal, "taphttp:8090", "taphttp:8080").await;
+        // By address, with nothing there: shut, but nothing asks for a
+        // credential either.
+        let d = check_network(IMAGE_DEFAULT, &internal, "192.0.2.1:8090", "192.0.2.1:8080").await;
         let c = check_network(
             IMAGE_DEFAULT,
             "no-such-net-spall",
@@ -967,7 +1008,9 @@ mod tests {
         docker(&["network", "rm", &open, &internal]).await.unwrap();
         assert!(a.unwrap_err().contains("isn't --internal"));
         let b = b.unwrap_err();
-        assert!(b.contains("not 407"), "{b}");
+        assert!(b.contains("can't resolve taphttp:8080"), "{b}");
+        let d = d.unwrap_err();
+        assert!(d.contains("not 407"), "{d}");
         assert!(c.unwrap_err().contains("no Docker network"));
     }
 
