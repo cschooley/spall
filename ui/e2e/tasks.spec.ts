@@ -72,6 +72,7 @@ function tasksApi(page: Page, tasks: Json[], agentModel: string | null = null) {
       const op = r.request().postDataJSON() as Json;
       state.calls.push(["PATCH", id, op]);
       if (op.op === "approve") t.status = "approved";
+      if (op.op === "approve_on") Object.assign(t, { status: "approved", goal_hosts: undefined, constraints: { ...(t.constraints as Json), hosts: op.hosts } });
       if (op.op === "halt") Object.assign(t, { status: "halted", reason: "halted by a human" });
       if (op.op === "note") (t.log as Json[]).push({ ts: "2026-11-23T20:05:00Z", kind: "note", by: "human", text: op.text });
       if (op.op === "approve_once") Object.assign(t, { status: "running", pending: undefined });
@@ -189,6 +190,19 @@ test("a new task is a draft you approve; a waiting one shows its approval inline
   ]);
   await card.getByRole("button", { name: "Approve" }).click();
   await expect(card.locator(".chip").first()).toHaveText("Approved");
+});
+
+test("a draft whose goal names a host it isn't limited to offers approving it on that host, in one press", async ({ page }) => {
+  const api = tasksApi(page, [task("T-5", "draft", { goal: `crawl juice.lab ${P}`, goal_hosts: ["juice.lab"] })]);
+  await page.goto("/#tasks/T-5");
+  const card = page.getByRole("region", { name: "Task detail" });
+  await expect(card).toContainText("Its hosts are blank, so it may reach the whole scope; the goal names juice.lab.");
+  await expect(card.getByRole("button", { name: "Approve on the whole scope" })).toBeVisible();
+  await card.getByRole("button", { name: "Approve for juice.lab" }).click();
+  await expect(card.locator(".chip").first()).toHaveText("Approved");
+  expect(api.calls).toEqual([["PATCH", "T-5", { op: "approve_on", hosts: ["juice.lab"] }]]);
+  await expect(card.getByText("the goal names")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 });
 
 test("Traffic marks what an agent made, with ◆ and a label; actor: and task: filter it (#62)", async ({ page }) => {

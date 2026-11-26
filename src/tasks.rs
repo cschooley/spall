@@ -220,6 +220,27 @@ fn in_list(list: &[String], m: &str) -> bool {
     list.iter().any(|x| x.eq_ignore_ascii_case(m))
 }
 
+/// The in-scope hosts a goal names ("crawl juice.lab"), in order, for a
+/// draft left with no hosts (the whole scope): what to offer narrowing it
+/// to. Words only; it never sets anything itself.
+pub fn goal_hosts(goal: &str, scope: &Scope) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for w in goal.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-')) {
+        let w = w.trim_matches(|c| c == '.' || c == '-');
+        if !w.contains('.') || !w.bytes().any(|b| b.is_ascii_alphabetic()) {
+            continue;
+        }
+        let v = scope.explain(w);
+        if v.state == HostState::In && v.by.as_deref() != Some("*") && !out.contains(&v.host) {
+            out.push(v.host);
+        }
+        if out.len() == MAX_HOSTS {
+            break;
+        }
+    }
+    out
+}
+
 /// `req` resolved against the engagement's `rules` and `scope`. Leaving a
 /// field out takes the RoE's; asking for more than the RoE allows is an
 /// error that says what, never silently trimmed.
@@ -762,6 +783,9 @@ pub enum Op {
     },
     /// Steer it: a human's message, kept in its log for the agent (#61).
     Note { text: String },
+    /// Draft → approved, its hosts narrowed to these first (the ones its
+    /// goal names, when it was drafted with none): one step, one record.
+    ApproveOn { hosts: Vec<String> },
     /// Change a draft (nothing else: an approved task is what was approved).
     Edit {
         goal: Option<String>,
@@ -777,6 +801,7 @@ impl Op {
     pub fn name(&self) -> &'static str {
         match self {
             Op::Approve => "approve",
+            Op::ApproveOn { .. } => "approve_on",
             Op::Halt { .. } => "halt",
             Op::Note { .. } => "note",
             Op::Edit { .. } => "edit",
@@ -1103,6 +1128,30 @@ impl Store {
                 Op::Approve => {
                     self.stopped()?;
                     authorize_rules(cx)?;
+                    move_to(t, Status::Approved, None, cx.now)?;
+                }
+                Op::ApproveOn { hosts } => {
+                    self.stopped()?;
+                    authorize_rules(cx)?;
+                    if t.status != Status::Draft {
+                        return Err(Error::Conflict(format!(
+                            "{} is {}: only a draft is approved",
+                            t.id,
+                            t.status.as_str()
+                        )));
+                    }
+                    if hosts.is_empty() {
+                        return Err(Error::Invalid(
+                            "hosts: name at least one, or approve it as it is".into(),
+                        ));
+                    }
+                    let req = Requested {
+                        hosts: Some(hosts.clone()),
+                        ..t.constraints.requested()
+                    };
+                    let c = resolve(&req, cx.rules, cx.scope).map_err(Error::Invalid)?;
+                    role_fits(t.role, &c).map_err(Error::Invalid)?;
+                    t.constraints = c;
                     move_to(t, Status::Approved, None, cx.now)?;
                 }
                 Op::Note { text } => {
@@ -2111,6 +2160,62 @@ mod tests {
             .unwrap_err();
         assert!(e.to_string().contains("destructive"), "{e}");
         assert_eq!(store.get("eng-1", &t.id).unwrap().role, Role::Tester);
+    }
+
+    #[test]
+    fn a_goal_names_the_hosts_it_means() {
+        let s = scope();
+        assert_eq!(
+            goal_hosts(
+                "Crawl https://App.test/login and v1.api.test:8443, then app.test again.",
+                &s
+            ),
+            ["app.test", "v1.api.test"]
+        );
+        // Out of scope, excluded, `*` and not-a-host words name nothing.
+        let all = Scope::parse("app.test, *").unwrap();
+        assert!(goal_hosts("look at admin.api.test and example.com", &s).is_empty());
+        assert!(goal_hosts("look at www.other.test", &all).is_empty());
+        assert!(goal_hosts("map the API, e.g. the v1 routes", &s).is_empty());
+    }
+
+    #[test]
+    fn approve_on_narrows_a_drafts_hosts_and_approves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let (r, s) = (rules(), scope());
+        let mut n = new("crawl app.test");
+        n.constraints.budget = Some(7);
+        let t = store.create("e", &n, "human", &cx(&r, &s)).unwrap();
+        let on = |h: &[&str]| Op::ApproveOn {
+            hosts: h.iter().map(|x| x.to_string()).collect(),
+        };
+
+        // Wider than the scope, or nothing at all: refused, still a draft.
+        for bad in [on(&["example.com"]), on(&[])] {
+            assert!(matches!(
+                store.apply("e", &t.id, &bad, &cx(&r, &s)),
+                Err(Error::Invalid(_))
+            ));
+        }
+        assert_eq!(store.get("e", &t.id).unwrap().status, Status::Draft);
+
+        let (_, after) = store
+            .apply("e", &t.id, &on(&["app.test"]), &cx(&r, &s))
+            .unwrap();
+        assert_eq!(after.status, Status::Approved);
+        assert_eq!(after.constraints.hosts, ["app.test"]);
+        assert_eq!(after.constraints.budget, 7, "the rest stays as drafted");
+        assert!(matches!(
+            store.apply("e", &t.id, &on(&["app.test"]), &cx(&r, &s)),
+            Err(Error::Conflict(_))
+        ));
+        assert_eq!(
+            serde_json::from_str::<Op>(r#"{"op":"approve_on","hosts":["app.test"]}"#)
+                .unwrap()
+                .name(),
+            "approve_on"
+        );
     }
 
     #[test]

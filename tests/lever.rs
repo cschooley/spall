@@ -2247,6 +2247,58 @@ async fn the_command_registry_is_served_from_the_server() {
 }
 
 #[tokio::test]
+async fn a_draft_with_no_hosts_offers_the_ones_its_goal_names() {
+    let (dir, _stub, spall) = replay_setup(&[], &[]).await;
+    let token = dir.path().join("api-token");
+    let agents = send_text(
+        spall,
+        "PATCH",
+        "/api/engagement",
+        r#"{"rules":{"agents_allowed":true}}"#,
+        None,
+    )
+    .await;
+    assert!(agents.starts_with("HTTP/1.1 200"), "{agents}");
+    let new = r#"{"goal":"crawl https://example.com/ and evil.test","role":"mapper","constraints":{"budget":20}}"#;
+    assert!(post_text(spall, "/api/tasks", new, None)
+        .await
+        .starts_with("HTTP/1.1 201"));
+
+    // Offered on the list and on the task; only what's in scope.
+    let list = body_json(&get_text(spall, "/api/tasks").await);
+    assert_eq!(
+        list["tasks"][0]["goal_hosts"],
+        serde_json::json!(["example.com"])
+    );
+    let one = body_json(&get_text(spall, "/api/tasks/T-1").await);
+    assert_eq!(one["goal_hosts"], serde_json::json!(["example.com"]));
+
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_on","hosts":["example.com"]}"#,
+        None,
+    )
+    .await;
+    let t = body_json(&res);
+    assert_eq!(t["status"], "approved", "{res}");
+    assert_eq!(
+        t["constraints"]["hosts"],
+        serde_json::json!(["example.com"])
+    );
+    assert_eq!(t["constraints"]["budget"], 20);
+    let one = body_json(&get_text(spall, "/api/tasks/T-1").await);
+    assert!(one.get("goal_hosts").is_none(), "only drafts are offered");
+
+    let rec = audit_records(&token)
+        .into_iter()
+        .find(|r| r["reason"] == "approve T-1 on example.com")
+        .expect("audited");
+    assert_eq!(rec["changes"]["status"]["after"], "approved");
+}
+
+#[tokio::test]
 async fn tasks_are_made_approved_halted_audited_and_kept_per_engagement() {
     let (dir, _stub, spall) = replay_setup(&[], &[]).await;
     let token = dir.path().join("api-token");

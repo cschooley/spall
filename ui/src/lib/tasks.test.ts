@@ -112,6 +112,8 @@ test("a full task: constraints, plan, request rows and messages", () => {
     { time: "20:00:12", who: "sys", text: `sandbox $ jq .alg ${P} → exit 0 (12 ms)` },
     { time: "20:00:13", who: "sys", text: "sandbox $ curl https://a.test/ → exit 0 (40 ms), 3 request(s), 1 refused" },
   ]);
+  assert.deepEqual(t.goalHosts, []);
+  assert.deepEqual(asTask({ ...FULL, goal_hosts: ["juice.lab", 7] })!.goalHosts, ["juice.lab"]);
   assert.equal(asTask({ goal: "no id" }), null);
   assert.deepEqual(asTasks({ tasks: [FULL, null, { id: 5 }] }).map((x) => x.id), ["T-3"]);
   assert.equal(asTasks({ tasks: [{ ...FULL, log: undefined, log_len: 9 }] })[0]!.logLen, 9);

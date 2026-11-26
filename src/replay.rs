@@ -946,12 +946,24 @@ impl Replayer {
     /// The active engagement's tasks, newest first, without their logs.
     pub fn tasks(&self) -> Vec<serde_json::Value> {
         let eng = self.engagements.active().id;
-        self.tasks.list(&eng).iter().map(|t| t.summary()).collect()
+        let scope = self.engagements.scope();
+        self.tasks
+            .list(&eng)
+            .iter()
+            .map(|t| with_goal_hosts(t, t.summary(), &scope))
+            .collect()
     }
 
     /// One of the active engagement's tasks, log included.
     pub fn task(&self, id: &str) -> Option<crate::tasks::Task> {
         self.tasks.get(&self.engagements.active().id, id)
+    }
+
+    /// [`Replayer::task`] as the UI gets it, with `goal_hosts`.
+    pub fn task_view(&self, id: &str) -> Option<serde_json::Value> {
+        let t = self.task(id)?;
+        let v = serde_json::to_value(&t).unwrap_or_default();
+        Some(with_goal_hosts(&t, v, &self.engagements.scope()))
     }
 
     /// Make a draft task (#54): only in an engagement whose rules allow
@@ -1997,6 +2009,7 @@ impl Replayer {
             Op::Halt { reason } if !reason.trim().is_empty() => {
                 format!("halt {id}: {}", short(reason))
             }
+            Op::ApproveOn { hosts } => format!("approve {id} on {}", short(&hosts.join(", "))),
             _ => format!("{} {id}", op.name()),
         });
         let cx = Context {
@@ -3173,6 +3186,22 @@ impl Replayer {
             }
         }
     }
+}
+
+/// A draft with no hosts (the whole scope) gets `goal_hosts`: the in-scope
+/// hosts its goal names, for the UI to offer approving it on those.
+fn with_goal_hosts(
+    t: &crate::tasks::Task,
+    mut v: serde_json::Value,
+    scope: &crate::gate::Scope,
+) -> serde_json::Value {
+    if t.status == crate::tasks::Status::Draft && t.constraints.hosts.is_empty() {
+        let named = crate::tasks::goal_hosts(&t.goal, scope);
+        if let (Some(o), false) = (v.as_object_mut(), named.is_empty()) {
+            o.insert("goal_hosts".into(), named.into());
+        }
+    }
+    v
 }
 
 #[cfg(test)]

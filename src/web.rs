@@ -889,7 +889,7 @@ async fn api_task(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     let Some(r) = &state.replayer else {
         return no_tasks();
     };
-    match r.task(&id) {
+    match r.task_view(&id) {
         Some(t) => axum::Json(t).into_response(),
         None => json_error(StatusCode::NOT_FOUND, "no such task"),
     }
@@ -923,7 +923,7 @@ async fn api_task_patch(
         Ok(d) => r.task_decide(&id, d),
         Err(e) => json_error(
             StatusCode::BAD_REQUEST,
-            &format!("not a task change (approve, edit, halt, approve_once, approve_for_task, deny): {e}"),
+            &format!("not a task change (approve, approve_on, edit, halt, approve_once, approve_for_task, deny): {e}"),
         ),
     }
 }

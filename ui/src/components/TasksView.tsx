@@ -222,6 +222,7 @@ function TaskCard({ t, agentModel, onChanged, onOpenExchange }: { t: Task; agent
   const waiting = asWaiting({ tasks: [rawOf(t)] })[0];
   const rows = requestRows(t);
   const list = (l: string[], empty: string) => (l.length ? l.join(", ") : empty);
+  const narrow = t.status === "draft" && !t.hosts.length ? t.goalHosts : [];
   return (
     <section className="work" aria-label="Task detail">
       <header>
@@ -230,9 +231,14 @@ function TaskCard({ t, agentModel, onChanged, onOpenExchange }: { t: Task; agent
           <Chip status={t.status} />
           <span className="note">{`${t.role} · asked by ${t.askedBy} · ${runBy(t, agentModel)}`}</span>
           <span className="spacer" />
+          {t.status === "draft" && narrow.length ? (
+            <button type="button" className="btn primary" title="Narrows its hosts to these, then approves it" onClick={() => void act({ op: "approve_on", hosts: narrow })}>
+              {`Approve for ${narrow.join(", ")}`}
+            </button>
+          ) : null}
           {t.status === "draft" ? (
-            <button type="button" className="btn primary" onClick={() => void act({ op: "approve" })}>
-              Approve
+            <button type="button" className={`btn${narrow.length ? "" : " primary"}`} onClick={() => void act({ op: "approve" })}>
+              {narrow.length ? "Approve on the whole scope" : "Approve"}
             </button>
           ) : null}
           {!finished(t.status) ? (
@@ -247,6 +253,7 @@ function TaskCard({ t, agentModel, onChanged, onOpenExchange }: { t: Task; agent
           ) : null}
         </div>
         <h2>{t.goal}</h2>
+        {narrow.length ? <p className="note">{`Its hosts are blank, so it may reach the whole scope; the goal names ${narrow.join(", ")}.`}</p> : null}
         {t.reason ? <p className="reason">{t.reason}</p> : null}
         {error ? (
           <p className="error" role="alert">

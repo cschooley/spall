@@ -179,6 +179,8 @@ export interface Task {
   usage: Usage;
   /** The agent's report on its work (#81): model-written, so text only. */
   report: { text: string; at: string } | null;
+  /** A draft with no hosts: the in-scope hosts its goal names (the server's pick), to approve it on. */
+  goalHosts: string[];
 }
 
 export interface Usage {
@@ -262,6 +264,7 @@ export function asTask(v: unknown): Task | null {
     runner: t.runner === "spall" ? "spall" : "external",
     usage: asUsage(t.usage, c.tokens),
     report: asReport(t.report),
+    goalHosts: strs(t.goal_hosts),
   };
 }
 

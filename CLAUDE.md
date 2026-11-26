@@ -298,6 +298,10 @@ trimmed; the gate (#55) must still check `Constraints::layer` with
 Humans get create/approve/edit-draft/halt over `/api/tasks`; the machine
 moves (`transition`), `log` and `charge` (budget, one lock) are
 server-internal for #55/#58.
+A draft with no hosts (the whole scope) is served with `goal_hosts`, the
+in-scope hosts its goal names (`tasks::goal_hosts`; words only, it sets
+nothing); `{"op": "approve_on", "hosts"}` narrows and approves in one step
+(the task card's **Approve for juice.lab**).
 
 **Halted is forever** (decided 2026-11-23): an e-stop, a human halt or a
 stop condition ends the task for good; it is never resumed or retried,
