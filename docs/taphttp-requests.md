@@ -5,6 +5,10 @@ here.
 
 ## Open
 
+### A response that ends short of its Content-Length vanishes
+
+[taphttp#28](https://github.com/cschooley/taphttp/issues/28): when the upstream sends fewer body bytes than its `Content-Length` (Juice Shop's `/ftp` listings: 11,309 of 11,321), taphttp closes the client connection and records nothing: no exchange, no `error`, no log line, and a credential's `sent` doesn't count it. spall's history, its agents and the sandbox's charge all miss such requests. Wanted: record the attempt with what arrived and an `error`, and pass what arrived to the client. Found by #13's live check (T-18).
+
 ### Capture filter
 
 [taphttp#23](https://github.com/cschooley/taphttp/issues/23): proxy without recording chosen hosts: record all, only matching, all except matching, or nothing. A host that isn't captured is tunneled without TLS interception. `GET`/`PUT /capture` on the lever API, with per-host counts of what went through uncaptured. `/replay` and `/send` are always recorded. spall#80 sets the filter from the engagement, including "capture only what's in scope".
