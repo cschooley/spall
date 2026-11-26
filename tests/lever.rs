@@ -4095,6 +4095,7 @@ async fn an_mcp_session_without_a_task_follows_the_queue() {
     assert!(text.contains("waiting for the tester"), "{text}");
     let (text, is_err) = m.call("task", serde_json::json!({})).await;
     assert!(!is_err && text.contains("waiting for the tester"), "{text}");
+    assert!(!text.contains("ran nothing"), "{text}");
 
     // Approved: the next call introduces T-2 and still sends nothing.
     let res = send_text(
@@ -4113,6 +4114,15 @@ async fn an_mcp_session_without_a_task_follows_the_queue() {
     // From then on, calls are T-2's.
     let (text, _) = m.call("task", serde_json::json!({})).await;
     assert!(text.contains("\"id\": \"T-2\""), "{text}");
+    // Asking `task` right after a task ends isn't a failed call: no error,
+    // and it says the task ended rather than that the call ran nothing.
+    send_text(spall, "PATCH", "/api/tasks/T-2", r#"{"op":"halt"}"#, None).await;
+    let (text, is_err) = m.call("task", serde_json::json!({})).await;
+    assert!(!is_err, "{text}");
+    assert!(
+        text.starts_with("T-2 is halted.") && !text.contains("ran nothing"),
+        "{text}"
+    );
     assert!(task_of(&r, "T-2")
         .log
         .iter()

@@ -211,8 +211,10 @@ impl Server {
     }
 
     /// What a follower is told when its task changes: why the old one is
-    /// over, and the new one's brief, or that there's nothing yet.
-    fn handover(&self, from: Option<&str>, to: Option<&str>) -> String {
+    /// over, and the new one's brief, or that there's nothing yet. `asking`
+    /// is a `task` call, which only asks where things stand: nothing was
+    /// held back, so it isn't told the call ran nothing.
+    fn handover(&self, from: Option<&str>, to: Option<&str>, asking: bool) -> String {
         let r = &self.tools.replayer;
         let e = r.engagements.active();
         let mut out = String::new();
@@ -222,7 +224,11 @@ impl Server {
                 .get(&e.id, f)
                 .map(|t| t.status.as_str().to_string())
                 .unwrap_or_else(|| "in another engagement".into());
-            out.push_str(&format!("{f} is {st}: that call ran nothing. "));
+            if asking {
+                out.push_str(&format!("{f} is {st}. "));
+            } else {
+                out.push_str(&format!("{f} is {st}: that call ran nothing. "));
+            }
         }
         match to.and_then(|id| r.tasks.get(&e.id, id)) {
             Some(t) => out.push_str(&format!(
@@ -519,6 +525,8 @@ impl Server {
             }
             "tools/call" => {
                 let name = params["name"].as_str().unwrap_or("");
+                // `task` only asks where things stand: never an error.
+                let asking = name == "task";
                 match self.turn(sid) {
                     Turn::Same(task) => {
                         let out = self.tools.call(&task, name, &params["arguments"]).await;
@@ -533,12 +541,10 @@ impl Server {
                             &to,
                             None,
                         );
-                        tool_text(self.handover(from.as_deref(), Some(&to)), true)
+                        tool_text(self.handover(from.as_deref(), Some(&to), asking), !asking)
                     }
                     Turn::Idle { from } => {
-                        // Asking where things stand isn't a mistake.
-                        let asking = name == "task" && from.is_none();
-                        tool_text(self.handover(from.as_deref(), None), !asking)
+                        tool_text(self.handover(from.as_deref(), None, asking), !asking)
                     }
                 }
             }
