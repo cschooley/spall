@@ -22,7 +22,7 @@ services:
   taphttp:
     # Published by taphttp's release workflow. Keep in step with the
     # taphttp-types tag in Cargo.toml. amd64 only for now.
-    image: ghcr.io/cschooley/taphttp:0.10.0
+    image: ghcr.io/cschooley/taphttp:0.10.1
     command:
       - start
       - --listen

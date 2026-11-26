@@ -5,10 +5,6 @@ here.
 
 ## Open
 
-### A response that ends short of its Content-Length vanishes
-
-[taphttp#28](https://github.com/cschooley/taphttp/issues/28): when the upstream sends fewer body bytes than its `Content-Length` (Juice Shop's `/ftp` listings: 11,309 of 11,321), taphttp closes the client connection and records nothing: no exchange, no `error`, no log line, and a credential's `sent` doesn't count it. spall's history, its agents and the sandbox's charge all miss such requests. Wanted: record the attempt with what arrived and an `error`, and pass what arrived to the client. Found by #13's live check (T-18).
-
 ### Capture filter
 
 [taphttp#23](https://github.com/cschooley/taphttp/issues/23): proxy without recording chosen hosts: record all, only matching, all except matching, or nothing. A host that isn't captured is tunneled without TLS interception. `GET`/`PUT /capture` on the lever API, with per-host counts of what went through uncaptured. `/replay` and `/send` are always recorded. spall#80 sets the filter from the engagement, including "capture only what's in scope".
@@ -28,6 +24,12 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.10.1
+
+### A response that ends short of its Content-Length vanishes
+
+[taphttp#28](https://github.com/cschooley/taphttp/issues/28): an upstream response short of its `Content-Length` (Juice Shop's `/ftp` listings: 11,309 of 11,321 bytes) was dropped: no exchange, no `error`, no log line. Found by #13's live check (T-18). Since v0.10.1 it is recorded with the status, headers and bytes that arrived and `error: "upstream body ended early: N of M bytes"`, and the client gets what arrived (curl exits 18, not 52); replay and send keep the partial body too. A credential's `sent` always counted it. spall needs no change: an exchange with both a status and an `error` already shows both.
 
 ## Resolved in v0.10.0
 

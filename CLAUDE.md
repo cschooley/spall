@@ -99,7 +99,7 @@ import (`src/openapi.rs`), CA setup from taphttp's `/info` and
 `/ca.pem`; the Engagement view (`#engagement`, key `1`). #33
 (scope-limited CA) moved to `later`.
 
-taphttp: v0.10.0 (`taphttp-types` 0.8.0, schema v8: every entry has
+taphttp: v0.10.1 (`taphttp-types` 0.8.0, schema v8: every entry has
 `origin`, `proxy|replay|send`, `peer`, the address taphttp connected to
 (`null` when no connection was made or before v0.8.0), and `refused`, a
 request an issued proxy credential refused (`status: null`, `error:
