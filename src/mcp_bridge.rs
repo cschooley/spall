@@ -20,8 +20,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub const USAGE: &str = "usage: spall mcp [--url http://127.0.0.1:3000] [--token-file /data/mcp-token] [--task T-n | --goal TEXT [--role mapper|scoper|tester|reporter]]
 
 Bridges an MCP client on stdin/stdout to the running spall's /mcp.
-Every session works under a task: --task names one, otherwise spall makes a
-draft (with --goal and --role) that a human approves before anything sends.
+Every session works under a task. With no options it follows the tester's
+queue: the oldest approved task for an outside client, then the next as each
+ends, with no reconnecting. --task pins one; --goal (and --role) makes a
+draft that a human approves before anything sends.
 Environment: SPALL_URL, SPALL_MCP_TOKEN_FILE.";
 
 /// Tool calls can wait on a slow target (a replay gets 120 s upstream).

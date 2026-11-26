@@ -342,7 +342,13 @@ serves streamable HTTP at `/mcp` (bearer token from `--mcp-token-file`,
 created 0600; `csrf::check_mcp` allows a headless client but refuses a
 browser's cross-site request); `src/mcp_bridge.rs` is `spall mcp`, a stdio
 bridge that forwards to the running spall (one process owns the stores).
-Sessions bind to `?task=T-n` or make a draft. Tools are
+Sessions bind to `?task=T-n` (pinned), make a draft (`?goal`/`?role`), or,
+with neither, follow the queue (`spall mcp` with no options): the oldest
+unfinished, non-draft external task no other live session holds (a hold
+lapses after 10 min of silence). A finished task's successor is introduced
+by the next call, which runs nothing; a follower's `tools/list` is every
+role's, each call still role-checked. The agent never picks: only the
+tester's approvals fill the queue. Tools are
 `commands::offered()` run in `src/agent.rs` (shared with #63's host): every
 call goes through `admit_audited` and is logged to the task. Anything
 carrying traffic goes through `src/untrusted.rs`: nonce-wrapped, labeled,

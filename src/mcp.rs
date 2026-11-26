@@ -12,8 +12,14 @@
 //! - **stdio** via `spall mcp`, a bridge that forwards each message to
 //!   the running spall over HTTP, so one process owns the stores.
 //!
-//! **Every session is bound to a task** in the active engagement: named
-//! with `?task=T-3`, or a draft made on connect (`?goal=...&role=...`).
+//! **Every session works under a task** in the active engagement: named
+//! with `?task=T-3` (pinned), a draft made on connect (`?goal=...&role=...`),
+//! or, with neither, **the tester's queue**: the oldest unfinished task for
+//! an outside client that no other live session holds. Approving a task is
+//! the hand-off; when one finishes, the session's next call introduces the
+//! next and runs nothing, so a call meant for one task never runs under
+//! another. Only the tester's approvals fill the queue: the agent never
+//! picks.
 //! Nothing sends until a human approves and starts it; promotion and
 //! export are never tools (`commands::admit`).
 
@@ -44,9 +50,27 @@ done: true (report), which ends the task; until then, a report without it saves 
 proposed and what's left. It's what the tester keeps of your work; your chat with your own client isn't kept.";
 
 struct Session {
-    task: String,
+    /// The task it works under; `None` while a follower waits.
+    task: Option<String>,
     engagement: String,
     seq: u64,
+    /// Follows the queue (no `?task`, `?goal` or `?role`).
+    follows: bool,
+    last_seen: std::time::Instant,
+}
+
+/// A follower that has said nothing for this long no longer holds its task,
+/// so a client that restarted picks it up again.
+const HOLD: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// What a follower's next call works under.
+enum Turn {
+    /// The same task as before.
+    Same(String),
+    /// A new one: say so and run nothing.
+    Switched { from: Option<String>, to: String },
+    /// Nothing to work on.
+    Idle { from: Option<String> },
 }
 
 pub struct Server {
@@ -124,12 +148,105 @@ impl Server {
         }
     }
 
-    /// The task a new session works under: the named one, or a new draft.
+    /// The oldest unfinished task for an outside client in `engagement`
+    /// that no other live session holds. Called with the sessions lock held,
+    /// so two followers never take the same task.
+    fn next_task(
+        &self,
+        sessions: &HashMap<String, Session>,
+        me: Option<&str>,
+        engagement: &str,
+    ) -> Option<String> {
+        use crate::tasks::Runner;
+        let held: std::collections::HashSet<&str> = sessions
+            .iter()
+            .filter(|(sid, s)| Some(sid.as_str()) != me && s.last_seen.elapsed() < HOLD)
+            .filter_map(|(_, s)| s.task.as_deref())
+            .collect();
+        let mut open: Vec<_> = self
+            .tools
+            .replayer
+            .tasks
+            .list(engagement)
+            .into_iter()
+            .filter(|t| {
+                t.runner == Runner::External
+                    && !t.status.finished()
+                    && t.status != crate::tasks::Status::Draft
+                    && !held.contains(t.id.as_str())
+            })
+            .collect();
+        open.sort_by_key(|t| {
+            t.id.strip_prefix("T-")
+                .and_then(|n| n.parse::<u64>().ok())
+                .unwrap_or(u64::MAX)
+        });
+        open.first().map(|t| t.id.clone())
+    }
+
+    /// Where a follower stands now: its task while it's unfinished (and in
+    /// the active engagement), else the next one, or none.
+    fn turn(&self, sid: &str) -> Turn {
+        let r = &self.tools.replayer;
+        let active = r.engagements.active().id;
+        let mut g = self.lock();
+        let (cur, eng) = match g.1.get(sid) {
+            Some(s) => (s.task.clone(), s.engagement.clone()),
+            None => return Turn::Idle { from: None },
+        };
+        if let Some(t) = &cur {
+            if eng == active && r.tasks.get(&eng, t).is_some_and(|t| !t.status.finished()) {
+                return Turn::Same(t.clone());
+            }
+        }
+        let next = self.next_task(&g.1, Some(sid), &active);
+        if let Some(s) = g.1.get_mut(sid) {
+            s.task = next.clone();
+            s.engagement = active;
+        }
+        match next {
+            Some(to) => Turn::Switched { from: cur, to },
+            None => Turn::Idle { from: cur },
+        }
+    }
+
+    /// What a follower is told when its task changes: why the old one is
+    /// over, and the new one's brief, or that there's nothing yet.
+    fn handover(&self, from: Option<&str>, to: Option<&str>) -> String {
+        let r = &self.tools.replayer;
+        let e = r.engagements.active();
+        let mut out = String::new();
+        if let Some(f) = from {
+            let st = r
+                .tasks
+                .get(&e.id, f)
+                .map(|t| t.status.as_str().to_string())
+                .unwrap_or_else(|| "in another engagement".into());
+            out.push_str(&format!("{f} is {st}: that call ran nothing. "));
+        }
+        match to.and_then(|id| r.tasks.get(&e.id, id)) {
+            Some(t) => out.push_str(&format!(
+                "Your next task is {} ({}, role {}): {}\n\nWork on it from your next call; call task for its constraints and plan.\n\n{}",
+                t.id,
+                t.status.as_str(),
+                t.role.as_str(),
+                t.goal,
+                t.role.brief()
+            )),
+            None => out.push_str(
+                "No task for you now: waiting for the tester to approve one. Call task to check again; send nothing meanwhile.",
+            ),
+        }
+        out
+    }
+
+    /// The task a new session works under: the named one, a new draft, or
+    /// (a follower) the queue's next, if any.
     fn bind(
         &self,
         query: &HashMap<String, String>,
         client: &str,
-    ) -> Result<(String, String), String> {
+    ) -> Result<(Option<String>, String), String> {
         use crate::tasks::{authorized, Context, New, Role};
         let r = &self.tools.replayer;
         let e = r.engagements.active();
@@ -139,13 +256,17 @@ impl Server {
                     "{id} is {}: a finished task never runs again; give the work as a new task",
                     t.status.as_str()
                 )),
-                Some(t) => Ok((t.id, e.id)),
+                Some(t) => Ok((Some(t.id), e.id)),
                 None => Err(format!("no task {id} in the active engagement ({})", e.id)),
             };
         }
         let scope = r.engagements.scope();
         authorized(&e.rules, &e.period(), &scope, jiff::Timestamp::now())
             .map_err(|why| format!("no task for this session: {why}"))?;
+        if !query.contains_key("goal") && !query.contains_key("role") {
+            // A follower; its task is taken under the lock in initialize.
+            return Ok((None, e.id));
+        }
         let role = match query.get("role").map(String::as_str) {
             None => Role::Mapper,
             Some(name) => Role::parse(name)
@@ -177,7 +298,7 @@ impl Server {
         let asker = format!("agent ({client})");
         r.tasks
             .create(&e.id, &new, &asker, &cx)
-            .map(|t| (t.id, e.id))
+            .map(|t| (Some(t.id), e.id))
             .map_err(|err| format!("no task for this session: {err}"))
     }
 
@@ -185,6 +306,9 @@ impl Server {
         let client = params["clientInfo"]["name"]
             .as_str()
             .unwrap_or("an MCP client");
+        let follows = !["task", "goal", "role"]
+            .iter()
+            .any(|k| query.contains_key(*k));
         let (task, engagement) = match self.bind(query, client) {
             Ok(b) => b,
             Err(why) => {
@@ -204,10 +328,15 @@ impl Server {
         let mut b = [0u8; 16];
         let _ = getrandom::fill(&mut b);
         let sid: String = b.iter().map(|x| format!("{x:02x}")).collect();
-        {
+        let task = {
             let mut g = self.lock();
             g.0 += 1;
             let seq = g.0;
+            let task = if follows {
+                self.next_task(&g.1, None, &engagement)
+            } else {
+                task
+            };
             if g.1.len() >= MAX_SESSIONS {
                 if let Some(oldest) =
                     g.1.iter()
@@ -223,29 +352,45 @@ impl Server {
                     task: task.clone(),
                     engagement,
                     seq,
+                    follows,
+                    last_seen: std::time::Instant::now(),
                 },
             );
-        }
-        self.audit(
-            &format!("session started for {task} by {client}"),
-            &task,
-            None,
-        );
-        let found = self
-            .tools
-            .replayer
-            .tasks
-            .get(&self.tools.replayer.engagements.active().id, &task);
+            task
+        };
+        let held = task.as_deref().unwrap_or("");
+        let who = if follows {
+            format!(
+                "session started following the queue ({}) by {client}",
+                if held.is_empty() { "nothing yet" } else { held }
+            )
+        } else {
+            format!("session started for {held} by {client}")
+        };
+        self.audit(&who, held, None);
+        let found = task.as_deref().and_then(|t| {
+            self.tools
+                .replayer
+                .tasks
+                .get(&self.tools.replayer.engagements.active().id, t)
+        });
         let status = found
             .as_ref()
             .map(|t| t.status.as_str())
             .unwrap_or("unknown");
-        let brief = found.map(|t| t.role.brief()).unwrap_or_default();
+        let brief = found.as_ref().map(|t| t.role.brief()).unwrap_or_default();
+        let place = match (&task, follows) {
+            (Some(t), false) => format!("This session works under task {t} (now {status})."),
+            (Some(t), true) => format!(
+                "This session follows the tester's queue: it is now working {t} (now {status}). When a task ends, your next call ends nothing new and runs nothing: it tells you the next task (or that there's none yet). Never carry work from one task into the next."
+            ),
+            (None, _) => "This session follows the tester's queue, and there's no task for you yet: call task to check; send nothing until you have one. When a task ends, your next call runs nothing and tells you the next.".into(),
+        };
         let result = json!({
             "protocolVersion": version,
             "capabilities": { "tools": { "listChanged": false } },
             "serverInfo": { "name": "spall", "version": env!("CARGO_PKG_VERSION") },
-            "instructions": format!("{INSTRUCTIONS}\n\nThis session works under task {task} (now {status}).\n\n{brief}"),
+            "instructions": format!("{INSTRUCTIONS}\n\n{place}\n\n{brief}"),
         });
         let mut res = json_response(StatusCode::OK, &rpc_result(id, result));
         if let Ok(v) = HeaderValue::from_str(&sid) {
@@ -295,10 +440,13 @@ impl Server {
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         let session = {
-            let g = self.lock();
-            g.1.get(sid).map(|s| (s.task.clone(), s.engagement.clone()))
+            let mut g = self.lock();
+            g.1.get_mut(sid).map(|s| {
+                s.last_seen = std::time::Instant::now();
+                (s.task.clone(), s.engagement.clone(), s.follows)
+            })
         };
-        let Some((task, engagement)) = session else {
+        let Some((task, engagement, follows)) = session else {
             return json_response(
                 StatusCode::NOT_FOUND,
                 &rpc_error(&id, -32001, "no such session: initialize again"),
@@ -309,6 +457,13 @@ impl Server {
             return StatusCode::ACCEPTED.into_response();
         }
         let r = &self.tools.replayer;
+        if follows {
+            return json_response(
+                StatusCode::OK,
+                &self.follower(&id, sid, method, &params).await,
+            );
+        }
+        let task = task.unwrap_or_default();
         if r.engagements.active().id != engagement {
             return json_response(
                 StatusCode::OK,
@@ -341,6 +496,56 @@ impl Server {
         json_response(StatusCode::OK, &answer)
     }
 
+    /// A follower's message: the tools are every role's (its role changes
+    /// with its task; each call is still checked against the task's role),
+    /// and a call that finds its task changed runs nothing.
+    async fn follower(&self, id: &Value, sid: &str, method: &str, params: &Value) -> Value {
+        let tool_text = |text: String, is_error: bool| {
+            rpc_result(
+                id,
+                json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }),
+            )
+        };
+        match method {
+            "ping" => rpc_result(id, json!({})),
+            "tools/list" => {
+                let mut seen = std::collections::HashSet::new();
+                let tools: Vec<Value> = crate::tasks::Role::ALL
+                    .iter()
+                    .flat_map(|r| agent::definitions(*r))
+                    .filter(|t| seen.insert(t["name"].as_str().unwrap_or("").to_string()))
+                    .collect();
+                rpc_result(id, json!({ "tools": tools }))
+            }
+            "tools/call" => {
+                let name = params["name"].as_str().unwrap_or("");
+                match self.turn(sid) {
+                    Turn::Same(task) => {
+                        let out = self.tools.call(&task, name, &params["arguments"]).await;
+                        tool_text(out.text, out.is_error)
+                    }
+                    Turn::Switched { from, to } => {
+                        self.audit(
+                            &format!(
+                                "session moved to {to} from {}",
+                                from.as_deref().unwrap_or("nothing")
+                            ),
+                            &to,
+                            None,
+                        );
+                        tool_text(self.handover(from.as_deref(), Some(&to)), true)
+                    }
+                    Turn::Idle { from } => {
+                        // Asking where things stand isn't a mistake.
+                        let asking = name == "task" && from.is_none();
+                        tool_text(self.handover(from.as_deref(), None), !asking)
+                    }
+                }
+            }
+            other => rpc_error(id, -32601, &format!("method not found: {other}")),
+        }
+    }
+
     /// `DELETE /mcp`: the client ends its session.
     pub fn delete(&self, headers: &HeaderMap) -> Response {
         if !self.authorized(headers) {
@@ -353,7 +558,8 @@ impl Server {
         let gone = self.lock().1.remove(sid);
         match gone {
             Some(s) => {
-                self.audit(&format!("session ended for {}", s.task), &s.task, None);
+                let t = s.task.unwrap_or_default();
+                self.audit(&format!("session ended for {t}"), &t, None);
                 StatusCode::OK.into_response()
             }
             None => StatusCode::NOT_FOUND.into_response(),

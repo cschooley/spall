@@ -4039,6 +4039,100 @@ async fn an_mcp_session_without_a_task_gets_a_draft_that_sends_nothing() {
     );
 }
 
+/// A session with no `?task` follows the queue: the oldest unfinished task
+/// for an outside client that no other live session holds. A finished task
+/// hands over to the next one without a reconnect, and the call that finds
+/// the switch runs nothing.
+#[tokio::test]
+async fn an_mcp_session_without_a_task_follows_the_queue() {
+    let (dir, stub, spall, r) = agent_setup("{}").await;
+    let tok = dir.path().join("api-token");
+    let mut m = Mcp::new(spall, &tok);
+    let v = body_json(&m.initialize("").await);
+    let ins = v["result"]["instructions"].as_str().unwrap().to_string();
+    assert!(ins.contains("follows the tester's queue"), "{ins}");
+    assert!(ins.contains("now working T-1"), "{ins}");
+
+    // Tools are every role's (the role can change between tasks); each
+    // call is still checked against the task's role.
+    let tools = m.rpc("tools/list", serde_json::json!({})).await;
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"replay") && names.contains(&"propose_finding"));
+    let mut dedup = names.clone();
+    dedup.sort();
+    dedup.dedup();
+    assert_eq!(dedup.len(), names.len(), "no tool twice");
+
+    // A second follower doesn't take a task another session holds.
+    let mut m2 = Mcp::new(spall, &tok);
+    let v = body_json(&m2.initialize("").await);
+    assert!(
+        v["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("no task for you yet"),
+        "{v}"
+    );
+
+    // T-1 ends; a draft isn't work. The next call sends nothing.
+    let res = post_text(
+        spall,
+        "/api/tasks",
+        r#"{"goal":"second","role":"mapper"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 201"), "{res}");
+    send_text(spall, "PATCH", "/api/tasks/T-1", r#"{"op":"halt"}"#, None).await;
+    let before = stub.replays().len();
+    let (text, is_err) = m.call("replay", serde_json::json!({"id": "e1"})).await;
+    assert!(is_err && text.contains("T-1 is halted"), "{text}");
+    assert!(text.contains("waiting for the tester"), "{text}");
+    let (text, is_err) = m.call("task", serde_json::json!({})).await;
+    assert!(!is_err && text.contains("waiting for the tester"), "{text}");
+
+    // Approved: the next call introduces T-2 and still sends nothing.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-2",
+        r#"{"op":"approve"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    let (text, is_err) = m.call("replay", serde_json::json!({"id": "e1"})).await;
+    assert!(is_err && text.contains("next task is T-2"), "{text}");
+    assert!(text.contains("mapper") && text.contains("second"), "{text}");
+    assert_eq!(stub.replays().len(), before, "the switching call ran");
+    // From then on, calls are T-2's.
+    let (text, _) = m.call("task", serde_json::json!({})).await;
+    assert!(text.contains("\"id\": \"T-2\""), "{text}");
+    assert!(task_of(&r, "T-2")
+        .log
+        .iter()
+        .any(|e| matches!(e.event, spall::tasks::Event::Command { .. })));
+    // The other follower still has nothing: T-2 is held.
+    let (text, _) = m2.call("task", serde_json::json!({})).await;
+    assert!(text.contains("waiting for the tester"), "{text}");
+
+    // A pinned session keeps working the old way.
+    let mut m3 = Mcp::new(spall, &tok);
+    let v = body_json(&m3.initialize("?task=T-1").await);
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("never runs again"),
+        "{v}"
+    );
+}
+
 #[tokio::test]
 async fn an_agent_fetches_over_mcp_and_what_it_fetched_is_evidence() {
     let (dir, stub, spall, _r) = agent_setup("{}").await;
