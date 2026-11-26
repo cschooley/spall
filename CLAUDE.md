@@ -112,7 +112,9 @@ request an issued proxy credential refused (`status: null`, `error:
 network), and `--allow-client 172.31.80.0/24` keeps the open `--listen`
 to the compose default network (subnets pinned in compose). Sandboxes
 reach taphttp by IP (`172.31.81.10`): gVisor has no Docker DNS, and the
-probe treats an unresolved name as a failure, never as a shut door. Bump the `Cargo.toml` tag and the compose image together. `POST /replay` takes
+probe treats an unresolved name as a failure, never as a shut door. The
+lever API binds taphttp's default-network address (`172.31.80.10:8081`);
+`--sandbox-fence` lists everything a sandbox must not reach (8080, 8081). Bump the `Cargo.toml` tag and the compose image together. `POST /replay` takes
 `{id, method?, req_headers?, headers?, body?, body_encoding?, meta?}`;
 `req_headers` is the whole ordered list; `meta` is attribution stored on
 the recorded replay, never sent upstream (spall sends `{"actor":

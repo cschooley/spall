@@ -66,7 +66,8 @@ pub struct Args {
     /// taphttp's credential-only listener, as seen from that network.
     #[arg(long, env = "SPALL_SANDBOX_PROXY", default_value = "taphttp:8090")]
     pub proxy: String,
-    /// taphttp's open listener, which must *not* answer from that network.
+    /// What must *not* answer from that network, comma-separated: taphttp's
+    /// open listener and lever API.
     #[arg(long, env = "SPALL_SANDBOX_FENCE", default_value = "taphttp:8080")]
     pub fence: String,
 }

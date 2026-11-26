@@ -230,6 +230,11 @@ exercised on a `runsc` box as it lands.
   the tester's browser, fenced to the compose default network with
   `--allow-client` (which applies to `--listen` only; compose pins the
   subnets), and a credential-only `--auth-listen` for sandboxes.
+- **Nothing else of taphttp's.** The lever API listens on taphttp's
+  default-network address only, and the probe checks every fenced address
+  (`--sandbox-fence`: the open listener and the lever API) gives a
+  sandbox no answer. The 2026-11-26 live check (T-17) found the lever API
+  answering on the sandbox network (401, token-protected) before this.
 - **By address, not name.** gVisor sandboxes don't get Docker's embedded
   DNS, so they reach taphttp at a fixed address on `sandbox`
   (`172.31.81.10`, `--sandbox-proxy` / `--sandbox-fence` in compose). The

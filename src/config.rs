@@ -177,8 +177,9 @@ pub struct Config {
     #[arg(long, env = "SPALL_SANDBOX_PROXY", default_value = "taphttp:8090")]
     pub sandbox_proxy: String,
 
-    /// taphttp's open proxy listener as named on the sandbox network: spall
-    /// checks a sandbox *can't* reach it before routing anything.
+    /// What a sandbox must *not* reach, as named on the sandbox network,
+    /// comma-separated (taphttp's open listener and lever API): spall checks
+    /// before routing anything.
     #[arg(long, env = "SPALL_SANDBOX_FENCE", default_value = "taphttp:8080")]
     pub sandbox_fence: String,
 

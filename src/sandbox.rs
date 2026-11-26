@@ -354,8 +354,9 @@ pub async fn check(image: &str) -> Result<(), String> {
 
 /// Whether `network` is safe to put sandboxes on (slice 2), or why not:
 /// it's `--internal` (no route out), and from a sandbox on it taphttp's
-/// open listener (`fence`) doesn't answer while its credential-only one
-/// (`proxy`) asks for a credential (407). Probed with a throwaway sandbox,
+/// fenced addresses (`fence`, comma-separated: the open listener, the lever
+/// API) don't answer while its credential-only listener (`proxy`) asks for
+/// a credential (407). Probed with a throwaway sandbox,
 /// so what's checked is what a sandbox sees.
 pub async fn check_network(
     image: &str,
@@ -374,10 +375,19 @@ pub async fn check_network(
             "the network {network} isn't --internal: a sandbox on it could route around taphttp"
         ));
     }
-    let probe = format!(
-        "curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{fence} http://probe.invalid/; echo \" $?\"; \
-         curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{proxy} http://probe.invalid/; echo \" $?\""
-    );
+    let addrs = fences(fence)?;
+    if !is_addr(proxy) {
+        return Err(format!("the sandbox proxy {proxy:?} isn't a host:port"));
+    }
+    let probe = addrs
+        .iter()
+        .chain(std::iter::once(&proxy))
+        .map(|a| {
+            format!(
+                "curl -s -o /dev/null -m 5 -w '%{{http_code}}' -x http://{a} http://probe.invalid/; echo \" $?\"; "
+            )
+        })
+        .collect::<String>();
     let name = format!("spall-sbx-probe-{}", std::process::id());
     let mut args: Vec<String> = vec!["run".into(), "--rm".into()];
     args.extend(run_flags(&name, &[("spall.probe", "1")], Some(network)));
@@ -394,35 +404,63 @@ pub async fn check_network(
     })
 }
 
-/// The probe's two lines, each an HTTP code and curl's exit status. The
-/// open listener must be shut (no HTTP answer, and a connection failure:
-/// refused, timed out, closed or reset), the credential-only one must ask
-/// for a credential (407). A name that doesn't resolve says nothing about
-/// either, so it's its own error, never a shut door.
+/// A host:port (a name, IPv4, or a bracketed IPv6), nothing a shell reads.
+fn is_addr(a: &str) -> bool {
+    !a.is_empty()
+        && a.len() <= 255
+        && a.contains(':')
+        && a.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '[' | ']'))
+}
+
+/// The fenced addresses: comma-separated host:ports, at least one.
+fn fences(fence: &str) -> Result<Vec<&str>, String> {
+    let addrs: Vec<&str> = fence.split(',').map(str::trim).collect();
+    if addrs.iter().any(|a| !is_addr(a)) {
+        return Err(format!(
+            "the sandbox fence {fence:?} isn't a comma-separated list of host:ports"
+        ));
+    }
+    Ok(addrs)
+}
+
+/// The probe's lines, one per fenced address and then the proxy, each an
+/// HTTP code and curl's exit status. Every fenced address must be shut (no
+/// HTTP answer, and a connection failure: refused, timed out, closed or
+/// reset), the credential-only listener must ask for a credential (407). A
+/// name that doesn't resolve says nothing about either, so it's its own
+/// error, never a shut door.
 fn judge_probe(stdout: &str, network: &str, proxy: &str, fence: &str) -> Result<(), String> {
+    let addrs = fences(fence)?;
     let lines: Vec<(&str, &str)> = stdout
         .lines()
         .filter_map(|l| l.trim().split_once(' '))
         .collect();
-    let [(open, open_exit), (auth, auth_exit)] = lines.as_slice() else {
+    let Some(((auth, auth_exit), shut)) = lines.split_last() else {
         return Err("the network probe didn't run".into());
     };
-    for (addr, exit) in [(fence, *open_exit), (proxy, *auth_exit)] {
+    if shut.len() != addrs.len() {
+        return Err("the network probe didn't run".into());
+    }
+    let all = addrs.iter().zip(shut).map(|(a, (_, e))| (*a, *e));
+    for (addr, exit) in all.chain(std::iter::once((proxy, *auth_exit))) {
         if exit == "5" {
             return Err(format!(
                 "a sandbox on {network} can't resolve {addr}: give it an address there (gVisor sandboxes have no Docker DNS)"
             ));
         }
     }
-    if *open != "000" {
-        return Err(format!(
-            "a sandbox on {network} reaches taphttp's open listener ({fence} answered {open}): fence it off (--allow-client) before sandboxes get a network"
-        ));
-    }
-    if !matches!(*open_exit, "7" | "28" | "52" | "56") {
-        return Err(format!(
-            "the probe couldn't tell whether {fence} is shut to a sandbox on {network} (curl exit {open_exit})"
-        ));
+    for (addr, (code, exit)) in addrs.iter().zip(shut) {
+        if *code != "000" {
+            return Err(format!(
+                "a sandbox on {network} reaches taphttp's open listener or lever API ({addr} answered {code}): fence it off before sandboxes get a network"
+            ));
+        }
+        if !matches!(*exit, "7" | "28" | "52" | "56") {
+            return Err(format!(
+                "the probe couldn't tell whether {addr} is shut to a sandbox on {network} (curl exit {exit})"
+            ));
+        }
     }
     if *auth != "407" {
         return Err(format!(
@@ -914,6 +952,20 @@ mod tests {
         assert!(j("000 52\n502 0\n").unwrap_err().contains("not 407"));
         assert!(j("").is_err());
         assert!(j("000\n407\n").is_err());
+        // Several fenced addresses (the open listener, the lever API): each
+        // must be shut, in order, then the proxy asks.
+        let k = |out: &str| {
+            judge_probe(
+                out,
+                "spall-sandbox",
+                "taphttp:8090",
+                "taphttp:8080,taphttp:8081",
+            )
+        };
+        assert_eq!(k("000 52\n000 7\n407 0\n"), Ok(()));
+        let e = k("000 52\n401 0\n407 0\n").unwrap_err();
+        assert!(e.contains("taphttp:8081 answered 401"), "{e}");
+        assert!(k("000 52\n407 0\n").is_err(), "a fence the probe skipped");
         assert_eq!(
             format!(
                 "{:?}",

@@ -30,9 +30,12 @@ services:
       - --log-file
       - /data/traffic.jsonl
       - --api-listen
-      - 0.0.0.0:8081
-      # 0.0.0.0 is needed inside the container. Both are safe only because
-      # 8080 is published on 127.0.0.1 and 8081 is never published.
+      # Its address on the default network only: a sandbox, on `sandbox`,
+      # must have no path to the lever API (it sends outside spall's gate
+      # and issues proxy credentials). spall's probe checks it's shut.
+      - 172.31.80.10:8081
+      # 8080 binds 0.0.0.0 (it's published on 127.0.0.1 only, and fenced to
+      # this network below); 8081 is never published.
       - --allow-open-proxy
       # The open door is for this compose network only (the browser arrives
       # through docker-proxy from its gateway): a sandbox, on `sandbox`, gets
@@ -60,7 +63,8 @@ services:
     # A fixed address on `sandbox`: gVisor sandboxes have no Docker DNS, so
     # they reach taphttp by IP (SPALL_SANDBOX_PROXY / _FENCE below).
     networks:
-      default: {}
+      default:
+        ipv4_address: 172.31.80.10
       sandbox:
         ipv4_address: 172.31.81.10
     restart: unless-stopped
@@ -177,7 +181,8 @@ services:
       SPALL_SANDBOX_IMAGE: spall-sandbox:dev
       SPALL_SANDBOX_NETWORK: spall-sandbox
       SPALL_SANDBOX_PROXY: 172.31.81.10:8090
-      SPALL_SANDBOX_FENCE: 172.31.81.10:8080
+      # What a sandbox must not reach: taphttp's open listener and lever API.
+      SPALL_SANDBOX_FENCE: 172.31.81.10:8080,172.31.81.10:8081
       RUST_LOG: info
     # Root for the socket (its owner), group 10001 so the token it writes
     # (0640) is readable by spall and nobody else; no capabilities.
