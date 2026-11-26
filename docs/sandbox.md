@@ -226,8 +226,10 @@ exercised on a `runsc` box as it lands.
 - **Topology.** Sandboxes join `spall-sandbox`, a Docker network created
   `internal: true` (compose defines it), whose only other member is
   taphttp. Nothing on it routes anywhere; the only way out is taphttp.
-- **Two doors in taphttp** (taphttp#27): the open `--listen` for the
-  tester's browser, and a credential-only `--auth-listen` for sandboxes.
+- **Two doors in taphttp** (taphttp#27, v0.10.0): the open `--listen` for
+  the tester's browser, fenced to the compose default network with
+  `--allow-client` (which applies to `--listen` only; compose pins the
+  subnets), and a credential-only `--auth-listen` for sandboxes.
   One door with `--proxy-auth-api` would have put a password on the
   browser too.
 - **The check before anything routes** (`sandbox::check_network`, every

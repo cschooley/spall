@@ -22,7 +22,7 @@ services:
   taphttp:
     # Published by taphttp's release workflow. Keep in step with the
     # taphttp-types tag in Cargo.toml. amd64 only for now.
-    image: ghcr.io/cschooley/taphttp:0.9.0
+    image: ghcr.io/cschooley/taphttp:0.10.0
     command:
       - start
       - --listen
@@ -34,13 +34,21 @@ services:
       # 0.0.0.0 is needed inside the container. Both are safe only because
       # 8080 is published on 127.0.0.1 and 8081 is never published.
       - --allow-open-proxy
+      # The open door is for this compose network only (the browser arrives
+      # through docker-proxy from its gateway): a sandbox, on `sandbox`, gets
+      # no answer from 8080. spall's probe checks exactly that.
+      - --allow-client
+      - 172.31.80.0/24
       - --api-allow-plaintext
+      # The agent sandboxes' way out (#13, taphttp#27): accepts only
+      # credentials spall issues per command (POST /clients). Reachable only
+      # from the internal `sandbox` network (8090 is never published), so
+      # plaintext there is the same trade as the lever API's.
+      - --auth-listen
+      - 0.0.0.0:8090
+      - --auth-listen-allow-plaintext
     environment:
       RUST_LOG: info
-      # The agent sandbox's credential-only listener (spall#13 slice 2), once
-      # taphttp has it (taphttp#27), on the sandbox network only:
-      # - --auth-listen
-      # - 0.0.0.0:8090
     ports:
       - "127.0.0.1:${TAPHTTP_PORT:-8080}:8080"
     volumes:
@@ -185,7 +193,12 @@ services:
     restart: "no"
 
 networks:
-  default: {}
+  # Subnets are pinned because taphttp's --allow-client names the default
+  # one. Pick others (both here and in --allow-client) if they collide.
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.80.0/24
   # Agent sandboxes (spall#13, docs/sandbox.md slice 2) join this and reach
   # only taphttp's credential-only listener. spall checks it with a probe
   # sandbox before routing anything: internal, the open listener (8080)
@@ -193,6 +206,9 @@ networks:
   sandbox:
     name: spall-sandbox
     internal: true
+    ipam:
+      config:
+        - subnet: 172.31.81.0/24
 
 volumes:
   sandbox-token:

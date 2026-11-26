@@ -5,10 +5,6 @@ here.
 
 ## Open
 
-### Credential-only proxy listener
-
-[taphttp#27](https://github.com/cschooley/taphttp/issues/27): `--auth-listen ADDR`, a second proxy listener that accepts only issued credentials (`/clients`) or `--proxy-auth-file` users, while `--listen` keeps its own settings; `/info` reports it as `auth_proxy: {listen, tls, auth: "issued"}`. The open `--listen` must be unreachable from the sandbox network (`--allow-client` applying to `--listen` only, or binding it to one interface). spall#13 slice 2 routes sandbox HTTP through it on a per-command credential and stays at no network until `/info` has it and a probe sandbox confirms the fence.
-
 ### Capture filter
 
 [taphttp#23](https://github.com/cschooley/taphttp/issues/23): proxy without recording chosen hosts: record all, only matching, all except matching, or nothing. A host that isn't captured is tunneled without TLS interception. `GET`/`PUT /capture` on the lever API, with per-host counts of what went through uncaptured. `/replay` and `/send` are always recorded. spall#80 sets the filter from the engagement, including "capture only what's in scope".
@@ -28,6 +24,12 @@ cannot detect a truncate-and-regrow past the previous size between polls.
 If taphttp ever rotates its log, rotating by rename (new inode) is the
 safe choice. This only matters while spall tails the file; in compose,
 spall reads history from the lever API instead (spall#4).
+
+## Resolved in v0.10.0
+
+### Credential-only proxy listener (taphttp#27)
+
+[taphttp#27](https://github.com/cschooley/taphttp/issues/27): `--auth-listen ADDR`, a second proxy listener that accepts only issued credentials (`/clients`) or `--proxy-auth-file` users, while `--listen` keeps its own settings; `/info` reports it as `auth_proxy: {listen, tls, auth: "issued"}`. The open `--listen` must be unreachable from the sandbox network (`--allow-client` applying to `--listen` only, or binding it to one interface). spall#13 slice 2 routes sandbox HTTP through it on a per-command credential and stays at no network until `/info` has it and a probe sandbox confirms the fence. spall uses it from v0.10.0: compose runs `--auth-listen 0.0.0.0:8090` and fences `--listen` with `--allow-client` on the pinned default subnet.
 
 ## Resolved in v0.9.0
 

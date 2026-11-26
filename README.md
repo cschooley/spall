@@ -61,7 +61,7 @@ Visual direction from [verdigris](https://github.com/cschooley/verdigris), Kudzu
 docker compose up --build
 ```
 
-taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.9.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
+taphttp comes from its published image (`ghcr.io/cschooley/taphttp:0.10.0`, amd64 only for now; no login needed). The first `up` compiles spall, which takes a few minutes. The spall image itself is a static binary on `scratch` (about 6 MB): no shell or OS packages, running as uid 10001. Then, in another terminal:
 
 ```sh
 curl -x http://127.0.0.1:8080 http://example.com
@@ -253,7 +253,7 @@ What to know:
 
 Agents run real tools (`curl`, `jq`, `python3`, `nmap`, `openssl`, `dig`) with `run_in_sandbox`, in a disposable sandbox per task: never a shell on the host. It's **gVisor** (`runsc`), Linux only: a read-only toolset image, a 256 MB `/scratch` that goes with the task, uid 10001, 1 CPU, 512 MB, 128 processes. Commands are argv lists, charged one unit of the task's budget each, logged on the task and audited, and their output reaches the agent as untrusted data. A Scoper or Reporter runs none. The e-stop and a halt kill a running command, and a task's sandbox is removed when it ends. The design is in [`docs/sandbox.md`](docs/sandbox.md).
 
-**Its network** goes through taphttp only. Sandboxes sit on `spall-sandbox`, an internal Docker network (compose creates it) whose only other member is taphttp, and each command gets its own taphttp credential: the task's in-scope hosts (never `*`, never a wildcard that covers an exclusion), the task's remaining budget and rate, the task's attribution. taphttp enforces those on every request; spall charges what it counted to the task and revokes the credential when the command ends (at once on the e-stop). Raw TCP has no route. This needs taphttp's credential-only listener ([taphttp#27](https://github.com/cschooley/taphttp/issues/27)): until taphttp has it, and until a probe sandbox confirms the network is fenced, sandboxes have no network at all and the status bar's **sandbox** chip says why.
+**Its network** goes through taphttp only. Sandboxes sit on `spall-sandbox`, an internal Docker network (compose creates it) whose only other member is taphttp, and each command gets its own taphttp credential: the task's in-scope hosts (never `*`, never a wildcard that covers an exclusion), the task's remaining budget and rate, the task's attribution. taphttp enforces those on every request; spall charges what it counted to the task and revokes the credential when the command ends (at once on the e-stop). Raw TCP has no route. It goes through taphttp's credential-only listener ([taphttp#27](https://github.com/cschooley/taphttp/issues/27), compose's `taphttp:8090`); the open proxy answers only the compose network (`--allow-client`). Until a probe sandbox confirms both, sandboxes have no network at all and the status bar's **sandbox** chip says why. Compose pins its networks to `172.31.80.0/24` and `172.31.81.0/24`; if those collide with yours, change them there and in taphttp's `--allow-client`.
 
 To turn it on under compose, with gVisor installed on the host ([gvisor.dev/docs/user_guide/install](https://gvisor.dev/docs/user_guide/install/), its apt repo, then `sudo runsc install && sudo systemctl restart docker`):
 
