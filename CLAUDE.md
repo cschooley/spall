@@ -149,11 +149,17 @@ redacted, validated flux report (`POST /api/export`,
 and an explicit ask, marked `flux/redacted: false`. The inspector's
 credential highlighting comes from flux (`/api/redaction`).
 
-## Current milestone: M6c "sensors"
+## M6c "sensors": done (tag `v0.9.0`)
 
+**Next milestone: not yet chosen** — candidates are an ergonomics/workflow
+pass (Juice Shop-driven; see memory) and M6d "agent loop" (#100).
+
+**M6c "sensors": done** (tag `v0.9.0`, #70). #1 OOB listener; #2 inboxes
+subsumed by #1 (below); #13 sandbox policy-complete, its pack images and
+per-pack-container lifecycle deferred (the BYO-pack runner, parked for later).
 **M6b "agent host": done** (tag `v0.8.0`, #69: #63-#67, #81, #82).
 **M6a "agent over MCP": done** (tag `v0.7.0`, #68: #53-#62, #73,
-#74, #78). Their notes stay below: M6c builds on both.
+#74, #78). Their notes stay below: M6c built on both.
 
 M6 is split in three (2026-11-23), lettered so M7 onward keep their
 numbers. Read docs/architecture.md (agent sections) and docs/ux.md
@@ -167,10 +173,11 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
 - **M6b agent host** (#69, done): #63 host, #64 roles, #65 intake,
   #66 quad, #67 buttons (all but PoC: #13), #81 task report, #82
   candidate notes.
-- **M6c sensors** (#70, current): #13 sandbox (it also carries the PoC
-  button, the last #67 verb), #1 OOB listener, #2 inboxes. Each sensor
-  is a primitive (architecture.md, *Is it a primitive?*): a stop path
-  (e-stop, halt), a budget charge, attribution.
+- **M6c sensors** (#70, done): #13 sandbox (it also carries the PoC
+  button, the last #67 verb; pack images/lifecycle deferred), #1 OOB
+  listener, #2 inboxes (subsumed by #1). Each sensor is a primitive
+  (architecture.md, *Is it a primitive?*): a stop path (e-stop, halt), a
+  budget charge, attribution.
 
 **#2 inboxes: subsumed by #1, not a separate feature (decided 2026-11-27).**
 The OOB server already receives SMTP: `oob_payload` mints a host that doubles
