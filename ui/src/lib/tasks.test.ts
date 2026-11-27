@@ -36,6 +36,10 @@ test("what approving for the task would change; an RoE confirmation is once only
   assert.equal(forTaskText(w({ kind: "time" })), "time limit 60 → 120 min");
   assert.equal(forTaskText(w({ kind: "budget" })), "budget 50 → 100 requests");
   assert.equal(forTaskText(w({ kind: "confirm" })), null);
+  // An exploitation tool is approved once, never widened for the task.
+  const tool = w({ kind: "tool", name: "sqlmap" });
+  assert.deepEqual(tool.pending.ask, { kind: "tool", name: "sqlmap" });
+  assert.equal(forTaskText(tool), null);
   assert.equal(costText(w({ kind: "confirm" })), "1 request · 3 of 50 spent");
 });
 

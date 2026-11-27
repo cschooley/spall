@@ -272,7 +272,15 @@ non-destructive proof in the sandbox, safe methods emptied so every send
 asks; the `proof-of-concept` skill (tester's) carries the convention. The
 agent hands it back with `save_poc` (agent-only, record; `agent::MAX_POCS`
 per task, 64 KiB each; needs a sandbox command or a sent request first),
-stored as a `Poc` artifact. Not a finding (`propose_finding` is).
+stored as a `Poc` artifact. Not a finding (`propose_finding` is). Slice 4b
+(toolpacks, policy layer done): `src/tools.rs` is the vetted registry (tool
+→ pack + category recon/scanner/exploitation, by program name only);
+`run_in_sandbox` gates on it — a packed tool runs only if its pack is in
+`--sandbox-packs` (`Replayer.sandbox_packs`), a destructive tool needs the
+RoE, an exploitation tool pauses the task (`Ask::Tool`, approved once by the
+argv fingerprint via the same grant/`charge_granted` path as a send). The
+pack images and proxy wrappers (per-pack containers, still no caller-named
+image) are the remaining infra, built and digest-scanned in compose.
 
 Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
 ids that must match `T-n` / `I-n` / an engagement id, a time; anything else

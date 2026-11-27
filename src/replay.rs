@@ -339,6 +339,9 @@ pub struct Replayer {
     pub sandbox: std::sync::RwLock<crate::sandbox::State>,
     /// Its network (#13 slice 2): off, waiting (and why), or ready.
     pub sandbox_net: std::sync::RwLock<crate::sandbox::NetState>,
+    /// Toolpacks the tester has enabled (#13 slice 4b): a packed tool
+    /// (`src/tools.rs`) runs only if its pack is here.
+    pub sandbox_packs: Vec<String>,
 }
 
 /// Drafts one agent's task may make with verbs (#67) before it's told to
@@ -2894,6 +2897,57 @@ impl Replayer {
         }
     }
 
+    /// Pause `task` for the tester to approve one exploitation-class sandbox
+    /// command (#13 slice 4b), binding the approval to this exact argv's
+    /// fingerprint. Returns the line the agent sees; the task is now
+    /// `waiting_on_approval` and the host parks until the tester decides.
+    async fn pause_sandbox_tool(
+        &self,
+        task: &crate::tasks::Task,
+        cmd: &crate::sandbox::Cmd,
+        tool: &crate::tools::Tool,
+        fp: String,
+    ) -> String {
+        let argv = cmd.argv.join(" ");
+        let shown: String = argv.chars().take(400).collect();
+        let reason = format!(
+            "{} is an exploitation tool: it waits for the tester to approve this exact command once",
+            tool.name
+        );
+        let pending = crate::tasks::Pending {
+            method: "run_in_sandbox".into(),
+            target: shown,
+            host_header: None,
+            request: serde_json::json!({ "argv": cmd.argv }),
+            fingerprint: fp,
+            ask: crate::tasks::Ask::Tool {
+                name: tool.name.to_string(),
+            },
+            reason: reason.clone(),
+            asked: taphttp_types::Timestamp::now().to_string(),
+        };
+        let mut rec = Record::new("sandbox", "", Outcome::Paused);
+        rec.actor = "agent".into();
+        rec.task = Some(task.id.clone());
+        rec.engagement = Some(task.engagement.clone());
+        rec.decision = Some("pause");
+        rec.reason = Some(reason.clone());
+        match self.tasks.pause(&task.engagement, &task.id, pending) {
+            Ok(_) => {
+                self.audit(&rec);
+                format!(
+                    "paused: {reason}. Call task to see where it stands; send nothing meanwhile."
+                )
+            }
+            Err(e) => {
+                rec.outcome = Outcome::Denied;
+                rec.error = Some(e.to_string());
+                self.audit(&rec);
+                format!("{reason}; and {e}")
+            }
+        }
+    }
+
     /// Run `cmd` in `task`'s sandbox. One command is one unit of the task's
     /// budget, charged before it starts (so nothing runs after an e-stop);
     /// with a network, each request it makes through taphttp is one more,
@@ -2923,9 +2977,53 @@ impl Replayer {
             )));
         }
         let now = taphttp_types::Timestamp::now().to_string();
-        self.tasks
-            .charge(&eng, &task.id, &now)
-            .map_err(|e| refuse(e.to_string()))?;
+        // Toolpacks (#13 slice 4b): a packed tool runs only if its pack is
+        // enabled; a destructive one needs the RoE; an exploitation-class one
+        // pauses the task for the tester (approved once, it comes back here).
+        let grant_fp = match crate::tools::classify(&cmd.argv[0]) {
+            None => None,
+            Some(tool) => {
+                if !self.sandbox_packs.iter().any(|p| p == tool.pack) {
+                    return Err(refuse(format!(
+                        "{} needs the '{}' toolpack, which isn't enabled here; the tester enables packs with --sandbox-pack (docs/sandbox.md)",
+                        tool.name, tool.pack
+                    )));
+                }
+                if tool.destructive && !self.engagements.active().rules.destructive_allowed {
+                    return Err(refuse(format!(
+                        "{} is a destructive tool and the rules of engagement don't allow destructive testing",
+                        tool.name
+                    )));
+                }
+                if tool.category == crate::tools::Category::Exploitation {
+                    let fp = hex(&fingerprint(
+                        &serde_json::to_vec(&cmd.argv).unwrap_or_default(),
+                    ));
+                    let granted = task.grant.as_ref().is_some_and(|g| {
+                        g.fingerprint == fp
+                            && g.expires.parse::<jiff::Timestamp>().ok()
+                                > now.parse::<jiff::Timestamp>().ok()
+                    });
+                    if granted {
+                        Some(fp)
+                    } else {
+                        return Err(self.pause_sandbox_tool(task, &cmd, tool, fp).await);
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+        match &grant_fp {
+            Some(fp) => self
+                .tasks
+                .charge_granted(&eng, &task.id, &now, fp)
+                .map_err(|e| refuse(e.to_string()))?,
+            None => self
+                .tasks
+                .charge(&eng, &task.id, &now)
+                .map_err(|e| refuse(e.to_string()))?,
+        };
         let key = crate::sandbox::Key {
             engagement: eng.clone(),
             task: task.id.clone(),

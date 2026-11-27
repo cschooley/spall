@@ -188,8 +188,18 @@ exercised on a `runsc` box as it lands.
    the Tasks view linking it. The pcap artifact waits on slice 4, which is
    where capture lands; the store already holds a `Pcap` kind for it.
 4. **Non-HTTP egress + packet capture.** Firewall allowlist, pcap artifact.
-4b. **Toolpacks and the tool registry** (above): packs per tool family,
-   category-based approval, wrappers that pass the proxy.
+4b. **Toolpacks and the tool registry** (above). *Policy layer done:*
+   `src/tools.rs` is the vetted registry (tool → pack + category, by program
+   name, never by arguments); `run_in_sandbox` gates on it — a packed tool
+   runs only if its pack is enabled (`--sandbox-packs`), a destructive tool
+   needs the RoE, an exploitation tool (`sqlmap`, `hydra`) pauses the task
+   for the tester (`Ask::Tool`, approved once by the exact argv's
+   fingerprint, resumed through the same grant path as a send). *Still to
+   do:* the pack **images** themselves (one container per task runs one
+   image today, so a pack image means per-pack containers through
+   `Runsc`/`Remote`/`sandboxd` — the caller still never names an image) and
+   the proxy-passing wrappers; both are infra pinned by digest and scanned
+   in compose.
 5. **Discovery tools for the Scoper.** Subdomain/port results into the
    asset inventory (#95); scope changes stay proposals (#91) through the
    guardrails (#83).

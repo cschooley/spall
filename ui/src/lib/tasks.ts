@@ -9,6 +9,7 @@ export type Ask =
   | { kind: "method"; method: string }
   | { kind: "unsafe"; method: string }
   | { kind: "confirm" }
+  | { kind: "tool"; name: string }
   | { kind: "time" }
   | { kind: "budget" };
 
@@ -33,6 +34,8 @@ function asAsk(v: unknown): Ask | null {
     case "method":
     case "unsafe":
       return { kind: o.kind, method: str(o.method) };
+    case "tool":
+      return { kind: "tool", name: str(o.name) };
     case "confirm":
     case "time":
     case "budget":
@@ -90,6 +93,7 @@ export function forTaskText(w: Waiting): string | null {
     case "budget":
       return `budget ${w.budget} → ${Math.min(w.budget * 2, 100000)} requests`;
     case "confirm":
+    case "tool":
       return null;
   }
 }

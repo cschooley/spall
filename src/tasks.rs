@@ -599,6 +599,9 @@ pub enum Ask {
     Unsafe { method: String },
     /// The rules of engagement want this confirmed: only "once" can.
     Confirm,
+    /// An exploitation-class sandbox tool (#13 slice 4b): the tester sees
+    /// the exact argv and approves it once.
+    Tool { name: String },
     /// The task's time limit is used up.
     Time,
     /// The task's budget is spent.
@@ -685,6 +688,11 @@ impl Constraints {
             Ask::Unsafe { method } => add(&mut r.safe_methods, method),
             Ask::Confirm => {
                 return Err("only the rules of engagement can lift that: approve it once".into())
+            }
+            Ask::Tool { name } => {
+                return Err(format!(
+                    "an exploitation tool ({name}) is approved once, not widened for the task"
+                ))
             }
             Ask::Time => {
                 r.time_limit_minutes =

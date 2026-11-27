@@ -41,6 +41,7 @@ pub mod surface;
 pub mod sweep;
 pub mod tailer;
 pub mod tasks;
+pub mod tools;
 pub mod untrusted;
 pub mod verbs;
 pub mod web;
@@ -326,6 +327,13 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                     },
                 ),
                 sandbox_net: std::sync::RwLock::new(sandbox::NetState::Off),
+                sandbox_packs: config
+                    .sandbox_packs
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect(),
             }))
         }
         None => None,

@@ -183,6 +183,15 @@ pub struct Config {
     #[arg(long, env = "SPALL_SANDBOX_FENCE", default_value = "taphttp:8080")]
     pub sandbox_fence: String,
 
+    /// Toolpacks the tester has enabled (#13 slice 4b, docs/sandbox.md):
+    /// the pack names (`fuzz`, `scan`, `sqli`, `creds`) whose tools a task
+    /// may run in the sandbox. Comma-separated; empty by default, so a
+    /// packed tool (sqlmap, ffuf, …) is refused until its pack is enabled.
+    /// Base-image tools need no pack. An exploitation-class tool still
+    /// pauses the task for the tester even when its pack is on.
+    #[arg(long, env = "SPALL_SANDBOX_PACKS", default_value = "")]
+    pub sandbox_packs: String,
+
     /// The sandbox sensor (`spall sandboxd`) to run sandboxes through, e.g.
     /// `http://sandboxd:8070` under compose. Instead of starting containers
     /// itself, spall asks it; the image and network are sandboxd's own.

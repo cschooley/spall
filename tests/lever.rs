@@ -7012,6 +7012,83 @@ async fn an_agent_runs_tools_in_its_task_sandbox_charged_logged_and_stoppable() 
     )));
 }
 
+/// Toolpacks (#13 slice 4b): a packed tool runs only if its pack is enabled;
+/// an exploitation-class tool pauses the task for the tester, who approves
+/// the exact argv once.
+#[tokio::test]
+async fn sandbox_toolpacks_gate_a_packed_tool_by_its_category() {
+    use spall::sandbox::{Fake, State};
+    use spall::tasks::Status;
+    let (_dir, _stub, spall, r) = agent_setup_with(
+        r#"{"budget":10}"#,
+        &["--scope", "example.com", "--sandbox-packs", "fuzz,sqli"],
+        &[],
+    )
+    .await;
+    let tools = spall::agent::Tools {
+        replayer: r.clone(),
+        hub: Arc::new(spall::hub::Hub::new(16)),
+    };
+    *r.sandbox.write().unwrap() = State::Ready(Arc::new(Fake::default()));
+    let run = |argv: serde_json::Value| {
+        let tools = tools.clone();
+        async move {
+            tools
+                .call(
+                    "T-1",
+                    "run_in_sandbox",
+                    &serde_json::json!({ "argv": argv }),
+                )
+                .await
+        }
+    };
+
+    // A tool whose pack isn't enabled: refused, nothing charged.
+    let out = run(serde_json::json!(["nuclei", "-u", "http://example.com/"])).await;
+    assert!(
+        out.is_error && out.text.contains("'scan' toolpack"),
+        "{}",
+        out.text
+    );
+    assert_eq!(task_of(&r, "T-1").spent, 0);
+
+    // A scanner whose pack is enabled: runs under the task (no pause), charged.
+    let out = run(serde_json::json!(["ffuf", "-u", "http://example.com/FUZZ"])).await;
+    assert!(!out.is_error, "{}", out.text);
+    assert_eq!(task_of(&r, "T-1").spent, 1);
+    assert_eq!(task_of(&r, "T-1").status, Status::Running);
+
+    // An exploitation tool pauses the task for the tester; nothing charged.
+    let sqlmap = serde_json::json!(["sqlmap", "-u", "http://example.com/?id=1", "--batch"]);
+    let out = run(sqlmap.clone()).await;
+    assert!(out.is_error && out.text.contains("paused"), "{}", out.text);
+    let t = task_of(&r, "T-1");
+    assert_eq!(t.status, Status::WaitingOnApproval);
+    assert_eq!(t.spent, 1, "a pause charges nothing");
+    let pend = t.pending.as_ref().expect("a pending");
+    assert!(pend.target.contains("sqlmap -u"), "{}", pend.target);
+    assert!(matches!(&pend.ask, spall::tasks::Ask::Tool { name } if name == "sqlmap"));
+
+    // The tester approves it once; the retry runs it and is charged.
+    let res = send_text(
+        spall,
+        "PATCH",
+        "/api/tasks/T-1",
+        r#"{"op":"approve_once"}"#,
+        None,
+    )
+    .await;
+    assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+    assert_eq!(task_of(&r, "T-1").status, Status::Running);
+    let out = run(sqlmap.clone()).await;
+    assert!(!out.is_error, "{}", out.text);
+    assert_eq!(task_of(&r, "T-1").spent, 2, "the approved run is charged");
+    // The grant is used up: a second run pauses again.
+    let out = run(sqlmap).await;
+    assert!(out.is_error && out.text.contains("paused"), "{}", out.text);
+    assert_eq!(task_of(&r, "T-1").status, Status::WaitingOnApproval);
+}
+
 /// A Scoper runs no tools; the reaper removes the sandbox of a task that
 /// finished.
 #[tokio::test]
