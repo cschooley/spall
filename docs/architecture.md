@@ -23,6 +23,17 @@ Kudzu --flux retest requests--> spall
 
 A Burp-style thick client was considered and rejected. spall is a web UI plus an MCP server.
 
+**Non-goal: spall proves, it does not exploit.** spall finds a vulnerability and
+produces an easy-to-follow proof that it is real — minimal, non-destructive,
+reproducible (a developer can paste it and watch it break) — so it gets fixed.
+It does not weaponize, chain one exploit into the next, move laterally, escalate
+privileges, or persist access. That is the Burp lane (find and demonstrate web
+vulns), not the Metasploit / kill-chain lane. Post-exploitation is a different
+tool for a different engagement, deliberately out of scope here. This is why the
+sandbox base image is first-principles only (`curl`, `python3`), the
+`proof-of-concept` skill demonstrates minimally rather than weaponizes, and the
+agent proposes while a human promotes.
+
 ## Two tiers: candidates vs findings
 
 | | spall (workbench) | Kudzu (system of record) |
