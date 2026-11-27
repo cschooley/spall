@@ -3892,6 +3892,8 @@ async fn mcp_over_http_needs_the_token_and_works_under_its_task() {
             "retest",
             "variants",
             "escalate",
+            "poc",
+            "save_poc",
             "retest_result"
         ]
     );
@@ -6881,6 +6883,41 @@ async fn an_agent_runs_tools_in_its_task_sandbox_charged_logged_and_stoppable() 
             .await
             .starts_with("HTTP/1.1 404"),
         "unknown artifact is 404"
+    );
+
+    // save_poc (#13 slice 7) stores the proof as a Poc artifact on the task.
+    let out = tools
+        .call(
+            "T-1",
+            "save_poc",
+            &serde_json::json!({"proof": "GET /a?id=2 -> 200 shows owner=alice (not me); IDOR, read-only.", "label": "idor-poc.txt"}),
+        )
+        .await;
+    assert!(
+        !out.is_error && out.text.contains("saved the PoC"),
+        "{}",
+        out.text
+    );
+    let arts = body_json(&get_text(spall, "/api/tasks/T-1/artifacts").await);
+    let poc = arts["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["kind"] == "poc")
+        .expect("a poc artifact");
+    assert_eq!(poc["label"], "idor-poc.txt");
+    let body = get_text(
+        spall,
+        &format!("/api/artifacts/{}", poc["id"].as_str().unwrap()),
+    )
+    .await;
+    assert!(body.contains("IDOR, read-only"), "{body}");
+    // An empty proof is refused.
+    assert!(
+        tools
+            .call("T-1", "save_poc", &serde_json::json!({"proof": "   "}))
+            .await
+            .is_error
     );
     let st = body_json(&get_text(spall, "/api/status").await);
     assert_eq!(

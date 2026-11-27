@@ -1159,6 +1159,54 @@ export const SPECS = [
     "args": {
       "additionalProperties": false,
       "properties": {
+        "id": {
+          "description": "the candidate, like c-1a2b3c4d",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "desc": "Build a PoC: drafts a tester task to build a standalone, non-destructive proof in the sandbox (#13). ~30 requests, every one asked for",
+    "hidden": false,
+    "mcp": true,
+    "name": "poc",
+    "risk": "record",
+    "ui": true,
+    "usage": "poc <candidate-id>"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "description": "a short filename, like idor-poc.txt",
+          "type": "string"
+        },
+        "proof": {
+          "description": "the proof: the exact request(s), the response that shows it, and what a reader should see",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proof"
+      ],
+      "type": "object"
+    },
+    "desc": "save the non-destructive proof you built in the sandbox as a task artifact for the tester; it's not a finding (propose_finding is)",
+    "hidden": false,
+    "mcp": true,
+    "name": "save_poc",
+    "risk": "record",
+    "ui": false,
+    "usage": "save_poc"
+  },
+  {
+    "args": {
+      "additionalProperties": false,
+      "properties": {
         "candidate": {
           "description": "the candidate, like c-1a2b3c4d",
           "type": "string"

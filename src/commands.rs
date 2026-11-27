@@ -891,6 +891,38 @@ pub static COMMANDS: &[Command] = &[
         args: || obj(&[("id", text("the candidate, like c-1a2b3c4d"))], &["id"]),
     },
     Command {
+        name: "poc",
+        usage: "poc <candidate-id>",
+        desc: "Build a PoC: drafts a tester task to build a standalone, non-destructive proof in the sandbox (#13). ~30 requests, every one asked for",
+        // A verb (#67, src/verbs.rs): drafts a task from the candidate. The
+        // proof is built in the sandbox and handed back with save_poc.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: true,
+        args: || obj(&[("id", text("the candidate, like c-1a2b3c4d"))], &["id"]),
+    },
+    Command {
+        name: "save_poc",
+        usage: "save_poc",
+        desc: "save the non-destructive proof you built in the sandbox as a task artifact for the tester; it's not a finding (propose_finding is)",
+        // The agent's own tool (#13 slice 7): stores the proof as a Poc
+        // artifact on the task. The task must have done real work first.
+        risk: Risk::Record,
+        mcp: true,
+        hidden: false,
+        ui: false,
+        args: || {
+            obj(
+                &[
+                    ("proof", text("the proof: the exact request(s), the response that shows it, and what a reader should see")),
+                    ("label", text("a short filename, like idor-poc.txt")),
+                ],
+                &["proof"],
+            )
+        },
+    },
+    Command {
         name: "retest_result",
         usage: "retest_result",
         desc: "file a retest's verdict on a candidate: reproduces, fixed or unclear, with the replay this task sent that shows it. Fixed sets flux status fixed; the tester can reopen it",
@@ -1242,6 +1274,7 @@ mod tests {
         assert!(COMMANDS.iter().filter(|c| !c.ui).all(|c| matches!(
             c.name,
             "propose_finding"
+                | "save_poc"
                 | "report"
                 | "skill"
                 | "retest_result"
@@ -1284,6 +1317,8 @@ mod tests {
                 "retest",
                 "variants",
                 "escalate",
+                "poc",
+                "save_poc",
                 "retest_result"
             ]
         );

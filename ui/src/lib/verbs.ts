@@ -27,6 +27,7 @@ export const VERBS: readonly Verb[] = [
   { name: "retest", label: "Retest", on: "candidate", role: "tester", hint: (n) => `~${Math.min(50, Math.max(5, 3 * n))} requests, the evidence's methods` },
   { name: "variants", label: "Find variants", on: "candidate", role: "tester", hint: () => "~60 requests; unsafe ones asked for" },
   { name: "escalate", label: "Escalate impact", on: "candidate", role: "tester", hint: () => "~30 requests, every one asked for" },
+  { name: "poc", label: "Build a PoC", on: "candidate", role: "tester", hint: () => "~30 requests, every one asked for; a sandbox proof" },
 ];
 
 /** `test_for`'s WSTG categories (src/verbs.rs CATEGORIES). */

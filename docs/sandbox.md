@@ -195,12 +195,14 @@ exercised on a `runsc` box as it lands.
    guardrails (#83).
 6. **Headless browser.** A browser the agent drives (SPAs, real logins, DOM
    XSS proof); its traffic through taphttp under the same enforcement.
-7. **PoC button (#67's last verb).** Registry `poc` on a candidate
+7. **PoC button (#67's last verb, done).** Registry `poc` on a candidate
    (palette, console, MCP, Findings-pane button like the other verbs in
    `src/verbs.rs`): drafts a Tester task to build a standalone,
    non-destructive proof in the sandbox (XSS proves with `document.domain`,
-   never a cookie stealer; IDOR reads, never writes). States cost first;
-   the proof returns as a task artifact.
+   never a cookie stealer; IDOR reads, never writes), safe methods emptied
+   so every send asks. The `proof-of-concept` skill carries the convention.
+   The agent hands the proof back with `save_poc`, which stores it as a
+   `Poc` artifact (slice 3); it is not a finding (`propose_finding` is).
 
 ## What slice 1 taught us
 

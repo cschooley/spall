@@ -40,13 +40,14 @@ const ROLE_FILES: [(Role, &str); 4] = [
     (Role::Reporter, include_str!("content/roles/reporter.md")),
 ];
 
-const SKILL_FILES: [&str; 6] = [
+const SKILL_FILES: [&str; 7] = [
     include_str!("content/skills/scope-review/SKILL.md"),
     include_str!("content/skills/map-surface/SKILL.md"),
     include_str!("content/skills/test-authz/SKILL.md"),
     include_str!("content/skills/test-injection/SKILL.md"),
     include_str!("content/skills/retest/SKILL.md"),
     include_str!("content/skills/writeup/SKILL.md"),
+    include_str!("content/skills/proof-of-concept/SKILL.md"),
 ];
 
 /// `---\nkey: value\n...\n---\nbody`, as (fields, body). Only the simple

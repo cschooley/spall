@@ -19,7 +19,10 @@ test("every verb is a registry command: palette, console and MCP alike (#67)", (
     verbsOn("exchange").map((v) => v.name),
     ["why", "map_auth", "test_for"],
   );
-  assert.ok(!VERBS.some((v) => v.name === "poc"), "hidden until the sandbox (#13)");
+  assert.ok(
+    verbsOn("candidate").some((v) => v.name === "poc"),
+    "poc is a candidate verb now the sandbox is built (#13)",
+  );
 });
 
 test("a draft is read from the answer, or the error passed on", () => {

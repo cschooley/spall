@@ -390,6 +390,7 @@ test("every command has a risk class; replay sends traffic and scope changes pol
       ["retest", "record"],
       ["variants", "record"],
       ["escalate", "record"],
+      ["poc", "record"],
     ],
   );
   assert.ok(COMMANDS.filter((c) => c.risk === "policy").every((c) => !c.mcp), "agents never change the rules");

@@ -265,8 +265,14 @@ command's full output (the agent still sees 16 KiB) is stored as an
 `Output` artifact; `run_in_sandbox` names it in `Event::Sandbox.artifact`
 and `Ran.artifact`. `GET /api/tasks/{id}/artifacts` lists, `GET
 /api/artifacts/{id}` serves the bytes; the Tasks view links each sandbox
-command's "full output". Pcap artifacts wait on slice 4 (capture); the PoC
-button (slice 7) will `put` a `Poc` artifact.
+command's "full output". Pcap artifacts wait on slice 4 (capture). Slice 7
+(PoC button, #67's last verb, done): `poc` on a candidate (`src/verbs.rs`,
+registry `poc` record/mcp/ui) drafts a Tester task to build a standalone,
+non-destructive proof in the sandbox, safe methods emptied so every send
+asks; the `proof-of-concept` skill (tester's) carries the convention. The
+agent hands it back with `save_poc` (agent-only, record; `agent::MAX_POCS`
+per task, 64 KiB each; needs a sandbox command or a sent request first),
+stored as a `Poc` artifact. Not a finding (`propose_finding` is).
 
 Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
 ids that must match `T-n` / `I-n` / an engagement id, a time; anything else

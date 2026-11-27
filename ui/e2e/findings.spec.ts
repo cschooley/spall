@@ -294,15 +294,15 @@ test("agent buttons draft a pre-filled task with its cost shown first; retests s
   const agent = page.getByRole("region", { name: "Agent" });
   // Cost first, before anything is drafted: retest of 2 exchanges.
   await expect(agent).toContainText("~6 requests, the evidence's methods");
-  await expect(agent.getByRole("button")).toHaveText(["Explain for devs", "Retest", "Find variants", "Escalate impact"]);
-  expect(await agent.getByRole("button", { name: "PoC" }).count()).toBe(0);
+  await expect(agent.getByRole("button")).toHaveText(["Explain for devs", "Retest", "Find variants", "Escalate impact", "Build a PoC"]);
+  await expect(agent.getByRole("button", { name: "Build a PoC" })).toBeVisible();
   await agent.getByRole("button", { name: "Retest" }).click();
   await expect(agent.getByRole("status")).toContainText("Drafted T-7 (tester, ~5 requests, safe methods): approve it in Tasks");
   expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/verbs/retest", body: { id: "c-00000001" } });
   // Typing in the pane didn't triage it.
   await expect(page.locator(".findings")).toContainText("to triage");
   await expect(agent.getByRole("link", { name: "T-7" })).toHaveAttribute("href", "#tasks/T-7");
-
+  // The PoC button drafts a tester task like the others (non-destructive).
   // On an exchange, in the inspector: Test for… takes a category.
   await page.goto("/#traffic");
   await page.locator("tr.row", { hasText: `${t}.test` }).filter({ hasText: "/o/7" }).click();
@@ -312,4 +312,10 @@ test("agent buttons draft a pre-filled task with its cost shown first; retests s
   await onX.getByRole("button", { name: "Test for…" }).click();
   await expect(onX.getByRole("status")).toContainText("Drafted T-8");
   expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/verbs/test_for", body: { id: s.entries[2]!.id, category: "INPV" } });
+
+  // The PoC button (candidate verb) drafts a tester task like the others.
+  await page.goto("/#findings/c-00000001");
+  const pocAgent = page.getByRole("region", { name: "Agent" });
+  await pocAgent.getByRole("button", { name: "Build a PoC" }).click();
+  expect(api.calls.at(-1)).toEqual({ method: "POST", path: "/api/verbs/poc", body: { id: "c-00000001" } });
 });

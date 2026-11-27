@@ -24,6 +24,10 @@ use taphttp_types::TrafficEntry;
 /// Candidates one task may propose; past it, a looping agent is told to
 /// stop and let the tester catch up.
 pub const MAX_PROPOSALS: usize = 20;
+/// The most PoC artifacts (#13 slice 7) one task may save, and the most one
+/// proof may be.
+pub const MAX_POCS: usize = 5;
+pub const MAX_POC_BYTES: usize = 64 * 1024;
 /// Exchanges a `filter` returns.
 const LIST_LIMIT: usize = 50;
 
@@ -201,6 +205,7 @@ impl Tools {
             "rules" => rules(a),
             "task" => self.task(&t, a),
             "propose_finding" => self.propose(&t, a).await,
+            "save_poc" => self.save_poc(&t, a).await,
             "report" => self.report(&t, a),
             "skill" => skill(&t, a),
             "sweep" => self.sweep(&t, a).await,
@@ -516,6 +521,78 @@ impl Tools {
                 d.role.as_str()
             ))),
             Err((_, why)) => Err(err(format!("{name}: {why}"))),
+        }
+    }
+
+    /// `save_poc` (#13 slice 7): store the non-destructive proof the task
+    /// built as a `Poc` artifact the tester can open. It must rest on real
+    /// work this task did (a sandbox command or a request it sent), so a
+    /// proof isn't conjured from nothing; capped per task. Not a finding.
+    async fn save_poc(&self, t: &Task, a: &Value) -> Result<Output, Output> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct A {
+            proof: String,
+            label: Option<String>,
+        }
+        let a: A = args("save_poc", a)?;
+        let proof = a.proof.trim();
+        if proof.is_empty() {
+            return Err(err(
+                "save_poc: the proof is empty; build it in the sandbox first".to_string(),
+            ));
+        }
+        if proof.len() > MAX_POC_BYTES {
+            return Err(err(format!(
+                "save_poc: the proof is {} bytes; keep it under {MAX_POC_BYTES}",
+                proof.len()
+            )));
+        }
+        let worked = t.log.iter().any(|e| {
+            matches!(
+                &e.event,
+                Event::Sandbox { .. }
+                    | Event::Request {
+                        exchange: Some(_),
+                        ..
+                    }
+            )
+        });
+        if !worked {
+            return Err(err(format!(
+                "save_poc: {} has run no sandbox command and sent nothing yet: build the proof first",
+                t.id
+            )));
+        }
+        let made = self
+            .replayer
+            .artifacts
+            .list_task(&t.engagement, &t.id)
+            .iter()
+            .filter(|x| x.kind == crate::artifacts::Kind::Poc)
+            .count();
+        if made >= MAX_POCS {
+            return Err(err(format!(
+                "save_poc: {} already has {MAX_POCS} PoC artifacts; that's the cap",
+                t.id
+            )));
+        }
+        match self.replayer.artifacts.put(
+            crate::artifacts::New {
+                engagement: &t.engagement,
+                task: &t.id,
+                kind: crate::artifacts::Kind::Poc,
+                label: a.label.as_deref().unwrap_or("poc.txt"),
+                content_type: "text/plain; charset=utf-8",
+                note: &format!("PoC by agent:{}", t.id),
+            },
+            proof.as_bytes(),
+        ) {
+            Ok(art) => Ok(ok(format!(
+                "saved the PoC as artifact {} ({} bytes); the tester opens it on the task. It's not a finding — propose_finding is for that.",
+                art.id, art.size
+            ))),
+            Err(e) => Err(err(format!("save_poc: {e}"))),
         }
     }
 
@@ -1056,6 +1133,8 @@ mod tests {
                 "retest",
                 "variants",
                 "escalate",
+                "poc",
+                "save_poc",
                 "retest_result"
             ]
         );

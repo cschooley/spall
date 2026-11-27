@@ -5,8 +5,8 @@
 //! A verb only drafts: nothing runs until a human approves the task, and
 //! the task then goes through its role, its constraints, the RoE and the
 //! gate like any other. No button has a power the console, the palette or
-//! an MCP client doesn't (they are the same registry command). PoC waits
-//! on the sandbox (#13) and isn't here: a verb appears only when built.
+//! an MCP client doesn't (they are the same registry command). `poc` builds
+//! its proof in the sandbox (#13) and hands it back with `save_poc`.
 
 use crate::candidates::Candidate;
 use crate::roe::Rules;
@@ -31,7 +31,7 @@ pub struct Verb {
 }
 
 /// Every built verb, cheapest risk first, as on the buttons.
-pub const VERBS: [Verb; 7] = [
+pub const VERBS: [Verb; 8] = [
     Verb {
         name: "why",
         label: "Why is this interesting?",
@@ -71,6 +71,12 @@ pub const VERBS: [Verb; 7] = [
     Verb {
         name: "escalate",
         label: "Escalate impact",
+        on: On::Candidate,
+        role: Role::Tester,
+    },
+    Verb {
+        name: "poc",
+        label: "Build a PoC",
         on: On::Candidate,
         role: Role::Tester,
     },
@@ -321,6 +327,23 @@ pub fn draft(verb: &str, obj: &Object, arg: Option<&str>, rules: &Rules) -> Resu
                         cost(30, &[], rules, true),
                     ))
                 }
+                "poc" => {
+                    let mut r = requested(hosts, 30);
+                    // Unsafe, always asks: the exploit send goes only with a human.
+                    r.safe_methods = Some(Vec::new());
+                    Ok(base(
+                        format!("Build a standalone, non-destructive proof of {what} in the sandbox. Prove it, don't harm: an XSS shows document.domain (never a cookie stealer), an IDOR reads one record you shouldn't reach (never writes or deletes), an injection reads a harmless value (never drops data). Save it with save_poc."),
+                        vec![
+                            "skill proof-of-concept".into(),
+                            format!("open its evidence: {}", ids.join(", ")),
+                            "build the proof in the sandbox (run_in_sandbox); keep it readable".into(),
+                            "save_poc with the exact request, the proof, and what a reader should see".into(),
+                            "report what you proved and what you left untouched".into(),
+                        ],
+                        r,
+                        cost(30, &[], rules, true),
+                    ))
+                }
                 _ => Err(format!("{verb} isn't built")),
             }
         }
@@ -457,10 +480,32 @@ mod tests {
         assert!(draft("retest", &ev, None, &rules())
             .unwrap_err()
             .contains("no evidence"));
-        assert!(
-            draft("poc", &ev, None, &rules()).is_err(),
-            "not built: the sandbox is #13"
+        // poc is built now; on an exchange it's refused (candidate only).
+        assert!(draft("poc", &Object::Exchange(x("e1", "GET")), None, &rules()).is_err());
+    }
+
+    #[test]
+    fn poc_drafts_a_non_destructive_tester_task_scoped_to_the_host() {
+        let c = candidate();
+        let ev = Object::Candidate(Evidence {
+            candidate: &c,
+            exchanges: vec![x("e1", "POST")],
+        });
+        let d = draft("poc", &ev, None, &rules()).unwrap();
+        assert_eq!(d.new.role, Role::Tester);
+        assert_eq!(
+            d.new.constraints.hosts.as_deref(),
+            Some(&["app.test".to_string()][..])
         );
+        // Every send asks a human first (safe methods emptied).
+        assert_eq!(d.new.constraints.safe_methods, Some(Vec::new()));
+        assert!(d.cost.contains("every one asked"));
+        assert!(d.new.goal.contains("non-destructive") && d.new.goal.contains("save_poc"));
+        assert!(d
+            .new
+            .plan
+            .iter()
+            .any(|s| s.contains("skill proof-of-concept")));
     }
 
     #[test]
