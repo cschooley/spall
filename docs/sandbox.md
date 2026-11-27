@@ -194,12 +194,18 @@ exercised on a `runsc` box as it lands.
    runs only if its pack is enabled (`--sandbox-packs`), a destructive tool
    needs the RoE, an exploitation tool (`sqlmap`, `hydra`) pauses the task
    for the tester (`Ask::Tool`, approved once by the exact argv's
-   fingerprint, resumed through the same grant path as a send). *Still to
-   do:* the pack **images** themselves (one container per task runs one
-   image today, so a pack image means per-pack containers through
-   `Runsc`/`Remote`/`sandboxd` — the caller still never names an image) and
-   the proxy-passing wrappers; both are infra pinned by digest and scanned
-   in compose.
+   fingerprint, resumed through the same grant path as a send). *Deferred,
+   not planned (decided 2026-11-27):* the base image is first-principles only
+   (`curl`, `python3`) on purpose — a precise, readable script a developer can
+   reproduce beats a scanner's output, and that is spall's product (a proof,
+   not a foothold; see architecture.md's non-goal). So the pack **images**,
+   their proxy-passing wrappers, and the per-pack-container lifecycle they
+   need (one container per task runs one image today; a pack image means
+   per-pack containers through `Runsc`/`Remote`/`sandboxd`, the caller still
+   never naming an image) are **not** scheduled work. The policy layer above
+   stands idle as the gate for "bring your own pack" (below): a tester who
+   genuinely needs a real tool imports a pinned image as a `policy` action,
+   and only then is the lifecycle worth building. Don't build it on spec.
 5. **Discovery tools for the Scoper.** Subdomain/port results into the
    asset inventory (#95); scope changes stay proposals (#91) through the
    guardrails (#83).
