@@ -514,7 +514,7 @@ pub static COMMANDS: &[Command] = &[
     Command {
         name: "oob_payload",
         usage: "oob_payload",
-        desc: "mint an out-of-band callback host for this task (blind SSRF, XXE, command injection, DNS exfiltration); it sends nothing: put it in a replay or fetch, then check oob_hits. Late callbacks still count",
+        desc: "mint an out-of-band callback host for this task (blind SSRF, XXE, command injection, DNS exfiltration); it sends nothing: put it in a replay or fetch, then check oob_hits. Late callbacks still count. It is also your disposable inbox: use it as an email address (user@<host>) in a signup or password-reset flow and read the mail with oob_hits (an SMTP hit) — but only when the app emails an address you chose and your OAST server has a mail domain; a lab app that emails a fixed server won't reach it",
         // A record (#1): minting sends nothing; the request that carries
         // the payload goes through the gate like any other.
         risk: Risk::Record,

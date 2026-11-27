@@ -172,6 +172,18 @@ numbers. Read docs/architecture.md (agent sections) and docs/ux.md
   is a primitive (architecture.md, *Is it a primitive?*): a stop path
   (e-stop, halt), a budget charge, attribution.
 
+**#2 inboxes: subsumed by #1, not a separate feature (decided 2026-11-27).**
+The OOB server already receives SMTP: `oob_payload` mints a host that doubles
+as a disposable email address (`user@<host>`) and `oob_hits` returns the SMTP
+hit, so an email-gated flow (signup/reset verification) already works end to
+end with what #1 shipped — no inbox code. The gating factor is deployment, not
+features: the mail only arrives when the app emails an address you chose *and*
+the OAST server has a real mail domain (MX, port 25); a lab app that emails a
+fixed server must have its SMTP pointed at a sink instead. So #2 is closed as
+subsumed. Parked polish, only if a real engagement asks for it: parse an SMTP
+hit into `{from, subject, body, links}`, and a BYO-sink source adapter. The
+`oob_payload` description now documents the inbox use and the caveat.
+
 Scope guardrails (#83, done): `gate::too_wide` refuses an in-scope entry
 that is a wildcard on a public suffix (`src/psl.rs`, the list vendored in
 `src/psl/` with SOURCE.md) or a network wider than /16 (IPv4) or /32
