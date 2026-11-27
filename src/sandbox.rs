@@ -91,6 +91,39 @@ pub struct Run {
     pub truncated: bool,
     /// It ran out of its wall clock and was killed.
     pub timed_out: bool,
+    /// The complete captured output (up to [`CAPTURE`]), kept for the
+    /// artifact record (#13 slice 3); `stdout`/`stderr` above are cut to
+    /// [`KEEP`] for the agent. Not serialized into the task log.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub full_stdout: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub full_stderr: String,
+}
+
+impl Run {
+    /// The full output as one text blob for an [`crate::artifacts`] record,
+    /// or `None` when the command produced none.
+    pub fn output_artifact(&self) -> Option<String> {
+        if self.full_stdout.is_empty() && self.full_stderr.is_empty() {
+            return None;
+        }
+        let mut s = format!("$ {}\n", self.argv.join(" "));
+        let end = self
+            .exit
+            .map(|c| format!("exit {c}"))
+            .unwrap_or_else(|| "killed".into());
+        s.push_str(&format!("[{end}, {} ms]\n", self.ms));
+        for (name, out) in [("stdout", &self.full_stdout), ("stderr", &self.full_stderr)] {
+            if !out.is_empty() {
+                s.push_str(&format!("\n--- {name} ---\n"));
+                s.push_str(out);
+                if !s.ends_with('\n') {
+                    s.push('\n');
+                }
+            }
+        }
+        Some(s)
+    }
 }
 
 /// Which task a sandbox belongs to.
@@ -206,6 +239,9 @@ pub struct Ran {
     pub network: String,
     pub sent: Option<u32>,
     pub refused: Option<u32>,
+    /// The artifact id holding the full output (#13 slice 3), when it had
+    /// any; the tester opens it, and the agent sees it named.
+    pub artifact: Option<String>,
 }
 
 /// `user:pass` for a URL's userinfo: everything but unreserved escaped.
@@ -715,6 +751,8 @@ impl Sandbox for Runsc {
                     stderr: "the sandbox died (it hit its memory or process limit); the next command starts a fresh one, and its scratch is gone".into(),
                     truncated: false,
                     timed_out: false,
+                    full_stdout: String::new(),
+                    full_stderr: String::new(),
                 });
             }
             // `timeout -s KILL` ends a command with 137 (128 + SIGKILL).
@@ -731,6 +769,8 @@ impl Sandbox for Runsc {
                 stderr,
                 truncated: t1 || t2,
                 timed_out,
+                full_stdout: String::from_utf8_lossy(&out).into_owned(),
+                full_stderr: String::from_utf8_lossy(&err).into_owned(),
             })
         })
     }
@@ -840,6 +880,8 @@ impl Sandbox for Fake {
                 argv: cmd.argv.clone(),
                 exit,
                 ms: 1,
+                full_stdout: stdout.clone(),
+                full_stderr: stderr.clone(),
                 stdout,
                 stderr,
                 truncated: false,

@@ -410,7 +410,17 @@ function Steer({ t, onChanged }: { t: Task; onChanged(): void }) {
         {msgs.map((m, i) => (
           <div key={i} className={`msg ${m.who}`}>
             {m.who === "sys" ? (
-              `${m.time} ${m.text}`
+              <>
+                {`${m.time} ${m.text}`}
+                {m.artifact ? (
+                  <>
+                    {" "}
+                    <a className="artifact-link" href={`/api/artifacts/${encodeURIComponent(m.artifact)}`} target="_blank" rel="noreferrer">
+                      full output ↗
+                    </a>
+                  </>
+                ) : null}
+              </>
             ) : (
               <>
                 <span className="who">{m.who === "agent" ? `◆ agent · ${m.time}` : `you · ${m.time}`}</span>

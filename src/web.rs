@@ -130,6 +130,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/estop/clear", post(api_estop_clear))
         .route("/api/tasks/{id}", get(api_task).patch(api_task_patch))
+        .route("/api/tasks/{id}/artifacts", get(api_task_artifacts))
+        .route("/api/artifacts/{id}", get(api_artifact))
         .route("/api/verbs/{name}", axum::routing::post(api_verb))
         .route("/api/redaction", get(api_redaction))
         .route("/api/ca", get(api_ca))
@@ -892,6 +894,54 @@ async fn api_task(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     match r.task_view(&id) {
         Some(t) => axum::Json(t).into_response(),
         None => json_error(StatusCode::NOT_FOUND, "no such task"),
+    }
+}
+
+/// A task's artifacts (#13 slice 3), newest first, metadata only (the bytes
+/// come from `GET /api/artifacts/{id}`).
+async fn api_task_artifacts(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let eng = r.engagements.active().id;
+    axum::Json(serde_json::json!({ "artifacts": r.artifacts.list_task(&eng, &id) })).into_response()
+}
+
+/// One artifact's bytes, with its stored content type. The UI is localhost
+/// and shows raw traffic already; export redaction is a separate path.
+async fn api_artifact(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let Some(r) = &state.replayer else {
+        return no_tasks();
+    };
+    let eng = r.engagements.active().id;
+    let (Some(meta), Some(bytes)) = (r.artifacts.get(&eng, &id), r.artifacts.read(&eng, &id))
+    else {
+        return json_error(StatusCode::NOT_FOUND, "no such artifact");
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, meta.content_type),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("inline; filename=\"{}\"", safe_filename(&meta.label)),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// A header-safe filename: keep filename-ish characters, drop the rest.
+fn safe_filename(label: &str) -> String {
+    let s: String = label
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(100)
+        .collect();
+    if s.is_empty() {
+        "artifact".into()
+    } else {
+        s
     }
 }
 

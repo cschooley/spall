@@ -256,7 +256,17 @@ volume; `/check`, `/exec`, `/teardown`, `/live`, `/network`, nothing about
 images or flags from the caller) and `Remote`, spall's `Sandbox` over HTTP
 (`--sandbox-url`). The `Sandbox` trait has `has_network`/`check_network`
 so local and remote check the network the same way. Toolpacks (not a
-distro) are decided in docs/sandbox.md.
+distro) are decided in docs/sandbox.md. Slice 3 (artifacts, done):
+`src/artifacts.rs` is a per-engagement store (metadata index
+`<engagements>/artifacts/<eng>.json`, bytes one file each under
+`artifacts/data/<eng>/<A-n>`, read on demand; `Kind` output/pcap/poc/other,
+sha256, 8 MiB and 5000/engagement caps, `put(New, bytes)`). A sandbox
+command's full output (the agent still sees 16 KiB) is stored as an
+`Output` artifact; `run_in_sandbox` names it in `Event::Sandbox.artifact`
+and `Ran.artifact`. `GET /api/tasks/{id}/artifacts` lists, `GET
+/api/artifacts/{id}` serves the bytes; the Tasks view links each sandbox
+command's "full output". Pcap artifacts wait on slice 4 (capture); the PoC
+button (slice 7) will `put` a `Poc` artifact.
 
 Tester alerts (#86, done): `src/alerts.rs` is a content-free feed (a kind,
 ids that must match `T-n` / `I-n` / an engagement id, a time; anything else

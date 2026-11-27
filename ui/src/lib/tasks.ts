@@ -335,6 +335,8 @@ export interface Message {
   time: string;
   who: "you" | "agent" | "sys";
   text: string;
+  /** For a sandbox command that produced output: its artifact id (#13 slice 3). */
+  artifact?: string;
 }
 
 export function messages(t: Task): Message[] {
@@ -359,7 +361,10 @@ export function messages(t: Task): Message[] {
         const argv = Array.isArray(e.argv) ? e.argv.filter((a): a is string => typeof a === "string") : [];
         const ms = typeof e.ms === "number" ? ` (${e.ms} ms)` : "";
         const reqs = typeof e.sent === "number" ? `, ${e.sent} request(s)${typeof e.refused === "number" && e.refused > 0 ? `, ${e.refused} refused` : ""}` : "";
-        out.push({ time, who: "sys", text: `sandbox $ ${argv.join(" ")} → ${str(e.outcome)}${ms}${reqs}` });
+        const msg: Message = { time, who: "sys", text: `sandbox $ ${argv.join(" ")} → ${str(e.outcome)}${ms}${reqs}` };
+        const art = opt(e.artifact);
+        if (art) msg.artifact = art;
+        out.push(msg);
         break;
       }
     }

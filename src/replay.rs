@@ -312,6 +312,8 @@ pub struct Replayer {
     pub task_limiters: Mutex<std::collections::HashMap<String, Limiter>>,
     /// Candidates flagged in each engagement (#42).
     pub candidates: crate::candidates::Store,
+    /// Task artifacts (#13 slice 3): sandbox output, later pcaps and PoCs.
+    pub artifacts: crate::artifacts::Store,
     /// Tasks in each engagement (#54).
     pub tasks: crate::tasks::Store,
     /// `--allow-unredacted-export`: the opt-in an unredacted export needs
@@ -2967,6 +2969,30 @@ impl Replayer {
             ),
             Err(e) => (None, 0, e.clone()),
         };
+        // The full output (what the agent saw was cut to 16 KiB) goes to a
+        // task artifact the tester can open; a store failure never fails the
+        // command.
+        let artifact = result.as_ref().ok().and_then(|run| {
+            let body = run.output_artifact()?;
+            let label = format!("{}-output.txt", sanitize_label(cmd.argv.first()));
+            match self.artifacts.put(
+                crate::artifacts::New {
+                    engagement: &eng,
+                    task: &task.id,
+                    kind: crate::artifacts::Kind::Output,
+                    label: &label,
+                    content_type: "text/plain; charset=utf-8",
+                    note: &cmd.argv.join(" "),
+                },
+                body.as_bytes(),
+            ) {
+                Ok(a) => Some(a.id),
+                Err(e) => {
+                    tracing::warn!("storing {}'s sandbox output: {e}", task.id);
+                    None
+                }
+            }
+        });
         let ev = Event::Sandbox {
             argv: cmd.argv.clone(),
             exit,
@@ -2974,6 +3000,7 @@ impl Replayer {
             outcome: outcome.clone(),
             sent,
             refused,
+            artifact: artifact.clone(),
         };
         // A task halted mid-command has a closed log; the audit below keeps it.
         if let Err(e) = self.tasks.log(&eng, &task.id, ev, &now) {
@@ -2997,6 +3024,7 @@ impl Replayer {
             network,
             sent,
             refused,
+            artifact,
         })
     }
 
@@ -3190,6 +3218,24 @@ impl Replayer {
 
 /// A draft with no hosts (the whole scope) gets `goal_hosts`: the in-scope
 /// hosts its goal names, for the UI to offer approving it on those.
+/// A filename-safe stem from a command's program name (`argv[0]`), for an
+/// artifact label; `cmd` when there's nothing usable.
+fn sanitize_label(arg0: Option<&String>) -> String {
+    let base = arg0
+        .map(|s| s.rsplit('/').next().unwrap_or(s))
+        .unwrap_or("cmd");
+    let s: String = base
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(40)
+        .collect();
+    if s.is_empty() {
+        "cmd".into()
+    } else {
+        s
+    }
+}
+
 fn with_goal_hosts(
     t: &crate::tasks::Task,
     mut v: serde_json::Value,

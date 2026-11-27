@@ -183,8 +183,10 @@ exercised on a `runsc` box as it lands.
 2. **Network enforcement.** spall client for taphttp `/clients`
    (taphttp#25): per-task credential, scope/rate/budget at taphttp,
    out-of-scope = no route. Egress firewall + forced proxy.
-3. **Artifacts + logging polish.** Full output and pcap as task artifacts;
-   `Event::Sandbox` in the Tasks view.
+3. **Artifacts + logging polish** (done). Full sandbox output as a task
+   artifact (`src/artifacts.rs`), `Event::Sandbox` carrying the artifact id,
+   the Tasks view linking it. The pcap artifact waits on slice 4, which is
+   where capture lands; the store already holds a `Pcap` kind for it.
 4. **Non-HTTP egress + packet capture.** Firewall allowlist, pcap artifact.
 4b. **Toolpacks and the tool registry** (above): packs per tool family,
    category-based approval, wrappers that pass the proxy.

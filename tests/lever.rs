@@ -6850,7 +6850,38 @@ async fn an_agent_runs_tools_in_its_task_sandbox_charged_logged_and_stoppable() 
     assert_eq!(fake.live(), vec![key.clone()]);
     let t = task_of(&r, "T-1");
     assert_eq!(t.spent, 1, "one command, one unit of budget");
-    assert!(t.log.iter().any(|e| matches!(&e.event, spall::tasks::Event::Sandbox { argv, exit: Some(0), .. } if argv[0] == "echo")));
+    // The command's full output is kept as a task artifact the event names.
+    let art_id = t
+        .log
+        .iter()
+        .find_map(|e| match &e.event {
+            spall::tasks::Event::Sandbox { argv, artifact, .. } if argv[0] == "echo" => {
+                artifact.clone()
+            }
+            _ => None,
+        })
+        .expect("the echo event names its artifact");
+    let arts = body_json(&get_text(spall, "/api/tasks/T-1/artifacts").await);
+    let a0 = &arts["artifacts"][0];
+    assert_eq!(
+        (a0["id"].as_str(), a0["kind"].as_str(), a0["task"].as_str()),
+        (Some(art_id.as_str()), Some("output"), Some("T-1"))
+    );
+    assert_eq!(a0["label"], "echo-output.txt");
+    assert!(a0["size"].as_u64().unwrap() > 0 && a0["sha256"].as_str().unwrap().len() == 64);
+    // The bytes come back with the stored content type and hold the full output.
+    let got = get_text(spall, &format!("/api/artifacts/{art_id}")).await;
+    assert!(got.contains("content-type: text/plain"), "{got}");
+    assert!(
+        got.contains("$ echo hello <b>there</b>") && got.contains("--- stdout ---"),
+        "{got}"
+    );
+    assert!(
+        get_text(spall, "/api/artifacts/A-404")
+            .await
+            .starts_with("HTTP/1.1 404"),
+        "unknown artifact is 404"
+    );
     let st = body_json(&get_text(spall, "/api/status").await);
     assert_eq!(
         (

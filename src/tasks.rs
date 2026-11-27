@@ -511,6 +511,10 @@ pub enum Event {
         sent: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         refused: Option<u32>,
+        /// The artifact holding the command's full output (#13 slice 3),
+        /// when it produced any; the Tasks view links it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<String>,
     },
 }
 

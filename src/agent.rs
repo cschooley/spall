@@ -731,8 +731,14 @@ impl Tools {
                     "stdout": r.stdout,
                     "stderr": r.stderr,
                 });
+                let full = match (r.truncated, &ran.artifact) {
+                    (true, Some(id)) => format!(
+                        " The full output is saved as artifact {id} (the tester can open it)."
+                    ),
+                    _ => String::new(),
+                };
                 Ok(ok(format!(
-                    "{head} in {} ms. Network: {}.{counted}\n{}",
+                    "{head} in {} ms. Network: {}.{counted}{full}\n{}",
                     r.ms,
                     ran.network,
                     untrusted::wrap_json("sandbox output", &v)

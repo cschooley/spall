@@ -724,6 +724,8 @@ main.tasks-main { display: block; min-height: 0; overflow: hidden; }
 .tasks .msg { font: var(--vg-text-sm)/1.5 var(--vg-font-sans); white-space: pre-wrap; overflow-wrap: anywhere; }
 .tasks .msg > .who { display: block; margin-bottom: 2px; font: 500 var(--vg-text-xs) var(--vg-font-mono); color: var(--vg-text-tertiary); }
 .tasks .msg.sys { font-family: var(--vg-font-mono); color: var(--vg-text-tertiary); font-size: var(--vg-text-xs); }
+.tasks .msg .artifact-link { color: var(--vg-accent-verdigris); text-decoration: none; }
+.tasks .msg .artifact-link:hover { text-decoration: underline; }
 .tasks .compose { padding: var(--vg-space-4) var(--vg-space-5); border-top: 1px solid var(--vg-border-subtle); display: grid; gap: var(--vg-space-2); }
 .tasks .compose textarea { width: 100%; height: 64px; resize: none; background: var(--vg-bg-sunken); border: 1px solid var(--vg-border-subtle); border-radius: var(--vg-radius-sm); color: var(--vg-text-primary); font: var(--vg-text-sm)/1.45 var(--vg-font-sans); padding: var(--vg-space-3); }
 .tasks .compose .hint { margin: 0; font: var(--vg-text-xs)/1.45 var(--vg-font-mono); color: var(--vg-text-tertiary); }

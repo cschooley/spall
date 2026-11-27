@@ -91,7 +91,7 @@ const FULL = {
     { ts: "2026-11-23T20:00:09Z", kind: "note", by: "human", text: "skip reset" },
     { ts: "2026-11-23T20:00:10Z", kind: "turn", text: P },
     { ts: "2026-11-23T20:00:11Z", kind: "approval", what: "POST https://a.test/login", outcome: "asked" },
-    { ts: "2026-11-23T20:00:12Z", kind: "sandbox", argv: ["jq", ".alg", P], exit: 0, ms: 12, outcome: "exit 0" },
+    { ts: "2026-11-23T20:00:12Z", kind: "sandbox", argv: ["jq", ".alg", P], exit: 0, ms: 12, outcome: "exit 0", artifact: "A-7" },
     { ts: "2026-11-23T20:00:13Z", kind: "sandbox", argv: ["curl", "https://a.test/"], exit: 0, ms: 40, outcome: "exit 0", sent: 3, refused: 1 },
   ],
 };
@@ -109,7 +109,7 @@ test("a full task: constraints, plan, request rows and messages", () => {
     { time: "20:00:09", who: "you", text: "skip reset" },
     { time: "20:00:10", who: "agent", text: P },
     { time: "20:00:11", who: "sys", text: "asked: POST https://a.test/login" },
-    { time: "20:00:12", who: "sys", text: `sandbox $ jq .alg ${P} → exit 0 (12 ms)` },
+    { time: "20:00:12", who: "sys", text: `sandbox $ jq .alg ${P} → exit 0 (12 ms)`, artifact: "A-7" },
     { time: "20:00:13", who: "sys", text: "sandbox $ curl https://a.test/ → exit 0 (40 ms), 3 request(s), 1 refused" },
   ]);
   assert.deepEqual(t.goalHosts, []);

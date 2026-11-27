@@ -107,6 +107,7 @@ test("4 opens Tasks: the list, the task card, its request log and the agent's pr
       { ts: "2026-11-23T20:00:07Z", kind: "request", exchange: sent.id, method: "GET", target: `https://${t}.test/v1/items?q=${P}`, outcome: "sent", status: 200 },
       { ts: "2026-11-23T20:00:08Z", kind: "request", exchange: null, method: "DELETE", target: `https://${t}.test/v1/items/1`, outcome: "denied" },
       { ts: "2026-11-23T20:00:09Z", kind: "turn", text: `Baseline done ${P}` },
+      { ts: "2026-11-23T20:00:10Z", kind: "sandbox", argv: ["jq", ".x", P], exit: 0, ms: 9, outcome: "exit 0", artifact: "A-5" },
     ],
   });
   const api = tasksApi(page, [running, task("T-2", "done")]);
@@ -133,6 +134,9 @@ test("4 opens Tasks: the list, the task card, its request log and the agent's pr
   await expect(log.locator("tbody tr").nth(1)).toContainText("denied");
   const steer = page.getByRole("complementary", { name: "Steer T-3" });
   await expect(steer).toContainText(`◆ agent · 20:00:09Baseline done ${P}`);
+  // A sandbox command's output is a link to its artifact; the argv stays text.
+  await expect(steer).toContainText(`sandbox $ jq .x ${P} → exit 0 (9 ms)`);
+  await expect(steer.getByRole("link", { name: "full output ↗" })).toHaveAttribute("href", "/api/artifacts/A-5");
   expect(await page.locator(".tasks img").count()).toBe(0);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
 

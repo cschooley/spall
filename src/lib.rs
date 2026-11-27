@@ -5,6 +5,7 @@
 pub mod addresses;
 pub mod agent;
 pub mod alerts;
+pub mod artifacts;
 pub mod audit;
 pub mod candidates;
 pub mod commands;
@@ -271,6 +272,9 @@ pub fn build(config: Config) -> anyhow::Result<App> {
             let tasks_dir = config.engagements.join("tasks");
             let tasks = tasks::Store::open(&tasks_dir)
                 .with_context(|| format!("loading tasks from {}", tasks_dir.display()))?;
+            let artifacts_dir = config.engagements.join("artifacts");
+            let artifacts = artifacts::Store::open(&artifacts_dir)
+                .with_context(|| format!("loading artifacts from {}", artifacts_dir.display()))?;
             let plans_dir = config.engagements.join("plans");
             let plans = plans::Store::open(&plans_dir)
                 .with_context(|| format!("loading plans from {}", plans_dir.display()))?;
@@ -289,6 +293,7 @@ pub fn build(config: Config) -> anyhow::Result<App> {
                 confirmations: confirm::Confirmations::new(Duration::from_secs(120), 256),
                 audit,
                 candidates,
+                artifacts,
                 tasks,
                 allow_unredacted_export: config.allow_unredacted_export,
                 stack: stack::Stack::from_config(&config),
