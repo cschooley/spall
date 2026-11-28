@@ -28,7 +28,7 @@ yaml-rust2 = { version = "0.13", default-features = false }
 rsa = { version = "0.9", default-features = false, features = ["std", "pem", "sha2", "getrandom"] }
 aes = "0.8"
 cfb-mode = { version = "0.8", features = ["std"] }
-base64 = "0.22"
+base64 = "0.23"
 # Plain-HTTP client for taphttp's lever API (compose network, no TLS).
 http-body-util = "0.1"
 # Engagement dates (#35) and testing windows (#36). The tz database is
