@@ -37,7 +37,7 @@ RUN touch src/main.rs src/lib.rs \
 # The sandbox sensor (#13, `spall sandboxd`): the same binary with the
 # Docker CLI, the only image that is given the Docker socket. Not the
 # default target: compose builds it with `target: sandboxd`.
-FROM docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb AS sandboxd
+FROM docker:29.9.3-cli@sha256:5a7af0dcb0e46c803efe9b45371dd21cb500e5b4453250394ac6f06d49b6e6f1 AS sandboxd
 COPY --from=build /spall /spall
 ENTRYPOINT ["/spall", "sandboxd"]
 
