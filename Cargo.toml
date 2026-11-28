@@ -26,7 +26,7 @@ yaml-rust2 = { version = "0.13", default-features = false }
 # carries RUSTSEC-2023-0071 (Marvin), suppressed in osv-scanner.toml with
 # the reason: spall decrypts only what its own authenticated server sends.
 rsa = { version = "0.9", default-features = false, features = ["std", "pem", "sha2", "getrandom"] }
-aes = "0.8"
+aes = "0.9"
 cfb-mode = { version = "0.8", features = ["std"] }
 base64 = "0.22"
 # Plain-HTTP client for taphttp's lever API (compose network, no TLS).
